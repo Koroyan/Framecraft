@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
+import { atempoChain } from './clip-fx';
+
 const require = createRequire(import.meta.url);
 
 export type ProbeResult = {
@@ -13,6 +15,8 @@ export type ProbeResult = {
   height?: number;
   hasVideo: boolean;
   hasAudio: boolean;
+  /** Average video frame rate. */
+  fps?: number;
   videoCodec?: string;
   formatName?: string;
 };
@@ -56,12 +60,17 @@ export async function probe(file: string): Promise<ProbeResult> {
   const { stdout } = await run(ffprobePath(), ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file], { timeoutMs: 60_000 });
   const data = JSON.parse(stdout) as {
     format?: { duration?: string; format_name?: string };
-    streams?: { codec_type?: string; codec_name?: string; width?: number; height?: number; duration?: string }[];
+    streams?: { codec_type?: string; codec_name?: string; width?: number; height?: number; duration?: string; avg_frame_rate?: string; r_frame_rate?: string }[];
   };
   const v = data.streams?.find((s) => s.codec_type === 'video');
   const a = data.streams?.find((s) => s.codec_type === 'audio');
   const duration = Number(data.format?.duration ?? v?.duration ?? a?.duration ?? 0);
+  const rate = (r?: string) => {
+    const [num, den] = (r ?? '').split('/').map(Number);
+    return num && den ? num / den : undefined;
+  };
   return {
+    fps: rate(v?.avg_frame_rate) ?? rate(v?.r_frame_rate),
     durationSec: Number.isFinite(duration) ? duration : 0,
     width: v?.width,
     height: v?.height,
@@ -138,35 +147,65 @@ export type NormalizeOptions = {
   outSec?: number;
   volume?: number;
   mute?: boolean;
+  /** Playback speed (0.25–4). */
+  speed?: number;
+  reverse?: boolean;
+  /** Hold the frame at `inSec` for this long instead of playing. */
+  freezeSec?: number;
+  fadeInSec?: number;
+  fadeOutSec?: number;
+  /** Fade towards black (1 = untouched). */
+  opacity?: number;
+  /** Extra video filters applied at output size (camera, colour grade). */
+  effects?: string[];
 };
 
 /**
  * Re-encode one clip to a uniform format: exact size, constant fps, yuv420p,
  * and a stereo AAC track (silent if the source has none) so clips can be joined.
+ * Speed, reverse, freeze frames, fades and effects are applied here, so the output lasts
+ * exactly as long as the clip does on the timeline.
  */
 export async function normalizeClip(input: string, output: string, o: NormalizeOptions): Promise<void> {
   const p = await probe(input);
   const fps = o.fps ?? 30;
-  const start = o.inSec ?? 0;
+  const speed = o.freezeSec ? 1 : (o.speed ?? 1);
+  const start = Math.min(o.inSec ?? 0, Math.max(0, p.durationSec - 0.05));
   const end = Math.min(o.outSec ?? p.durationSec, p.durationSec || (o.outSec ?? 0));
-  const dur = Math.max(0.1, end - start);
+  const srcDur = o.freezeSec ? 1 / fps : Math.max(0.1, end - start);
+  const dur = o.freezeSec ?? srcDur / speed;
   const scale = o.fill
     ? `scale=${o.width}:${o.height}:force_original_aspect_ratio=increase,crop=${o.width}:${o.height}`
     : `scale=${o.width}:${o.height}:force_original_aspect_ratio=decrease,pad=${o.width}:${o.height}:(ow-iw)/2:(oh-ih)/2:color=black`;
-  const vf = `${scale},setsar=1,fps=${fps},format=yuv420p`;
-  const args = ['-ss', String(start), '-t', String(dur), '-i', input];
-  if (!p.hasAudio || o.mute) {
+  const v: string[] = [];
+  if (o.freezeSec) v.push(`loop=loop=${Math.ceil(o.freezeSec * fps) + 1}:size=1:start=0`, `setpts=N/${fps}/TB`);
+  if (o.reverse && !o.freezeSec) v.push('reverse');
+  if (speed !== 1) v.push(`setpts=(PTS-STARTPTS)/${speed}`);
+  v.push(scale, 'setsar=1', `fps=${fps}`, ...(o.effects ?? []));
+  if (o.opacity !== undefined && o.opacity < 1) v.push(`colorchannelmixer=rr=${o.opacity}:gg=${o.opacity}:bb=${o.opacity}`);
+  if (o.fadeInSec) v.push(`fade=t=in:st=0:d=${o.fadeInSec}`);
+  if (o.fadeOutSec) v.push(`fade=t=out:st=${Math.max(0, dur - o.fadeOutSec)}:d=${o.fadeOutSec}`);
+  v.push(`trim=duration=${dur}`, 'format=yuv420p');
+  const args = ['-ss', String(start), '-t', String(srcDur), '-i', input];
+  const silent = !p.hasAudio || o.mute || Boolean(o.freezeSec);
+  if (silent) {
     args.push('-f', 'lavfi', '-t', String(dur), '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000');
     args.push('-map', '0:v:0', '-map', '1:a:0');
   } else {
     args.push('-map', '0:v:0', '-map', '0:a:0');
   }
-  args.push('-vf', vf);
+  args.push('-vf', v.join(','));
   const af = ['aresample=48000', 'aformat=channel_layouts=stereo'];
-  if (o.volume !== undefined && o.volume !== 1 && p.hasAudio && !o.mute) af.push(`volume=${o.volume}`);
+  if (!silent) {
+    if (o.reverse) af.push('areverse');
+    af.push(...atempoChain(speed));
+    if (o.volume !== undefined && o.volume !== 1) af.push(`volume=${o.volume}`);
+    if (o.fadeInSec) af.push(`afade=t=in:st=0:d=${o.fadeInSec}`);
+    if (o.fadeOutSec) af.push(`afade=t=out:st=${Math.max(0, dur - o.fadeOutSec)}:d=${o.fadeOutSec}`);
+  }
   args.push('-af', af.join(','));
-  args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'aac', '-b:a', '160k', '-shortest', '-movflags', '+faststart', output);
-  await ffmpeg(args);
+  args.push('-t', String(dur), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', output);
+  await ffmpeg(args, { timeoutMs: 20 * 60_000 });
 }
 
 export type JoinTransition = { type: string; durationSec: number } | undefined;

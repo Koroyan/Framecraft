@@ -26,6 +26,9 @@ describe('story graph ⇄ timeline sequence', () => {
     expect(moved.clips.map((c) => c.id)).toEqual(['c2a', 'c2b', 'c3', 'c1']);
     expect(moveNodeAfter(t, S3, null).clips[0]!.id).toBe('c3');
     expect(moveNodeAfter(t, S2, S2)).toBe(t); // no self-links
+    // A duplicate of shot 1 (starts again at 0) is its own node.
+    const dup = { ...t, clips: [...t.clips.slice(0, 1), { ...t.clips[0]!, id: 'c1copy' }, ...t.clips.slice(1)] };
+    expect(sequenceOf(dup).map((n) => n.key)).toEqual([S1, 'c1copy', S2, S3]);
   });
 
   it('removes and re-inserts a shot without touching the others', () => {

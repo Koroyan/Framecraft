@@ -10,6 +10,7 @@ import { authRoutes } from './routes/auth';
 import { studioRoutes } from './routes/studio';
 import { productionRoutes } from './routes/production';
 import { chatRoutes } from './routes/chat';
+import { editingRoutes } from './routes/editing';
 import { billingRoutes } from './routes/billing';
 import { adminRoutes } from './routes/admin';
 import { mediaRoutes } from './routes/media';
@@ -99,6 +100,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   await app.register(async (r) => studioRoutes(r, ctx));
   await app.register(async (r) => productionRoutes(r, ctx));
   await app.register(async (r) => chatRoutes(r, ctx));
+  await app.register(async (r) => editingRoutes(r, ctx));
   await app.register(async (r) => billingRoutes(r, ctx));
   await app.register(async (r) => adminRoutes(r, ctx));
   await app.register(async (r) => mediaRoutes(r, ctx));

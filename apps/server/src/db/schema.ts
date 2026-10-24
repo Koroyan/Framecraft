@@ -26,7 +26,7 @@ export const userRole = pgEnum('user_role', ['user', 'admin']);
 export const userStatus = pgEnum('user_status', ['active', 'suspended']);
 export const projectKind = pgEnum('project_kind', ['quick', 'social', 'cinematic', 'movie', 'edit', 'ad']);
 export const jobStatus = pgEnum('job_status', ['draft', 'queued', 'preparing', 'generating', 'processing', 'rendering', 'completed', 'failed', 'cancelled']);
-export const jobKind = pgEnum('job_kind', ['video', 'image', 'audio', 'render', 'plan', 'movie']);
+export const jobKind = pgEnum('job_kind', ['video', 'image', 'audio', 'render', 'plan', 'movie', 'edit']);
 export const assetKind = pgEnum('asset_kind', ['upload', 'generated', 'render', 'thumbnail', 'reference', 'audio', 'subtitle', 'frame']);
 export const mediaType = pgEnum('media_type', ['video', 'image', 'audio', 'text']);
 export const txType = pgEnum('credit_tx_type', ['grant', 'purchase', 'subscription_allowance', 'reserve', 'release', 'capture', 'refund', 'adjustment', 'expire']);
@@ -280,6 +280,8 @@ export const shots = pgTable(
     storyboardAssetId: uuid('storyboard_asset_id').references(() => assets.id, { onDelete: 'set null' }),
     currentAssetId: uuid('current_asset_id').references(() => assets.id, { onDelete: 'set null' }),
     lastJobId: uuid('last_job_id'),
+    /** The shot version used by the movie (its asset is `currentAssetId`). */
+    activeVersionId: uuid('active_version_id'),
     continuityFlags: jsonb('continuity_flags').$type<{ kind: string; message: string; severity: 'info' | 'warn' }[]>().notNull().default([]),
     approved: boolean('approved').notNull().default(false),
     createdAt: createdAt(),
@@ -740,4 +742,84 @@ export const chatMessages = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index('chat_messages_session_idx').on(t.sessionId, t.createdAt)],
+);
+
+// ----------------------------------------------------------------- editor studio
+
+/** Immutable versions of a shot: generations, AI edits, uploads. Never overwritten or deleted by edits. */
+export const shotVersions = pgTable(
+  'shot_versions',
+  {
+    id: id(),
+    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    shotId: uuid('shot_id').notNull().references(() => shots.id, { onDelete: 'cascade' }),
+    number: integer('number').notNull(),
+    assetId: uuid('asset_id').notNull().references(() => assets.id, { onDelete: 'cascade' }),
+    parentVersionId: uuid('parent_version_id'),
+    label: text('label').notNull().default(''),
+    source: text('source').notNull(), // generated | ai_edit | upload
+    operationId: uuid('operation_id'),
+    prompt: text('prompt'),
+    settings: jsonb('settings').$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('shot_versions_number_idx').on(t.shotId, t.number), index('shot_versions_project_idx').on(t.projectId)],
+);
+
+/** One requested edit of a shot (AI or deterministic), with its source, scope, result and status. */
+export const editOperations = pgTable(
+  'edit_operations',
+  {
+    id: id(),
+    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    shotId: uuid('shot_id').notNull().references(() => shots.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    sourceVersionId: uuid('source_version_id').notNull(),
+    resultVersionId: uuid('result_version_id'),
+    commentId: uuid('comment_id'),
+    kind: text('kind').notNull().default('ai_edit'),
+    mode: text('mode').notNull(),
+    instruction: text('instruction').notNull().default(''),
+    startSec: real('start_sec').notNull(),
+    endSec: real('end_sec').notNull(),
+    mask: jsonb('mask').$type<Record<string, unknown> | null>(),
+    referenceAssetIds: jsonb('reference_asset_ids').$type<string[]>().notNull().default([]),
+    /** Edited still used as guidance (frame edit → video). */
+    keyframeAssetId: uuid('keyframe_asset_id'),
+    keyframeSec: real('keyframe_sec'),
+    params: jsonb('params').$type<Record<string, unknown>>().notNull().default({}),
+    status: text('status').notNull().default('queued'), // queued | processing | ready | accepted | rejected | failed
+    generationJobId: uuid('generation_job_id'),
+    estimateCredits: integer('estimate_credits').notNull().default(0),
+    error: jsonb('error').$type<{ message: string } | null>(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('edit_operations_shot_idx').on(t.shotId, t.createdAt)],
+);
+
+/** Review comments pinned to a shot, a time range and optionally a spot or mask. */
+export const shotComments = pgTable(
+  'shot_comments',
+  {
+    id: id(),
+    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    shotId: uuid('shot_id').notNull().references(() => shots.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    versionId: uuid('version_id'),
+    parentId: uuid('parent_id'),
+    author: text('author').notNull().default('user'), // user | assistant
+    text: text('text').notNull(),
+    startSec: real('start_sec'),
+    endSec: real('end_sec'),
+    x: real('x'),
+    y: real('y'),
+    mask: jsonb('mask').$type<Record<string, unknown> | null>(),
+    referenceAssetIds: jsonb('reference_asset_ids').$type<string[]>().notNull().default([]),
+    status: text('status').notNull().default('open'), // open | processing | ready_for_review | accepted | rejected | failed | resolved
+    operationId: uuid('operation_id'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('shot_comments_shot_idx').on(t.shotId, t.createdAt)],
 );

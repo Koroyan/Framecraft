@@ -1,6 +1,6 @@
 # Implementation Status
 
-_Last updated: 2026-10-24._ Verification legend: **✅ verified** (automated tests and/or exercised in a real browser), **🔑 needs credentials** (code complete, mocked-contract tested only), **🟡 partial**, **⬜ not implemented**.
+_Last updated: 2026-10-25._ Verification legend: **✅ verified** (automated tests and/or exercised in a real browser), **🔑 needs credentials** (code complete, mocked-contract tested only), **🟡 partial**, **⬜ not implemented**.
 
 ## Test results at this checkpoint
 
@@ -8,9 +8,9 @@ _Last updated: 2026-10-24._ Verification legend: **✅ verified** (automated tes
 |---|---|
 | `pnpm typecheck` (server, web, shared) | ✅ clean |
 | `pnpm lint` (ESLint + typescript-eslint + Next + React Hooks) | ✅ clean |
-| `packages/shared` unit tests | ✅ 8/8 |
-| `apps/server` unit + integration tests (PGlite Postgres, real FFmpeg, mocked provider HTTP) | ✅ 99/99 |
-| Playwright E2E against the running app (desktop + Pixel 7) | ✅ 9/9 |
+| `packages/shared` unit tests | ✅ 18/18 |
+| `apps/server` unit + integration tests (PGlite Postgres, real FFmpeg, mocked provider HTTP) | ✅ 103/103 |
+| Playwright E2E (desktop + Pixel 7) on an isolated fixture stack (live generation off, separate DB) | ✅ 9/10 — the admin test needs `pnpm db:seed` on that DB; incl. the new editor-studio walkthrough. On the live dev server the paid paths skip themselves |
 | `pnpm build` (server bundle + Next.js production build, 22 routes) | ✅ |
 | Server bundle runs migrations; provider check CLI runs | ✅ |
 | Docker images / compose | ⬜ written, **not executed** (Docker not installed on this machine) |
@@ -39,6 +39,14 @@ _Last updated: 2026-10-24._ Verification legend: **✅ verified** (automated tes
 - **Soundtrack**: ElevenLabs film score across the film (quieter under dialogue) and ambience beds per scene for silent or dubbed shots; included in the budget.
 - **Voice takes**: every re-voice keeps earlier takes; one take per line is used (newest by default, any earlier one selectable), dubbed shots mute the clip's own audio so two voices never play together.
 - **Logo end cards**: shots showing the brand logo are built by FFmpeg from the exact logo file (free, no model moderation, pixel-exact) instead of being sent to a video model.
+- **Editor studio** (`/app/editor/:id`): workspaces Story graph · Timeline edit · Shot editor · Review, plus a floating AI assistant.
+  - *Story graph* (React Flow): shots as connected nodes (thumbnail, duration, version, source, camera, comments, AI-edit status), FILM START, scene frames that collapse, version branches with the active one marked, minimap, zoom/fit, auto layout, snapping, multi-select. Edges are the real playback order — the same timeline the editor renders, so graph and timeline never disagree; connecting A→B moves B after A, deleting an edge/node takes the shot out of the movie (kept in the project), detached shots connect back in. Undo/redo covers it. Layout persists per project.
+  - *Shot editor*: frame-accurate player (frame step, I/O range marks, shift-drag range), selection tools (rectangle, ellipse, brush, lasso, eraser, subtract, invert, feather, comment pins), AI edit modes (fix, replace, remove, add, restyle, relight, background, modify motion, enhance, reframe/outpaint, camera remix) with a live cost estimate and honest notes, **edit frame → apply to video** (grab frame → AI image edit or own retouch → guide keyframe), comments with statuses and **Send to AI**, per-shot assistant conversation, versions (rename, use in movie, compare), compare view (wipe / side by side, synced) with accept / reject.
+  - *Localized AI editing engine* (Runway **aleph2** video-to-video): only the selected range plus 1 s context is extracted and sent (≤30 s, ≤5 MB inline); the result is conformed (size, fps), spliced back so everything outside the range is the original, blended in **only inside the mask** (local feathered compositing — the provider takes no mask), original audio kept; saved as a new immutable version; the active version changes only on accept (atomic); failures refund the reservation. Re-entrant job (Runway task id checkpointed, resumes after restarts).
+  - *Precise 2D camera*: drag/zoom the framing window on the video (corner, slider, wheel, arrows), keyframes at the playhead, ease/linear, rotation, presets (push in, pull out, pans, tilts, dolly, zoom to point, handheld, tracking) with intensity; motion path, start/end frames, thirds guides; preview = export (shared maths, FFmpeg zoompan/rotate).
+  - *Colour*: exposure, brightness, contrast, highlights, shadows, saturation, temperature, tint, hue, blur, sharpen, vignette — one shared grade model drives the SVG preview filter and the FFmpeg export (blur/sharpen/vignette approximate in preview).
+  - *Timeline*: clip speed 0.25–4×, reverse, freeze frames, fades, opacity, duplicate, overlay track V2 (images/videos, position/size/opacity), audio mute/solo; all rendered in the MP4 (pixel-checked in tests).
+  - *AI assistant*: scope (shot / selected seconds / whole movie); returns an explicit plan — free deterministic operations (trim, speed, transition, colour, match colour, camera preset, fade, move, remove, title) apply on click and are undoable; generative operations show their credit cost and run only on confirmation; out-of-scope operations are blocked, never applied.
 - **Editor**: multi-track timeline (ruler, playhead, zoom; video with thumbnails, voices, music & sound, text, subtitles at real times; drag to reorder); preview honours clip volume; audio players keyed per file.
 - **Dubbed dialogue for non-English films**: video models speak English well but Georgian/Russian with a foreign accent, so for those languages the video prompt asks for lip movement + ambience only and every line is voiced by ElevenLabs (eleven_v4, explicit language code). Each character gets one stable voice cast by gender (AI Director field, or an EN/KA/RU heuristic). Voices are laid onto the timeline in sync with their shot, subtitles follow the voices, and clip audio is ducked (or muted when the old video spoke the lines). Dialogue cost is part of the approved film budget. 'Re-voice the dialogue' re-records a finished film without regenerating video (identical lines reused free). Per-language voice lists live in Admin config 'voices'; /api/admin/voices/library + /adopt find and add native-speaker voices from the ElevenLabs Voice Library (needs the key's Voices read/write permissions).
 - **Character & Location libraries**: CRUD, reference images, likeness-consent capture, character-sheet generation.
@@ -72,6 +80,12 @@ _Last updated: 2026-10-24._ Verification legend: **✅ verified** (automated tes
 - Vision-based continuity QA between shots (the field `continuityFlags` exists).
 - Social platform publishing / analytics (requires platform approval).
 - BullMQ/Redis (deliberately replaced by the Postgres queue; see docs/ARCHITECTURE.md).
+
+## Editor studio — honest limits
+- Runway aleph2 was validated against its OpenAPI spec and with free validation requests; it has **not** yet been run with real credits from the app (mocked-contract tests). Its first live use should be reviewed.
+- aleph2 accepts no mask and no reference images: masks are enforced by local compositing (pixel-exact outside, model-dependent inside); reference images are not sent (an edited guide frame is).
+- Masks are static over the selected range (no subject tracking / AI subject selection — no provider for it is configured). Keep moving subjects inside a generous area or use short ranges.
+- Not implemented yet: *Extend* (continuation as a new version), blend modes and multiple main video tracks, slip editing, audio waveforms and multi-frame filmstrips (single thumbnails), volume automation curves, re-grouping shots into other scenes from the graph, Remotion.
 
 ## Known issues
 - Chat mode is covered by integration tests with a scripted model; replies from the real model should be reviewed in live use (each message is one Claude call). Replies are written by a queue job (`chat.turn`) while the chat shows "thinking", because a reply that writes ad ideas can take longer than the 30-second web proxy timeout.

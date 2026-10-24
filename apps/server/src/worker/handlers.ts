@@ -9,6 +9,7 @@ import { runRenderJob } from '../editor/editor';
 import { runAudioJob } from '../audio/audio';
 import { runImageJob } from '../images/images';
 import { runChatTurn } from '../chat/chat';
+import { runEditJob } from '../editing/ai-edit';
 
 export function createHandlers(ctx: AppContext): Record<string, JobHandler> {
   return {
@@ -19,6 +20,7 @@ export function createHandlers(ctx: AppContext): Record<string, JobHandler> {
     'audio.run': (job) => runAudioJob(ctx, job),
     'image.run': (job) => runImageJob(ctx, job),
     'chat.turn': (job) => runChatTurn(ctx, job),
+    'edit.run': (job) => runEditJob(ctx, job),
     'maintenance.sweep': async () => {
       const released = await releaseExpiredReservations(ctx.db);
       const reclaimed = await reclaimStale(ctx.db);
@@ -33,6 +35,8 @@ const RESUME: Record<string, { name: string; dedupe: (id: string) => string; res
   video: { name: 'video.run', dedupe: (id) => `video:${id}` },
   image: { name: 'image.run', dedupe: (id) => `image:${id}` },
   render: { name: 'render.timeline', dedupe: (id) => `render:${id}` },
+  // Resumes its saved Runway task — never submitted twice.
+  edit: { name: 'edit.run', dedupe: (id) => `edit:${id}` },
   // These handlers only start from "queued"; their provider call is a single short request.
   audio: { name: 'audio.run', dedupe: (id) => `audio:${id}`, resetTo: 'queued' },
   plan: { name: 'movie.plan', dedupe: (id) => `plan:${id}`, resetTo: 'queued' },

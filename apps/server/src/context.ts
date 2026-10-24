@@ -1,4 +1,5 @@
 import type { Env } from './config/env';
+import { RunwayVideoEditor } from './providers/video/aleph';
 import { createDb, runMigrations, type Db, type DbHandle } from './db/client';
 import { createStorage, type StorageDriver } from './storage/storage';
 import { createVideoProviders, type VideoProviderMap, type HttpFetch } from './providers/video';
@@ -20,6 +21,8 @@ export type AppContext = {
   video: VideoProviderMap;
   audio: ElevenLabsProvider;
   images: ImageService;
+  /** Video-to-video editing (Runway aleph2). */
+  editor: RunwayVideoEditor;
   llm: LlmClient;
   director: Director;
   /** Providers with credentials present. */
@@ -54,6 +57,7 @@ export async function createContext(env: Env, o: ContextOverrides = {}): Promise
     video: createVideoProviders(env, fetchImpl),
     audio: new ElevenLabsProvider(env.ELEVENLABS_API_KEY, fetchImpl),
     images: new ImageService({ fal: env.FAL_KEY, runway: env.RUNWAYML_API_SECRET }, fetchImpl),
+    editor: new RunwayVideoEditor(env.RUNWAYML_API_SECRET, fetchImpl),
     llm,
     director: new Director(llm),
     configured,

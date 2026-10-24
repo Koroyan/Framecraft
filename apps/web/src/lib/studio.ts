@@ -1,0 +1,111 @@
+'use client';
+
+import { useQuery } from '@tanstack/react-query';
+import type { AiEditMode, EditMask, PlanOp } from '@framecraft/shared';
+import { api } from '@/lib/api';
+
+/* Editor studio API types and hooks (shot versions, comments, AI edits, assistant). */
+
+export type VersionMedia = { url: string; thumbnailUrl: string | null; durationSec: number | null; isFixture: boolean };
+export type ShotVersion = {
+  id: string;
+  shotId: string;
+  number: number;
+  assetId: string;
+  parentVersionId: string | null;
+  label: string;
+  source: 'generated' | 'ai_edit' | 'upload';
+  operationId: string | null;
+  prompt: string | null;
+  settings: Record<string, unknown>;
+  createdAt: string;
+  media: VersionMedia | null;
+};
+export type EditOperation = {
+  id: string;
+  shotId: string;
+  sourceVersionId: string;
+  resultVersionId: string | null;
+  commentId: string | null;
+  mode: AiEditMode;
+  instruction: string;
+  startSec: number;
+  endSec: number;
+  mask: EditMask | null;
+  status: 'queued' | 'processing' | 'ready' | 'accepted' | 'rejected' | 'failed';
+  generationJobId: string | null;
+  estimateCredits: number;
+  error: { message: string } | null;
+  createdAt: string;
+};
+export type ShotComment = {
+  id: string;
+  shotId: string;
+  versionId: string | null;
+  author: 'user' | 'assistant';
+  text: string;
+  startSec: number | null;
+  endSec: number | null;
+  x: number | null;
+  y: number | null;
+  mask: EditMask | null;
+  status: 'open' | 'processing' | 'ready_for_review' | 'accepted' | 'rejected' | 'failed' | 'resolved';
+  operationId: string | null;
+  createdAt: string;
+};
+export type StudioShot = {
+  id: string;
+  number: number;
+  sceneId: string;
+  description: string;
+  prompt: string;
+  camera: string | null;
+  shotType: string | null;
+  durationSec: number;
+  status: string;
+  activeVersionId: string | null;
+  storyboardUrl: string | null;
+  versions: ShotVersion[];
+  operations: EditOperation[];
+  comments: ShotComment[];
+};
+export type StudioData = { scenes: { id: string; index: number; title: string }[]; shots: StudioShot[] };
+
+export type EditEstimate = {
+  available: boolean;
+  fixture: boolean;
+  credits: number;
+  usd: number;
+  seconds: number;
+  model: string;
+  whole: boolean;
+  windowStart: number;
+  windowEnd: number;
+  rangeStart: number;
+  rangeEnd: number;
+  notes: string[];
+};
+
+export type PlanItem = { op: PlanOp; generative: boolean; why?: string; estimate?: EditEstimate | null; blocked?: string };
+export type CopilotReply = { reply: string; plan: PlanItem[]; offline: boolean };
+
+/** Shots with versions/comments/edits. Polls while an AI edit is running. */
+export function useStudio(projectId: string) {
+  return useQuery({
+    queryKey: ['studio', projectId],
+    queryFn: () => api<StudioData>(`/api/projects/${projectId}/shots`),
+    refetchInterval: (q) => (q.state.data?.shots.some((s) => s.operations.some((o) => o.status === 'processing' || o.status === 'queued')) ? 3000 : false),
+  });
+}
+
+export const activeVersion = (s: StudioShot) => s.versions.find((v) => v.id === s.activeVersionId) ?? s.versions.at(-1) ?? null;
+
+export const COMMENT_STATUS_LABEL: Record<ShotComment['status'], string> = {
+  open: 'Open',
+  processing: 'Processing',
+  ready_for_review: 'Ready for review',
+  accepted: 'Accepted',
+  rejected: 'Rejected',
+  failed: 'Failed',
+  resolved: 'Resolved',
+};

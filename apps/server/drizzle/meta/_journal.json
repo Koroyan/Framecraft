@@ -22,6 +22,13 @@
       "when": 1792699880127,
       "tag": "0002_chat_and_ads",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792900000000,
+      "tag": "0003_editor_studio",
+      "breakpoints": true
     }
   ]
 }

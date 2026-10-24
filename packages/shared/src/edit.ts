@@ -181,7 +181,9 @@ export function sequenceOf(t: Pick<Timeline, 'clips'>): SequenceNode[] {
   const out: SequenceNode[] = [];
   for (const c of t.clips) {
     const last = out[out.length - 1];
-    if (c.shotId && last?.shotId === c.shotId) last.clipIds.push(c.id);
+    const prev = last && t.clips.find((x) => x.id === last.clipIds[last.clipIds.length - 1]);
+    // Consecutive pieces of one split take stay one node; a duplicated shot is a node of its own.
+    if (c.shotId && last?.shotId === c.shotId && prev && Math.abs(c.inSec - prev.outSec) < 0.05 && c.assetId === prev.assetId) last.clipIds.push(c.id);
     else out.push({ key: c.shotId && !out.some((n) => n.shotId === c.shotId) ? c.shotId : c.id, shotId: c.shotId, clipIds: [c.id] });
   }
   return out;

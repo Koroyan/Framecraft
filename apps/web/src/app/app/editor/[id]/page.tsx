@@ -23,10 +23,18 @@ import {
   Type,
   Undo2,
   Upload,
+  Bot,
+  CheckCheck,
+  Copy,
+  Layers,
+  Crosshair,
+  Film,
+  Network,
 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import { LANGUAGES, timelineDuration, type Timeline } from '@framecraft/shared';
+import { clipDuration, LANGUAGES, swapShotVersion, timelineDuration, type Timeline } from '@framecraft/shared';
+import { cameraStyle, GradeFilter, Vignette } from '@/components/editor/look';
 import { api, ApiError, endpoints, type Asset, type Project } from '@/lib/api';
 import { useJob } from '@/lib/hooks';
 import { clipStarts, moveClip, newId, splitClip, useEditor } from '@/lib/editor-store';
@@ -34,11 +42,16 @@ import { Badge, Button, Card, Dialog, Field, Input, NativeSelect, Segmented, Ske
 import { useUploader } from '@/components/studio/upload';
 import { ProgressBar } from '@/components/studio/progress';
 import { MultiTrack } from '@/components/editor/multitrack';
+import { StoryGraph } from '@/components/editor/story-graph';
+import { ShotEditor } from '@/components/editor/shot-editor';
+import { Copilot } from '@/components/editor/copilot';
+import { useStudio } from '@/lib/studio';
 import { cn, newKey, seconds } from '@/lib/utils';
 
 const TRANSITIONS = ['cut', 'fade', 'dissolve', 'fadeblack', 'wipeleft', 'wiperight', 'slideup', 'circleopen'] as const;
 const POS_CLASS = { top: 'top-[10%]', center: 'top-1/2 -translate-y-1/2', bottom: 'bottom-[22%]' } as const;
 
+type Workspace = 'story' | 'edit' | 'shot' | 'review';
 type TimelineResponse = { timeline: Timeline; version: number; label: string | null; durationSec: number; project: Project };
 
 // ------------------------------------------------------------------ sequential preview player
@@ -157,7 +170,10 @@ function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove }: { time
   const index = Math.max(0, starts.findLastIndex((s) => s <= playhead + 0.001));
   const clip = timeline.clips[index];
   const asset = clip ? assets.get(clip.assetId) : undefined;
-  const localTime = clip ? clip.inSec + (playhead - (starts[index] ?? 0)) : 0;
+  const clipT = playhead - (starts[index] ?? 0);
+  const speed = clip?.freezeSec ? 1 : (clip?.speed ?? 1);
+  const localTime = clip ? (clip.freezeSec ? clip.inSec : clip.inSec + clipT * speed) : 0;
+  const clipLenNow = clip ? clipDuration(clip) : 0;
 
   // Keep the <video> element in sync with the playhead (seek when paused or when switching clips).
   useEffect(() => {
@@ -169,9 +185,29 @@ function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove }: { time
   useEffect(() => {
     const v = video.current;
     if (!v) return;
-    if (playing) void v.play().catch(() => setPlaying(false));
+    v.playbackRate = speed;
+    if (playing && !clip?.freezeSec) void v.play().catch(() => setPlaying(false));
     else v.pause();
-  }, [playing, asset?.id]);
+  }, [playing, asset?.id, speed, clip?.freezeSec]);
+
+  // Freeze frames have no video playback to drive the playhead: tick it.
+  useEffect(() => {
+    if (!playing || !clip?.freezeSec) return;
+    const from = performance.now();
+    const base = playhead;
+    const id = setInterval(() => {
+      const next = base + (performance.now() - from) / 1000;
+      if (next >= (starts[index] ?? 0) + clipLenNow) {
+        clearInterval(id);
+        if (index + 1 >= timeline.clips.length) {
+          setPlaying(false);
+          setPlayhead(0);
+        } else setPlayhead((starts[index + 1] ?? 0) + 0.001);
+      } else setPlayhead(next);
+    }, 80);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, clip?.id]);
 
   // Clip volume as in the export (dubbed shots duck or mute the clip's own audio).
   const clipVolume = clip?.volume ?? 1;
@@ -220,7 +256,7 @@ function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove }: { time
 
   const onTime = () => {
     const v = video.current;
-    if (!v || !clip || !playing) return;
+    if (!v || !clip || !playing || clip.freezeSec) return;
     if (v.currentTime >= clip.outSec - 0.04) {
       const next = (starts[index + 1] ?? total) + 0.001;
       if (index + 1 >= timeline.clips.length) {
@@ -229,8 +265,11 @@ function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove }: { time
       } else setPlayhead(next);
       return;
     }
-    setPlayhead((starts[index] ?? 0) + (v.currentTime - clip.inSec));
+    setPlayhead((starts[index] ?? 0) + (v.currentTime - clip.inSec) / speed);
   };
+  // Fades and opacity go towards black, like the export.
+  const fade = clip ? Math.min(1, clip.fadeInSec ? clipT / clip.fadeInSec : 1, clip.fadeOutSec ? (clipLenNow - clipT) / clip.fadeOutSec : 1) * (clip.opacity ?? 1) : 1;
+  const overlays = timeline.overlays.filter((o) => playhead >= o.startSec && playhead <= o.endSec);
 
   const [w, h] = timeline.aspectRatio.split(':').map(Number);
   const texts = timeline.texts.filter((t) => playhead >= t.startSec && playhead <= t.endSec);
@@ -240,11 +279,25 @@ function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove }: { time
   return (
     <div className="space-y-3">
       <div className="relative mx-auto max-h-[56dvh] overflow-hidden rounded-2xl border hairline bg-black" style={{ aspectRatio: `${w}/${h}` }}>
+        {clip && <GradeFilter id={`grade-pv-${clip.id}`} adjust={clip.adjust} />}
         {asset ? (
-          <video ref={video} src={asset.url} playsInline muted={timeline.muteClipAudio || clipVolume === 0} onTimeUpdate={onTime} className="size-full object-cover" preload="auto" />
+          <div className="absolute inset-0 overflow-hidden" style={{ opacity: Math.max(0, fade) }}>
+            <div className="size-full" style={cameraStyle(clip?.camera, clipT)}>
+              <video ref={video} src={asset.url} playsInline muted={timeline.muteClipAudio || clipVolume === 0} onTimeUpdate={onTime} className="size-full object-cover" preload="auto" style={clip?.adjust ? { filter: `url(#grade-pv-${clip.id})` } : undefined} />
+            </div>
+            <Vignette amount={clip?.adjust?.vignette} />
+          </div>
         ) : (
           <div className="grid size-full place-items-center text-sm text-fog-400">Add clips to start</div>
         )}
+        {overlays.map((o) => {
+          const a = assets.get(o.assetId);
+          if (!a) return null;
+          const style = { left: `${o.x * 100}%`, top: `${o.y * 100}%`, width: `${o.w * 100}%`, opacity: o.opacity } as const;
+          return a.mediaType === 'video' ? <video key={o.id} src={a.url} muted autoPlay={playing} loop playsInline className="pointer-events-none absolute" style={style} /> : <img key={o.id} src={a.url} alt="" className="pointer-events-none absolute" style={style} />;
+        })}
+        {clip?.reverse && <span className="absolute right-2 top-2 rounded-full bg-black/70 px-2 py-0.5 text-[10px] text-white">Plays reversed in the export</span>}
+        {clip?.freezeSec && <span className="absolute right-2 top-2 rounded-full bg-black/70 px-2 py-0.5 text-[10px] text-white">Freeze frame</span>}
         {texts.map((t) => (
           <div key={t.id} className={cn('pointer-events-none absolute inset-x-4 text-center font-semibold', POS_CLASS[t.position])} style={{ color: t.color, fontSize: `clamp(12px, ${t.fontSize / 18}vw, ${t.fontSize / 2.2}px)` }}>
             <span className={cn(t.background && 'rounded-md bg-black/50 px-2 py-0.5')}>{t.text}</span>
@@ -381,9 +434,14 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
   const { timeline, apply, undo, redo, load, selected, select, dirty, markSaved, past, future } = useEditor();
   const [playhead, setPlayhead] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [libraryFor, setLibraryFor] = useState<null | { kind: 'clip' | 'replace' | 'audio' | 'logo' }>(null);
+  const [libraryFor, setLibraryFor] = useState<null | { kind: 'clip' | 'replace' | 'audio' | 'logo' | 'overlay' }>(null);
   const [ttsOpen, setTtsOpen] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
+  const [workspace, setWorkspace] = useState<Workspace>('story');
+  const [shotClip, setShotClip] = useState<string | null>(null);
+  const [compareInit, setCompareInit] = useState<string | null>(null);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const studioQ = useStudio(id);
 
   const tq = useQuery({ queryKey: ['timeline', id], queryFn: () => api<TimelineResponse>(`/api/projects/${id}/timeline`), staleTime: Infinity });
   const assetsQ = useQuery({ queryKey: ['assets', 'all'], queryFn: () => endpoints.assets('?limit=200'), refetchInterval: 15_000 });
@@ -436,6 +494,60 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     return () => window.removeEventListener('keydown', onKey);
   }, [undo, redo, save]);
 
+  // Deep link from notifications: /app/editor/:id?shot=<shotId> opens that shot.
+  const hasTimeline = Boolean(timeline);
+  useEffect(() => {
+    // Films and ads open on the story graph; single videos go straight to the timeline.
+    if (!useEditor.getState().timeline?.clips.some((c) => c.shotId)) setWorkspace('edit');
+    const shotId = new URLSearchParams(window.location.search).get('shot');
+    const c = shotId && useEditor.getState().timeline?.clips.find((x) => x.shotId === shotId);
+    if (c) {
+      setShotClip(c.id);
+      setWorkspace('shot');
+    }
+  }, [hasTimeline]);
+
+  const openShot = useCallback(
+    (clipId: string, compare: string | null = null) => {
+      select(clipId);
+      setShotClip(clipId);
+      setCompareInit(compare);
+      setWorkspace('shot');
+    },
+    [select],
+  );
+  const playFrom = useCallback(
+    (clipId: string) => {
+      const t = useEditor.getState().timeline;
+      if (!t) return;
+      select(clipId);
+      setPlayhead((clipStarts(t)[t.clips.findIndex((c) => c.id === clipId)] ?? 0) + 0.01);
+    },
+    [select],
+  );
+  const refetchStudio = studioQ.refetch;
+  const activateVersion = useCallback(
+    async (_shotId: string, versionId: string) => {
+      try {
+        const r = await api<{ shotId: string; versionId: string; assetId: string; durationSec: number; previousDurationSec?: number }>(`/api/shot-versions/${versionId}/activate`, { body: {} });
+        apply((t) => swapShotVersion(t, r.shotId, r));
+        void refetchStudio();
+        toast.success('Version switched — the other versions are kept');
+      } catch (e) {
+        toast.error(e instanceof ApiError ? e.message : 'Could not switch version');
+      }
+    },
+    [apply, refetchStudio],
+  );
+  const compareFromGraph = useCallback(
+    (shotId: string, versionId: string) => {
+      const c = useEditor.getState().timeline?.clips.find((x) => x.shotId === shotId);
+      if (c) openShot(c.id, versionId);
+    },
+    [openShot],
+  );
+  const saveLayout = useCallback((layout: { positions: Record<string, { x: number; y: number }>; collapsed: string[] }) => void api(`/api/projects/${id}/graph`, { method: 'PUT', body: layout }).catch(() => undefined), [id]);
+
   const audioUp = useUploader({ projectId: id, accept: 'audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/ogg' });
   const videoUp = useUploader({ projectId: id, accept: 'video/mp4,video/quicktime,video/webm' });
   const logoUp = useUploader({ projectId: id });
@@ -472,6 +584,12 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         t.audio.push({ id: newId('aud'), assetId: a.id, kind: 'music', startSec: 0, inSec: 0, outSec: Math.max(1, (a.durationMs ?? total * 1000) / 1000), volume: 0.6, fadeInSec: 0, fadeOutSec: 1, muted: false });
         return t;
       });
+    else if (kind === 'overlay')
+      apply((t) => {
+        const len = a.mediaType === 'video' ? Math.min(10, (a.durationMs ?? 4000) / 1000) : 3;
+        t.overlays.push({ id: newId('ov'), assetId: a.id, startSec: Math.round(playhead * 10) / 10, endSec: Math.round((playhead + len) * 10) / 10, x: 0.6, y: 0.06, w: 0.34, opacity: 1, inSec: 0 });
+        return t;
+      });
     else if (kind === 'logo')
       apply((t) => {
         t.logo = { assetId: a.id, position: 'top-right', scale: 0.12, opacity: 0.9 };
@@ -479,35 +597,12 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       });
   };
 
-  return (
-    <div className="mx-auto max-w-7xl">
-      {audioUp.element}
-      {videoUp.element}
-      {logoUp.element}
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <Link href={tq.data!.project.kind === 'movie' ? `/app/movie/${id}` : `/app/projects/${id}`} className="text-xs text-fog-400 hover:text-white">
-            ← {tq.data!.project.title}
-          </Link>
-          <h1 className="mt-1 text-xl font-semibold text-white">Editor</h1>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="mr-2 text-xs text-fog-400">{saving ? 'Saving…' : dirty ? 'Unsaved changes' : 'All changes saved'}</span>
-          <Button size="icon" variant="ghost" aria-label="Undo" onClick={undo} disabled={!past.length}><Undo2 /></Button>
-          <Button size="icon" variant="ghost" aria-label="Redo" onClick={redo} disabled={!future.length}><Redo2 /></Button>
-          <Button size="icon" variant="ghost" aria-label="Versions" onClick={() => setVersionsOpen(true)}><History /></Button>
-          <Button size="sm" variant="secondary" onClick={() => save(false, 'Manual save')}><Save /> Save version</Button>
-        </div>
-      </div>
-
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
-        <div className="min-w-0 space-y-5">
-          <Card className="p-3 md:p-4">
+  const previewCard = (
+    <Card className="p-3 md:p-4">
             <Preview timeline={timeline} assets={assets} playhead={playhead} setPlayhead={setPlayhead} onLogoMove={(pos) => apply((t) => ({ ...t, logo: t.logo ? { ...t.logo, ...pos } : t.logo }))} />
           </Card>
-
-          {/* Timeline strip */}
-          <Card className="p-3 md:p-4">
+  );
+  const timelineCard = <div>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div className="text-sm font-medium text-white">Timeline · {seconds(total)}</div>
               <div className="flex flex-wrap gap-1.5">
@@ -539,7 +634,105 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             ) : (
               <div className="w-full rounded-lg border border-dashed hairline py-5 text-center text-sm text-fog-400">No clips — add generated or uploaded videos.</div>
             )}
-          </Card>
+          </div>;
+  const studio = studioQ.data;
+  const reviewOps = (studio?.shots ?? []).flatMap((sh) => sh.operations.filter((o) => o.status === 'ready').map((o) => ({ shot: sh, op: o })));
+  const shotEditorClip = shotClip && timeline.clips.some((c) => c.id === shotClip) ? shotClip : (sel?.id ?? timeline.clips[0]?.id ?? null);
+  const shotEditorShot = studio?.shots.find((sh) => sh.id === timeline.clips.find((c) => c.id === shotEditorClip)?.shotId);
+  const graphLayout = (tq.data!.project.settings as { graph?: { positions?: Record<string, { x: number; y: number }>; collapsed?: string[] } } | undefined)?.graph;
+
+  return (
+    <div className="mx-auto max-w-[1600px]">
+      {audioUp.element}
+      {videoUp.element}
+      {logoUp.element}
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <Link href={tq.data!.project.kind === 'movie' ? `/app/movie/${id}` : `/app/projects/${id}`} className="text-xs text-fog-400 hover:text-white">
+            ← {tq.data!.project.title}
+          </Link>
+          <h1 className="mt-1 text-xl font-semibold text-white">Editor studio</h1>
+        </div>
+        <div className="flex flex-wrap items-center gap-1 rounded-xl border hairline bg-white/[0.02] p-1">
+          {(
+            [
+              ['story', Network, 'Story graph'],
+              ['edit', Film, 'Timeline edit'],
+              ['shot', Crosshair, 'Shot editor'],
+              ['review', CheckCheck, `Review${reviewOps.length ? ` · ${reviewOps.length}` : ''}`],
+            ] as const
+          ).map(([k, Icon, label]) => (
+            <button key={k} type="button" onClick={() => setWorkspace(k)} className={cn('flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs', workspace === k ? 'bg-iris-500 text-white' : 'text-fog-300 hover:bg-white/[0.06]')}>
+              <Icon className="size-3.5" />
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="mr-2 text-xs text-fog-400">{saving ? 'Saving…' : dirty ? 'Unsaved changes' : 'All changes saved'}</span>
+          <Button size="icon" variant="ghost" aria-label="Undo" onClick={undo} disabled={!past.length}><Undo2 /></Button>
+          <Button size="icon" variant="ghost" aria-label="Redo" onClick={redo} disabled={!future.length}><Redo2 /></Button>
+          <Button size="icon" variant="ghost" aria-label="Versions" onClick={() => setVersionsOpen(true)}><History /></Button>
+          <Button size="sm" variant="secondary" onClick={() => save(false, 'Manual save')}><Save /> Save version</Button>
+          <Button size="sm" variant={assistantOpen ? 'primary' : 'outline'} onClick={() => setAssistantOpen((o) => !o)}><Bot /> Assistant</Button>
+        </div>
+      </div>
+
+      {workspace === 'story' && (
+        <div className="space-y-4">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)]">
+            <div className="h-[62dvh] min-h-[440px]">
+              <StoryGraph projectId={id} timeline={timeline} studio={studio} assets={assets} selectedClipId={selected} savedLayout={graphLayout} apply={apply} onSelectClip={playFrom} onPlayFrom={playFrom} onOpenShot={openShot} onUseVersion={activateVersion} onCompare={compareFromGraph} onSaveLayout={saveLayout} />
+            </div>
+            <div className="min-w-0 space-y-3">
+              {previewCard}
+              {sel && (
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" onClick={() => openShot(sel.id)}><Crosshair /> Edit this shot</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setWorkspace('edit')}><Film /> Clip settings</Button>
+                </div>
+              )}
+            </div>
+          </div>
+          <Card className="p-3 md:p-4">{timelineCard}</Card>
+        </div>
+      )}
+
+      {workspace === 'shot' && shotEditorClip && (
+        <ShotEditor key={shotEditorClip} projectId={id} clipId={shotEditorClip} timeline={timeline} apply={apply} shot={shotEditorShot} assets={assets} onClose={() => setWorkspace('story')} initialCompare={compareInit} />
+      )}
+
+      {workspace === 'review' && (
+        <div className="space-y-3">
+          <p className="text-sm text-fog-300">AI edits waiting for your decision. Nothing in the movie changes until you accept.</p>
+          {!reviewOps.length && <Card className="p-6 text-center text-sm text-fog-400">Nothing to review.</Card>}
+          {reviewOps.map(({ shot, op }) => {
+            const v = shot.versions.find((x) => x.id === op.resultVersionId);
+            return (
+              <Card key={op.id} className="flex flex-wrap items-center gap-3 p-3">
+                {v?.media?.thumbnailUrl && <img src={v.media.thumbnailUrl} alt="" className="h-14 rounded-lg" />}
+                <div className="min-w-0 flex-1 text-sm">
+                  <div className="text-white">Shot {shot.number} · {op.mode.replaceAll('_', ' ')} · {seconds(op.startSec)}–{seconds(op.endSec)}</div>
+                  <div className="truncate text-xs text-fog-400">{op.instruction}</div>
+                </div>
+                <Button size="sm" onClick={() => { const c = timeline.clips.find((x) => x.shotId === shot.id); if (c) openShot(c.id, op.resultVersionId); }}>Compare &amp; decide</Button>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {assistantOpen && (
+        <div className="fixed bottom-4 right-4 z-40 h-[min(560px,80dvh)] w-[min(420px,calc(100vw-2rem))] rounded-2xl border hairline bg-ink-900/95 p-3 shadow-2xl backdrop-blur">
+          <Copilot projectId={id} timeline={timeline} apply={apply} onEditStarted={() => void refetchStudio()} />
+        </div>
+      )}
+
+      {workspace === 'edit' && (
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="min-w-0 space-y-5">
+          {previewCard}
+          <Card className="p-3 md:p-4">{timelineCard}</Card>
         </div>
 
         {/* Inspector */}
@@ -550,6 +743,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
               <TabsTrigger value="audio"><AudioLines className="mr-1 inline size-3.5" />Audio</TabsTrigger>
               <TabsTrigger value="text"><Type className="mr-1 inline size-3.5" />Text</TabsTrigger>
               <TabsTrigger value="subs"><Captions className="mr-1 inline size-3.5" />Subs</TabsTrigger>
+              <TabsTrigger value="overlay"><Layers className="mr-1 inline size-3.5" />Overlay</TabsTrigger>
               <TabsTrigger value="export"><Download className="mr-1 inline size-3.5" />Export</TabsTrigger>
             </TabsList>
 
@@ -574,15 +768,29 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                       <Input type="number" step={0.1} min={0.1} max={3} aria-label="Transition seconds" value={sel.transition?.durationSec ?? 0.5} disabled={!sel.transition} onChange={(e) => apply((t) => { const c = t.clips[selIndex]!; if (c.transition) c.transition.durationSec = Number(e.target.value); return t; })} />
                     </div>
                   </Field>
+                  <Field label={`Speed · ${sel.speed}×`} hint={sel.freezeSec ? 'Freeze frames hold one frame.' : `Lasts ${seconds(clipDuration(sel))} on the timeline.`}>
+                    <input type="range" className="w-full" min={0.25} max={4} step={0.05} value={sel.speed} disabled={Boolean(sel.freezeSec)} onChange={(e) => apply((t) => { t.clips[selIndex]!.speed = Number(e.target.value); return t; })} />
+                  </Field>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label={`Fade in · ${sel.fadeInSec}s`}><input type="range" className="w-full" min={0} max={3} step={0.1} value={sel.fadeInSec} onChange={(e) => apply((t) => { t.clips[selIndex]!.fadeInSec = Number(e.target.value); return t; })} /></Field>
+                    <Field label={`Fade out · ${sel.fadeOutSec}s`}><input type="range" className="w-full" min={0} max={3} step={0.1} value={sel.fadeOutSec} onChange={(e) => apply((t) => { t.clips[selIndex]!.fadeOutSec = Number(e.target.value); return t; })} /></Field>
+                  </div>
+                  <Field label={`Opacity · ${Math.round(sel.opacity * 100)}%`} hint="Fades the picture towards black.">
+                    <input type="range" className="w-full" min={0} max={1} step={0.05} value={sel.opacity} onChange={(e) => apply((t) => { t.clips[selIndex]!.opacity = Number(e.target.value); return t; })} />
+                  </Field>
+                  <label className="flex items-center justify-between text-sm text-fog-200">Reverse <Switch checked={sel.reverse} onCheckedChange={(v) => apply((t) => { t.clips[selIndex]!.reverse = v; return t; })} label="Reverse clip" /></label>
                   <Field label={`Clip volume · ${Math.round(sel.volume * 100)}%`}>
                     <input type="range" className="w-full" min={0} max={2} step={0.05} value={sel.volume} onChange={(e) => apply((t) => { t.clips[selIndex]!.volume = Number(e.target.value); return t; })} />
                   </Field>
                   <div className="grid grid-cols-2 gap-2">
                     <Button size="sm" variant="secondary" onClick={() => apply((t) => splitClip(t, sel.id, sel.inSec + (playhead - (starts[selIndex] ?? 0))))}><Scissors /> Split at playhead</Button>
                     <Button size="sm" variant="secondary" onClick={() => setLibraryFor({ kind: 'replace' })}><RotateCcw /> Replace</Button>
+                    <Button size="sm" variant="secondary" onClick={() => apply((t) => { const c = t.clips[selIndex]!; const at = Math.min(c.outSec - 0.05, c.inSec + (playhead - (starts[selIndex] ?? 0)) * (c.speed || 1)); t.clips.splice(selIndex + 1, 0, { ...c, id: newId('clip'), inSec: Math.max(0, at), outSec: Math.max(at + 0.1, c.outSec), freezeSec: 2, transition: undefined, camera: undefined }); return t; })}><Pause /> Freeze frame</Button>
+                    <Button size="sm" variant="secondary" onClick={() => apply((t) => { const c = t.clips[selIndex]!; t.clips.splice(selIndex + 1, 0, { ...c, id: newId('clip'), transition: undefined }); return t; })}><Copy /> Duplicate</Button>
                     <Button size="sm" variant="ghost" onClick={() => apply((t) => moveClip(t, sel.id, -1))} disabled={selIndex === 0}><ArrowLeft /> Earlier</Button>
                     <Button size="sm" variant="ghost" onClick={() => apply((t) => moveClip(t, sel.id, 1))} disabled={selIndex === timeline.clips.length - 1}>Later <ArrowRight /></Button>
                   </div>
+                  <Button size="sm" className="w-full" onClick={() => openShot(sel.id)}><Crosshair /> Open in shot editor (AI fix, camera, colour)</Button>
                   {sel.shotId && (
                     <Button
                       size="sm"
@@ -656,7 +864,11 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                       <option value="voice">voice</option>
                       <option value="sfx">sfx</option>
                     </NativeSelect>
-                    <Button size="icon" variant="ghost" aria-label="Remove audio" onClick={() => apply((t) => { t.audio.splice(i, 1); return t; })}><Trash2 /></Button>
+                    <div className="flex items-center gap-1">
+                      <Button size="sm" variant={a.muted ? 'secondary' : 'ghost'} aria-pressed={a.muted} onClick={() => apply((t) => { t.audio[i]!.muted = !t.audio[i]!.muted; return t; })}>{a.muted ? 'Muted' : 'Mute'}</Button>
+                      <Button size="sm" variant="ghost" title="Solo: mute every other track" onClick={() => apply((t) => { const solo = t.audio.every((x, j) => j === i || x.muted) && !t.audio[i]!.muted; t.audio.forEach((x, j) => (x.muted = solo ? false : j !== i)); return t; })}>Solo</Button>
+                      <Button size="icon" variant="ghost" aria-label="Remove audio" onClick={() => apply((t) => { t.audio.splice(i, 1); return t; })}><Trash2 /></Button>
+                    </div>
                   </div>
                   <Field label={`Starts at ${seconds(a.startSec)}`}>
                     <input type="range" className="w-full" min={0} max={Math.max(total, 1)} step={0.1} value={a.startSec} onChange={(e) => apply((t) => { t.audio[i]!.startSec = Number(e.target.value); return t; })} />
@@ -711,6 +923,28 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
               </div>
             </TabsContent>
 
+            <TabsContent value="overlay" className="space-y-3">
+              <p className="text-xs text-fog-400">Images or videos above the main picture (track V2): picture-in-picture, stickers, product shots.</p>
+              <Button size="sm" variant="secondary" onClick={() => setLibraryFor({ kind: 'overlay' })}><Plus /> Add overlay at playhead</Button>
+              {timeline.overlays.map((o, i) => (
+                <Card key={o.id} className="space-y-2 p-3">
+                  <div className="flex items-center justify-between text-xs text-fog-200">
+                    <span className="truncate">{assets.get(o.assetId)?.originalName ?? 'Overlay'} · {seconds(o.startSec)}–{seconds(o.endSec)}</span>
+                    <Button size="icon" variant="ghost" aria-label="Remove overlay" onClick={() => apply((t) => { t.overlays.splice(i, 1); return t; })}><Trash2 /></Button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="Start (s)"><Input type="number" step={0.1} min={0} value={o.startSec} onChange={(e) => apply((t) => { t.overlays[i]!.startSec = Number(e.target.value); return t; })} /></Field>
+                    <Field label="End (s)"><Input type="number" step={0.1} min={0.1} value={o.endSec} onChange={(e) => apply((t) => { t.overlays[i]!.endSec = Number(e.target.value); return t; })} /></Field>
+                  </div>
+                  {(['x', 'y', 'w', 'opacity'] as const).map((k) => (
+                    <Field key={k} label={`${{ x: 'Left', y: 'Top', w: 'Width', opacity: 'Opacity' }[k]} · ${Math.round(o[k] * 100)}%`}>
+                      <input type="range" className="w-full" min={k === 'w' ? 0.05 : k === 'opacity' ? 0.05 : 0} max={1} step={0.01} value={o[k]} onChange={(e) => apply((t) => { t.overlays[i]![k] = Number(e.target.value); return t; })} />
+                    </Field>
+                  ))}
+                </Card>
+              ))}
+            </TabsContent>
+
             <TabsContent value="export">
               <ExportPanel projectId={id} timeline={timeline} />
             </TabsContent>
@@ -718,10 +952,12 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         </Card>
       </div>
 
+      )}
+
       <Dialog open={Boolean(libraryFor)} onOpenChange={(o) => !o && setLibraryFor(null)} title={libraryFor?.kind === 'audio' ? 'Choose audio' : libraryFor?.kind === 'logo' ? 'Choose logo' : 'Choose a clip'} wide>
         <div className="grid grid-cols-3 gap-2 md:grid-cols-4">
           {(assetsQ.data?.assets ?? [])
-            .filter((a) => (libraryFor?.kind === 'audio' ? a.mediaType === 'audio' : libraryFor?.kind === 'logo' ? a.mediaType === 'image' : a.mediaType === 'video'))
+            .filter((a) => (libraryFor?.kind === 'audio' ? a.mediaType === 'audio' : libraryFor?.kind === 'logo' ? a.mediaType === 'image' : libraryFor?.kind === 'overlay' ? a.mediaType === 'image' || a.mediaType === 'video' : a.mediaType === 'video'))
             .map((a) => (
               <button key={a.id} type="button" onClick={() => pickLibrary(a)} className="surface overflow-hidden rounded-xl text-left hover:border-iris-500/50">
                 <div className="aspect-video bg-ink-800">

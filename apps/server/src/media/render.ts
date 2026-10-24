@@ -3,6 +3,7 @@ import path from 'node:path';
 import { ASPECT_DIMENSIONS, timelineDuration, type Timeline } from '@framecraft/shared';
 import { ffmpeg, joinClips, normalizeClip, probe, stageFont, withWorkdir, features } from './ffmpeg';
 import { toSrt } from './subtitles';
+import { cameraFilters, gradeFilters } from './clip-fx';
 
 export type RenderInputs = {
   timeline: Timeline;
@@ -35,7 +36,23 @@ export async function renderTimeline({ timeline, resolve, output, onProgress }: 
       const c = timeline.clips[i]!;
       const src = await resolve(c.assetId);
       const out = path.join(dir, `clip${i}.mp4`);
-      await normalizeClip(src, out, { width: dims.width, height: dims.height, fps: timeline.fps, fill: true, inSec: c.inSec, outSec: c.outSec, volume: c.volume, mute: timeline.muteClipAudio });
+      await normalizeClip(src, out, {
+        width: dims.width,
+        height: dims.height,
+        fps: timeline.fps,
+        fill: true,
+        inSec: c.inSec,
+        outSec: c.outSec,
+        volume: c.volume,
+        mute: timeline.muteClipAudio,
+        speed: c.speed,
+        reverse: c.reverse,
+        freezeSec: c.freezeSec,
+        fadeInSec: c.fadeInSec,
+        fadeOutSec: c.fadeOutSec,
+        opacity: c.opacity,
+        effects: [...cameraFilters(c.camera, dims.width, dims.height, timeline.fps), ...gradeFilters(c.adjust, dims.height)],
+      });
       normalized.push(out);
       await onProgress?.('Preparing clips', (i + 1) / timeline.clips.length / 2);
     }
@@ -53,8 +70,9 @@ export async function renderTimeline({ timeline, resolve, output, onProgress }: 
     const audioLabels: string[] = ['[0:a]'];
     const filters: string[] = [];
 
-    for (let i = 0; i < timeline.audio.length; i++) {
-      const a = timeline.audio[i]!;
+    const audible = timeline.audio.filter((a) => !a.muted);
+    for (let i = 0; i < audible.length; i++) {
+      const a = audible[i]!;
       const src = await resolve(a.assetId);
       const local = `audio${i}${path.extname(src) || '.mp3'}`;
       await fsp.copyFile(src, path.join(dir, local));
@@ -116,6 +134,24 @@ export async function renderTimeline({ timeline, resolve, output, onProgress }: 
       filters.push(`[0:v]${vf.join(',')}[vtxt]`);
       videoOut = '[vtxt]';
     }
+    // Overlay track (V2): images and videos above the main picture.
+    for (let i = 0; i < timeline.overlays.length; i++) {
+      const o = timeline.overlays[i]!;
+      const src = await resolve(o.assetId);
+      const ext = path.extname(src) || '.png';
+      const local = `overlay${i}${ext}`;
+      await fsp.copyFile(src, path.join(dir, local));
+      const isImage = /\.(png|jpe?g|webp)$/i.test(ext);
+      const len = Math.max(0.1, o.endSec - o.startSec);
+      if (isImage) args.push('-loop', '1', '-t', String(len), '-i', local);
+      else args.push('-ss', String(o.inSec), '-t', String(len), '-i', local);
+      const w = Math.max(2, Math.round((dims.width * o.w) / 2) * 2);
+      filters.push(`[${inputIndex}:v]scale=${w}:-2,format=rgba,colorchannelmixer=aa=${o.opacity},setpts=PTS-STARTPTS+${o.startSec}/TB[ov${i}]`);
+      filters.push(`${videoOut}[ov${i}]overlay=x='W*${o.x.toFixed(4)}':y='H*${o.y.toFixed(4)}':enable='between(t,${o.startSec},${o.endSec})':eof_action=pass[vov${i}]`);
+      videoOut = `[vov${i}]`;
+      inputIndex++;
+    }
+
     if (timeline.logo) {
       const src = await resolve(timeline.logo.assetId);
       const local = `logo${path.extname(src) || '.png'}`;

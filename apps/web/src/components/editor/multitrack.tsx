@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Captions, Film, Mic, Minus, Music2, Plus, Type } from 'lucide-react';
+import { Captions, Film, Layers, Mic, Minus, Music2, Plus, Type } from 'lucide-react';
 import { timelineDuration, type Timeline } from '@framecraft/shared';
 import type { Asset } from '@/lib/api';
 import { clipLen, clipStarts } from '@/lib/editor-store';
@@ -55,7 +55,8 @@ export function MultiTrack({
   const beds = timeline.audio.filter((a) => a.kind !== 'voice');
 
   const lanes: { key: string; icon: React.ReactNode; label: string }[] = [
-    { key: 'video', icon: <Film className="size-3.5" />, label: 'Video' },
+    { key: 'overlay', icon: <Layers className="size-3.5" />, label: 'Overlay V2' },
+    { key: 'video', icon: <Film className="size-3.5" />, label: 'Video V1' },
     { key: 'voice', icon: <Mic className="size-3.5" />, label: 'Voices' },
     { key: 'music', icon: <Music2 className="size-3.5" />, label: 'Music & sound' },
     { key: 'text', icon: <Type className="size-3.5" />, label: 'Text' },
@@ -94,6 +95,14 @@ export function MultiTrack({
               ))}
             </div>
             <div className="mt-1 space-y-1.5" onClick={seekFrom}>
+              {/* Overlay track (V2) */}
+              <div className={LANE}>
+                {timeline.overlays.map((o) => (
+                  <span key={o.id} className="absolute inset-y-1 truncate rounded bg-signal-blue/25 px-1.5 text-[9px] leading-7 text-signal-blue" style={{ left: x(o.startSec), width: Math.max(3, x(o.endSec - o.startSec)) }}>
+                    {assets.get(o.assetId)?.originalName ?? 'overlay'}
+                  </span>
+                ))}
+              </div>
               {/* Video */}
               <div className={LANE}>
                 {timeline.clips.map((c, i) => {
@@ -114,11 +123,12 @@ export function MultiTrack({
                         onSelectClip(c.id, (starts[i] ?? 0) + 0.01);
                       }}
                       title={c.label ?? `Clip ${i + 1}`}
+                      aria-label={`Clip ${i + 1}${c.label ? ` · ${c.label}` : ''}`}
                       className={cn('absolute inset-y-0 overflow-hidden rounded-md border text-left', selected === c.id ? 'z-10 border-iris-400 ring-2 ring-iris-500/40' : 'border-white/10 hover:border-white/30')}
                       style={{ left: x(starts[i] ?? 0), width: Math.max(6, x(clipLen(c)) - 2) }}
                     >
                       {a?.thumbnailUrl && <img src={a.thumbnailUrl} alt="" className="absolute inset-0 size-full object-cover opacity-80" />}
-                      <span className="absolute bottom-0.5 left-1 rounded bg-black/60 px-1 text-[9px] text-white">{i + 1}</span>
+                      <span className="absolute bottom-0.5 left-1 rounded bg-black/60 px-1 text-[9px] text-white">{i + 1}{c.freezeSec ? ' ❄' : c.speed !== 1 ? ` ${c.speed}×` : ''}{c.reverse ? ' ⟲' : ''}{c.camera ? ' 🎥' : ''}{c.adjust ? ' ◐' : ''}</span>
                     </button>
                   );
                 })}
@@ -126,13 +136,13 @@ export function MultiTrack({
               {/* Voices */}
               <div className={LANE}>
                 {voices.map((a) => (
-                  <span key={a.id} className="absolute inset-y-1 rounded bg-iris-500/35 px-1 text-[9px] leading-7 text-iris-100" style={{ left: x(a.startSec), width: Math.max(3, x(a.outSec - a.inSec)) }} />
+                  <span key={a.id} className={cn('absolute inset-y-1 rounded bg-iris-500/35 px-1 text-[9px] leading-7 text-iris-100', a.muted && 'opacity-30')} style={{ left: x(a.startSec), width: Math.max(3, x(a.outSec - a.inSec)) }} />
                 ))}
               </div>
               {/* Music & sound */}
               <div className={LANE}>
                 {beds.map((a) => (
-                  <span key={a.id} className={cn('absolute inset-y-1 truncate rounded px-1.5 text-[9px] leading-7', a.kind === 'music' ? 'bg-signal-green/25 text-signal-green' : 'bg-signal-blue/25 text-signal-blue')} style={{ left: x(a.startSec), width: Math.max(3, x(a.outSec - a.inSec)) }}>
+                  <span key={a.id} className={cn('absolute inset-y-1 truncate rounded px-1.5 text-[9px] leading-7', a.kind === 'music' ? 'bg-signal-green/25 text-signal-green' : 'bg-signal-blue/25 text-signal-blue', a.muted && 'opacity-30 line-through')} style={{ left: x(a.startSec), width: Math.max(3, x(a.outSec - a.inSec)) }}>
                     {a.kind === 'music' ? 'music' : 'sound'}
                   </span>
                 ))}

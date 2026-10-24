@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import type { Timeline, TimelineClip } from '@framecraft/shared';
+import { clipDuration, type Timeline, type TimelineClip } from '@framecraft/shared';
 
 const MAX_HISTORY = 100;
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -50,7 +50,8 @@ export const useEditor = create<State>((set, get) => ({
 
 // ------------------------------------------------------------------ pure timeline operations
 
-export const clipLen = (c: TimelineClip) => Math.max(0, c.outSec - c.inSec);
+/** Length on the timeline (speed and freeze frames included). */
+export const clipLen = (c: TimelineClip) => clipDuration(c);
 
 export function clipStarts(t: Timeline): number[] {
   const starts: number[] = [];
