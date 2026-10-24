@@ -115,6 +115,8 @@ const VersionNode = memo(function VersionNode({ data }: NodeProps<Node<VersionNo
 const SceneNode = memo(function SceneNode({ data }: NodeProps<Node<SceneNodeData>>) {
   return (
     <div className="rounded-3xl border border-white/[0.07] bg-white/[0.02]" style={{ width: data.width, height: data.height }}>
+      {data.collapsed && <Handle type="target" position={Position.Left} isConnectable={false} className="!bg-iris-400" />}
+      {data.collapsed && <Handle type="source" position={Position.Right} isConnectable={false} className="!bg-iris-400" />}
       <button type="button" onClick={data.onToggle} className="nodrag m-2 flex items-center gap-1.5 rounded-lg bg-black/40 px-2 py-1 text-[11px] text-fog-200 hover:text-white">
         <Clapperboard className="size-3" /> {data.title} · {data.count} shot{data.count === 1 ? '' : 's'} {data.collapsed ? '▸ expand' : '▾'}
       </button>

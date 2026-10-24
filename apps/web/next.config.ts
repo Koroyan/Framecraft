@@ -6,6 +6,8 @@ const config: NextConfig = {
   reactStrictMode: true,
   transpilePackages: ['@framecraft/shared'],
   poweredByHeader: false,
+  // AI planning calls (editor assistant) can take longer than the default 30 s proxy timeout.
+  experimental: { proxyTimeout: 180_000 },
   output: process.env.NEXT_OUTPUT === 'standalone' ? 'standalone' : undefined,
   // The browser talks to one origin; the API (and signed media) are proxied.
   async rewrites() {

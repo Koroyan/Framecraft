@@ -27,6 +27,7 @@ export function MaskCanvas({ mask, tool, brush, subtract, onChange, onPin, pins 
     const g = c.getContext('2d')!;
     const W = c.width;
     const H = c.height;
+    if (!W || !H) return; // not laid out yet (hidden tab)
     g.clearRect(0, 0, W, H);
     // Selection is painted on an offscreen layer, then tinted, so subtract really cuts holes.
     const layer = document.createElement('canvas');
