@@ -1,0 +1,16 @@
+packages:
+  - "packages/*"
+  - "apps/*"
+
+allowBuilds:
+  esbuild: true
+
+minimumReleaseAgeExclude:
+  - "@anthropic-ai/sdk@1.0.0"
+  - "@aws-sdk/client-s3@3.1154.0"
+  - "@aws-sdk/s3-request-presigner@3.1154.0"
+  - "@electric-sql/pglite@0.5.11"
+  - framer-motion@14.5.0
+  - lucide-react@1.61.0
+  - motion-dom@14.5.0
+  - motion@14.5.0

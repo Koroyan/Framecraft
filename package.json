@@ -1,0 +1,37 @@
+{
+  "name": "framecraft",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Framecraft — AI video & film generation studio",
+  "type": "module",
+  "packageManager": "pnpm@12.8.1",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "pnpm --filter @framecraft/server dev",
+    "dev:worker": "pnpm --filter @framecraft/server dev:worker",
+    "dev:web": "pnpm --filter @framecraft/web dev",
+    "build": "pnpm -r build",
+    "start": "node scripts/start.mjs",
+    "db:generate": "pnpm --filter @framecraft/server db:generate",
+    "db:migrate": "pnpm --filter @framecraft/server db:migrate",
+    "db:seed": "pnpm --filter @framecraft/server db:seed",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
+    "test": "pnpm -r test",
+    "test:e2e": "playwright test",
+    "providers:check": "pnpm --filter @framecraft/server providers:check",
+    "providers:smoke": "pnpm --filter @framecraft/server providers:smoke"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@next/eslint-plugin-next": "16.4.2",
+    "@playwright/test": "1.64.1",
+    "eslint": "^9.39.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.0"
+  }
+}

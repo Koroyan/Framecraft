@@ -1,0 +1,1 @@
+ALTER TABLE "shots" ADD COLUMN "reference_asset_ids" jsonb DEFAULT '[]'::jsonb NOT NULL;

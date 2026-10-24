@@ -1,0 +1,47 @@
+{
+  "name": "@framecraft/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=../../.env src/main.ts",
+    "dev:worker": "tsx watch --env-file-if-exists=../../.env src/worker-main.ts",
+    "start": "node --env-file-if-exists=../../.env dist/main.js",
+    "start:worker": "node --env-file-if-exists=../../.env dist/worker-main.js",
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx --env-file-if-exists=../../.env src/db/migrate-cli.ts",
+    "db:seed": "tsx --env-file-if-exists=../../.env src/db/seed-cli.ts",
+    "providers:check": "tsx --env-file-if-exists=../../.env src/cli/providers-check.ts",
+    "providers:smoke": "tsx --env-file-if-exists=../../.env src/cli/providers-smoke.ts",
+    "admin:create": "tsx --env-file-if-exists=../../.env src/cli/create-admin.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.0.0",
+    "@aws-sdk/client-s3": "3.1154.0",
+    "@aws-sdk/s3-request-presigner": "3.1154.0",
+    "@electric-sql/pglite": "0.5.11",
+    "@fastify/cookie": "11.1.3",
+    "@fastify/multipart": "10.1.4",
+    "@fastify/rate-limit": "11.2.1",
+    "@ffmpeg-installer/ffmpeg": "1.1.0",
+    "@ffprobe-installer/ffprobe": "2.1.2",
+    "@framecraft/shared": "workspace:*",
+    "drizzle-orm": "0.45.4",
+    "fastify": "5.12.7",
+    "pg": "8.23.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
+    "drizzle-kit": "0.31.11",
+    "esbuild": "^0.27.0",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "5.0.5"
+  }
+}
