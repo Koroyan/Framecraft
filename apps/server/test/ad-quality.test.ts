@@ -84,9 +84,9 @@ describe('verified quality check and targeted revisions on a real render', () =>
     if (system.startsWith('You are a strict product-fidelity reviewer')) {
       return {
         shots: [
-          { frame: 1, productVisible: true, face: 'same', proportions: 'same', accessories: 'same', clothing: 'same', surfaceDetails: 'same', geometry: 'same', defects: [], changes: [] },
-          { frame: 2, productVisible: true, face: 'same', proportions: 'same', accessories: 'changed', clothing: 'changed', surfaceDetails: 'same', geometry: 'same', defects: [], changes: ['The syringe is missing', 'The coat is now blue'] },
-          { frame: 3, productVisible: true, face: 'same', proportions: 'same', accessories: 'same', clothing: 'same', surfaceDetails: 'same', geometry: 'same', defects: [], changes: [] },
+          { frame: 1, productVisible: true, face: 'same', proportions: 'same', accessories: 'same', clothing: 'same', surfaceDetails: 'same', geometry: 'same', artefacts: [], changes: [] },
+          { frame: 2, productVisible: true, face: 'same', proportions: 'same', accessories: 'changed', clothing: 'changed', surfaceDetails: 'same', geometry: 'same', artefacts: [], changes: ['The syringe is missing', 'The coat is now blue'] },
+          { frame: 3, productVisible: true, face: 'same', proportions: 'same', accessories: 'same', clothing: 'same', surfaceDetails: 'same', geometry: 'same', artefacts: [], changes: [] },
         ],
       };
     }

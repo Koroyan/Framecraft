@@ -151,7 +151,7 @@ export async function estimateCampaign(ctx: AppContext, user: SessionLike, brief
     musicAvailable = e.available;
   }
   const rules = await getConfig(ctx.db, 'pricing');
-  const enhancements = brief.mode === 'enhanced' ? plan.scenes.filter((s) => s.enhance).map((s) => ({ sceneId: s.id, credits: quoteCredits(Math.max(ALEPH.minUsd, Math.min(ALEPH.maxInputSec, s.durationSec + 2) * ALEPH.usdPerSecond), s.durationSec, 'verified', rules).credits })) : [];
+  const enhancements = brief.mode === 'enhanced' ? plan.scenes.filter((s) => s.enhance).map((s) => ({ sceneId: s.id, credits: quoteCredits(Math.max(ALEPH.minUsd, Math.min(ALEPH.maxInputSec, Math.max(2, s.durationSec)) * ALEPH.usdPerSecond), s.durationSec, 'verified', rules).credits })) : [];
   const enhance = enhancements.reduce((s, e) => s + e.credits, 0);
   const budget = brief.budgetCredits ?? null;
   return { voice, voiceAvailable, music, musicAvailable, enhance, enhancements, editingAndRender: 0, assembleTotal: voice + music, budget, assembleWithinBudget: budget === null || voice + music <= budget, enhanceWithinBudget: budget === null || voice + music + enhance <= budget, note: 'Cutting, colour, titles, logo and export are local processing and cost no credits. AI enhancements run only when you start them, and each result is reviewed before it is used.' };
@@ -407,7 +407,7 @@ export async function runEnhancements(ctx: AppContext, user: SessionLike, id: st
     const shot = projShots.find((s) => s.index === i);
     const clip = shot && timeline.clips.find((x) => x.shotId === shot.id);
     if (!shot || !clip || clip.freezeSec) continue;
-    const r = await createAiEdit(ctx, user, { shotId: shot.id, versionId: clip.versionId, mode: sc.enhance.mode, instruction: `${sc.enhance.instruction}. ${LOCK[brief.preservation]}`, startSec: clip.inSec, endSec: clip.outSec, referenceAssetIds: [], idempotencyKey: `ad-enhance:${c.projectId}:${sc.id}` });
+    const r = await createAiEdit(ctx, user, { shotId: shot.id, versionId: clip.versionId, mode: sc.enhance.mode, instruction: `${sc.enhance.instruction}. ${LOCK[brief.preservation]}`, startSec: clip.inSec, endSec: clip.outSec, referenceAssetIds: [], tight: true, idempotencyKey: `ad-enhance:${c.projectId}:${sc.id}` });
     started.push(r.operation.id);
   }
   return { started };

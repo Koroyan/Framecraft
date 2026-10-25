@@ -34,7 +34,8 @@ const visionSchema = z.object({
       clothing: z.enum(['same', 'changed', 'unclear', 'n/a']),
       surfaceDetails: z.enum(['same', 'changed', 'unclear', 'n/a']),
       geometry: z.enum(['same', 'changed', 'unclear', 'n/a']),
-      defects: z.array(z.string()).max(6),
+      /** AI artefacts only (melted, warped, extra/missing parts) — not lighting or reflections. */
+      artefacts: z.array(z.string()).max(6),
       changes: z.array(z.string()).max(6),
     }),
   ),
@@ -42,7 +43,7 @@ const visionSchema = z.object({
 
 const VISION_SYSTEM = `You are a strict product-fidelity reviewer for advertising. The first images are REFERENCE photos of the client's real product. The following images are FRAMES from a generated or edited ad, one per shot (Frame 1, Frame 2, …).
 For each frame, compare the product with the references and answer for each aspect: face (for figurines/characters), proportions, accessories (held objects, props attached to the product), clothing, surfaceDetails (paint, texture, printed marks), geometry (shape, parts, count of limbs/fingers): "same", "changed", "unclear" (not visible enough) or "n/a" (aspect does not apply).
-List concrete changes ("syringe is shorter", "hair now covers the ear") and visible defects (melted hands, extra fingers, warped text, flicker artefacts, broken geometry). Be specific and conservative: lighting, background, camera angle and depth of field are allowed to differ.`;
+Report ONLY changes to the product itself ("the syringe is shorter", "the collar is now white", "a watch is missing") and AI artefacts (melted or warped parts, extra or missing fingers or limbs, smeared face). These are NOT changes and must never be reported: camera angle, distance, zoom, tilt, which side of the product is visible, the product being rotated or held by a hand, lighting, reflections, gloss, shadows, colour grading, depth of field, background. If the frame shows a side the references do not show, answer "unclear" for what cannot be compared. Be conservative: report a change only when you are confident.`;
 
 async function referenceImages(ctx: AppContext, projectId: string): Promise<Asset[]> {
   const [p] = await ctx.db.select().from(projects).where(eq(projects.id, projectId));
@@ -123,13 +124,14 @@ export function judgeRender(m: Pick<RenderMeasurements, 'durationSec' | 'shots' 
 }
 
 /** Compare every product shot with the original product images. */
-async function checkIdentity(ctx: AppContext, m: RenderMeasurements, refs: Asset[], skip: (shot: number) => boolean): Promise<{ results: IdentityResult[]; source: 'vision' | 'colour' | 'none' }> {
+async function checkIdentity(ctx: AppContext, m: RenderMeasurements, refs: Asset[], skip: (shot: number) => boolean): Promise<{ results: IdentityResult[]; source: 'vision' | 'colour' | 'none' | 'not_needed' }> {
   if (!refs.length) return { results: [], source: 'none' };
   const refFiles: string[] = [];
   try {
     for (const r of refs) refFiles.push(await downloadAssetToTemp(ctx, r));
     const refSigs = await Promise.all(refFiles.map((f) => hueSignature(f)));
     const frames = m.frames.filter((f) => !skip(f.shot)).slice(0, 10);
+    if (!frames.length) return { results: [], source: 'not_needed' };
     const results: IdentityResult[] = [];
     for (const f of frames) {
       const sig = await hueSignature(f.file);
@@ -152,8 +154,8 @@ async function checkIdentity(ctx: AppContext, m: RenderMeasurements, refs: Asset
       r.method = 'vision';
       r.aspects = Object.fromEntries(Object.entries(aspects).filter(([, x]) => x !== 'n/a')) as IdentityResult['aspects'];
       // The vision comparison replaces the colour signal (which stays recorded as a number).
-      r.changes = [...v.changes, ...v.defects.map((x) => `Defect: ${x}`)].slice(0, 8);
-      r.verdict = !v.productVisible ? 'unchecked' : changed.length >= 2 || v.defects.length ? 'changed' : changed.length === 1 ? 'suspicious' : 'consistent';
+      r.changes = [...v.changes, ...v.artefacts.map((x) => `AI artefact: ${x}`)].slice(0, 8);
+      r.verdict = !v.productVisible ? 'unchecked' : changed.length >= 2 || v.artefacts.length ? 'changed' : changed.length === 1 ? 'suspicious' : 'consistent';
     }
     return { results, source: 'vision' };
   } finally {
@@ -191,6 +193,8 @@ export async function runQualityCheck(ctx: AppContext, p: { projectId: string; r
   // Where the brand ending is, from the timeline (logo card clip).
   let logoCard: { startSec: number; endSec: number } | null = null;
   const clipBounds: { startSec: number; endSec: number; soft: number }[] = [];
+  // Only AI-made or AI-edited clips can differ from the product; the client's own footage cannot.
+  const aiClip: boolean[] = [];
   if (tl) {
     const ids = tl.clips.map((c) => c.assetId);
     const rows = ids.length ? await ctx.db.select({ id: assets.id, source: assets.source }).from(assets).where(inArray(assets.id, ids)) : [];
@@ -198,6 +202,8 @@ export async function runQualityCheck(ctx: AppContext, p: { projectId: string; r
     for (const c of tl.clips) {
       const len = c.outSec - c.inSec;
       if ((rows.find((r) => r.id === c.assetId)?.source as { logoCard?: boolean } | undefined)?.logoCard) logoCard = { startSec: t, endSec: t + len };
+      const src = rows.find((r) => r.id === c.assetId)?.source as { aiGenerated?: boolean; operationId?: string; editedFrom?: string } | undefined;
+      aiClip.push(Boolean(src?.aiGenerated || src?.operationId || src?.editedFrom));
       const soft = c.transition && c.transition.type !== 'cut' ? c.transition.durationSec : 0;
       clipBounds.push({ startSec: Math.round(t * 100) / 100, endSec: Math.round((t + len) * 100) / 100, soft });
       t += len - soft;
@@ -213,7 +219,8 @@ export async function runQualityCheck(ctx: AppContext, p: { projectId: string; r
     const refs = await referenceImages(ctx, p.projectId);
     const shotList = clipBounds.length ? clipBounds : m.shots;
     const onCard = (shot: number) => Boolean(logoCard && shotList[shot] && shotList[shot]!.startSec >= logoCard.startSec - 0.2);
-    const identity = await checkIdentity(ctx, m, refs, onCard);
+    const skip = (shot: number) => onCard(shot) || (clipBounds.length > 0 && !aiClip[shot]);
+    const identity = await checkIdentity(ctx, m, refs, skip);
     for (const r of identity.results)
       if (r.verdict === 'changed' || r.verdict === 'suspicious') issues.push({ severity: r.verdict === 'changed' ? 'error' : 'warning', area: 'identity', message: `Shot ${r.shot + 1}: ${r.changes[0] ?? 'the product may differ from your photos'} — approve or regenerate`, shot: r.shot, atSec: r.atSec });
     const score = scoreOf(issues);

@@ -41,6 +41,8 @@ export const aiEditRequestSchema = z.object({
   referenceAssetIds: z.array(z.string().uuid()).max(4).default([]),
   targetAspectRatio: z.enum(ALEPH.aspectRatios).optional(),
   commentId: z.string().uuid().optional(),
+  /** Send exactly the selected range (no context): for clips that only ever show that range, e.g. ad shots. */
+  tight: z.boolean().optional(),
   idempotencyKey: z.string().min(8).max(100),
 });
 export type AiEditRequest = z.infer<typeof aiEditRequestSchema>;
@@ -48,7 +50,7 @@ export type AiEditRequest = z.infer<typeof aiEditRequestSchema>;
 /** Temporal context added around the selected range so motion stays continuous at the cut. */
 const CONTEXT_SEC = 1;
 
-export function editWindow(mode: AiEditMode, startSec: number, endSec: number, shotSec: number) {
+export function editWindow(mode: AiEditMode, startSec: number, endSec: number, shotSec: number, tight = false) {
   const whole = AI_EDIT_MODES.find((m) => m.key === mode)!.scope === 'shot';
   if (whole) {
     if (shotSec > ALEPH.maxInputSec) throw badRequest(`This mode edits the whole shot, and the editing model accepts at most ${ALEPH.maxInputSec} s. Split the shot first.`);
@@ -56,6 +58,13 @@ export function editWindow(mode: AiEditMode, startSec: number, endSec: number, s
   }
   const rangeStart = Math.max(0, Math.min(startSec, shotSec));
   const rangeEnd = Math.max(rangeStart + 0.1, Math.min(endSec, shotSec));
+  if (tight) {
+    // Only the range itself (≥ the 2 s the provider bills anyway).
+    const ws = Math.max(0, Math.min(rangeStart, shotSec - 2));
+    const we = Math.min(shotSec, Math.max(rangeEnd, ws + 2));
+    if (we - ws > ALEPH.maxInputSec) throw badRequest(`Select at most ${ALEPH.maxInputSec} s to edit at once.`);
+    return { whole: false, windowStart: Math.round(ws * 100) / 100, windowEnd: Math.round(we * 100) / 100, rangeStart, rangeEnd };
+  }
   let windowStart = Math.max(0, Math.floor(rangeStart) - CONTEXT_SEC);
   let windowEnd = Math.min(shotSec, Math.ceil(rangeEnd) + CONTEXT_SEC);
   // The provider bills at least 2 s — use that much context when the shot has it.
@@ -105,7 +114,7 @@ async function sourceVersion(ctx: AppContext, user: SessionLike, shotId: string,
 
 export async function estimateAiEdit(ctx: AppContext, user: SessionLike, input: Omit<AiEditRequest, 'idempotencyKey'> & { idempotencyKey?: string }) {
   const src = await sourceVersion(ctx, user, input.shotId, input.versionId);
-  const w = editWindow(input.mode, input.startSec, input.endSec, src.durationSec);
+  const w = editWindow(input.mode, input.startSec, input.endSec, src.durationSec, input.tight);
   const seconds = Math.round((w.windowEnd - w.windowStart) * 100) / 100;
   const usd = Math.max(ALEPH.minUsd, seconds * ALEPH.usdPerSecond);
   const rules = await getConfig(ctx.db, 'pricing');
