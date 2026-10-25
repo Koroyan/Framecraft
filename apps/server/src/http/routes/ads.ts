@@ -5,6 +5,7 @@ import type { AppContext } from '../../context';
 import { parse, requireUser } from '../app';
 import { applyReviewOption, brandKitInputSchema, chooseConcept, setBudget, createCampaign, createVariant, estimateCampaign, getCampaign, listBrandKits, listCampaigns, replan, runEnhancements, saveBrandKit, startAssembly, updatePlan } from '../../ads/campaigns';
 import { analyzeWebsite } from '../../brand/website';
+import { createAiScenes } from '../../ads/ai-scenes';
 import { FetchBlocked } from '../../brand/safe-fetch';
 import { deleteProduct, importBrandImage, listProducts, productInputSchema, saveProduct } from '../../brand/brand';
 import { badRequest } from '../../lib/errors';
@@ -77,6 +78,12 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
     const { id } = parse(idParam, req.params);
     const { budgetCredits } = parse(z.object({ budgetCredits: z.number().int().min(0).max(10_000_000).nullable() }), req.body);
     return setBudget(ctx, requireUser(req), id, budgetCredits);
+  });
+  // Only the product, staged in a new AI environment (screenplay + price first, then approval).
+  app.post('/api/ads/campaigns/:id/ai-scenes', limit, async (req, reply) => {
+    const { id } = parse(idParam, req.params);
+    const body = parse(z.object({ environment: z.string().trim().min(3).max(500), lengthSec: z.number().int().min(15).max(60).optional() }), req.body);
+    return reply.status(201).send(await createAiScenes(ctx, requireUser(req), id, body));
   });
   app.post('/api/ads/campaigns/:id/concept', limit, async (req) => {
     const { id } = parse(idParam, req.params);

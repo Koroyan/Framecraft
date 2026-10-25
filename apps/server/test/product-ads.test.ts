@@ -8,12 +8,13 @@ import { createMockFetch } from './helpers/mock-fetch';
 import { FakeLlm } from '../src/director/llm';
 import { ffmpeg, probe } from '../src/media/ffmpeg';
 import { downloadAssetToTemp, storeAsset, type Asset } from '../src/services/assets';
-import { adCampaigns, assets, editOperations, footageSegments, generationJobs, shots } from '../src/db/schema';
+import { adCampaigns, assets, editOperations, footageSegments, generationJobs, projects, shots } from '../src/db/schema';
 import { createCampaign, createVariant, estimateCampaign, getCampaign, runEnhancements, saveBrandKit, startAssembly } from '../src/ads/campaigns';
 import { getTimeline } from '../src/editor/editor';
 import { activateShotVersion, projectShots } from '../src/editing/versions';
 import { rejectAiEdit } from '../src/editing/ai-edit';
 import { adBriefSchema, adPlanSchema } from '@framecraft/shared';
+import { createAiScenes } from '../src/ads/ai-scenes';
 
 /*
  * Product video → ad, end to end with real FFmpeg (scene detection, metrics, assembly, render).
@@ -235,4 +236,27 @@ describe('product video → ad', () => {
     const [campaign] = await h.ctx.db.select().from(adCampaigns).where(eq(adCampaigns.id, c.id));
     expect(campaign!.status).toBe('ready');
   }, 900_000);
+
+  it('only the product in a new place: product angles from the footage become the references of an AI film (nothing generated before approval)', async () => {
+    const { u, c, logo } = await setup('original');
+    const r = await createAiScenes(h.ctx, u, c.id, { environment: 'a luxury dark studio with a marble pedestal and warm rim light' });
+    expect(r.angles).toBeGreaterThanOrEqual(2);
+    const [project] = await h.ctx.db.select().from(projects).where(eq(projects.id, r.projectId));
+    expect(project!.kind).toBe('ad');
+    const brief = (project!.settings as { brief: { idea: string; references: { token: string; assetId: string; note: string }[]; withDialogue: boolean } }).brief;
+    expect(brief.idea).toContain('marble pedestal');
+    expect(brief.idea).toMatch(/No people, no hands/);
+    expect(brief.idea).toMatch(/360-degree turntable/);
+    // Angles are full-resolution stills cut from the client's footage; the logo is the exact file.
+    const refs = await h.ctx.db.select().from(assets).where(inArray(assets.id, brief.references.map((x) => x.assetId)));
+    const angles = brief.references.filter((x) => x.note !== 'brand logo');
+    expect(angles.every((a) => refs.find((x) => x.id === a.assetId)?.mediaType === 'image' && (refs.find((x) => x.id === a.assetId)!.width ?? 0) >= 1280)).toBe(true);
+    expect(brief.references.find((x) => x.note === 'brand logo')?.assetId).toBe(logo.id);
+    await h.drain(100);
+    // Only the screenplay was written; no video was generated or charged.
+    const jobs = await h.ctx.db.select().from(generationJobs).where(eq(generationJobs.projectId, r.projectId));
+    expect(jobs.map((j) => j.kind)).toEqual(['plan']);
+    const [campaign] = await h.ctx.db.select().from(adCampaigns).where(eq(adCampaigns.id, c.id));
+    expect((campaign!.analysis as { aiScenes: { projectId: string }[] }).aiScenes.at(-1)!.projectId).toBe(r.projectId);
+  }, 300_000);
 });

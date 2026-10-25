@@ -2,6 +2,7 @@
 
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, Crop, Download, Info, RefreshCw, Shuffle, Sparkles, Trash2, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -14,7 +15,7 @@ import { cn, seconds } from '@/lib/utils';
 
 type Segment = { id: string; assetId: string; index: number; startSec: number; endSec: number; frameUrl: string | null; sourceName: string | null; description: string; tags: string[]; scores: Record<string, number>; metrics: Record<string, number>; duplicateOf: string | null };
 type Estimate = { voice: number; music: number; enhance: number; assembleTotal: number; voiceAvailable: boolean; musicAvailable: boolean; note: string; budget?: number | null; assembleWithinBudget?: boolean; enhanceWithinBudget?: boolean; enhancements?: { sceneId: string; credits: number }[] };
-type Campaign = { id: string; title: string; status: string; phase: string | null; progress: number | null; error: string | null; concepts: AdConcept[] | null; review: { diversity?: DiversityReport } | null; brief: { mode: 'original' | 'enhanced'; language: string; aspectRatio: string; lengthSec: number; conceptKey?: string }; plan: (AdPlan & { estimate?: Estimate; renderJobId?: string; source?: string }) | null; projectId: string | null; variants: { projectId: string; label: string; aspectRatio: string; lengthSec: number; language: string; renderJobId?: string }[] };
+type Campaign = { id: string; title: string; status: string; analysis: { aiScenes?: { projectId: string; environment: string; createdAt: string }[] } | null; phase: string | null; progress: number | null; error: string | null; concepts: AdConcept[] | null; review: { diversity?: DiversityReport } | null; brief: { mode: 'original' | 'enhanced'; language: string; aspectRatio: string; lengthSec: number; conceptKey?: string }; plan: (AdPlan & { estimate?: Estimate; renderJobId?: string; source?: string }) | null; projectId: string | null; variants: { projectId: string; label: string; aspectRatio: string; lengthSec: number; language: string; renderJobId?: string }[] };
 
 const BUSY = ['analyzing', 'planning', 'assembling'];
 type Enhancement = { operationId: string; shotIndex: number; mode: string; status: string; jobStatus: string | null; phase: string | null; progress: number | null; chargedCredits: number | null; estimatedCredits: number | null; error: string | null };
@@ -106,6 +107,8 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
           </div>
         </Card>
       )}
+
+      {segs.length > 0 && !BUSY.includes(c.status) && <AiScenesCard campaignId={id} existing={c.analysis?.aiScenes ?? []} lengthSec={c.brief.lengthSec} />}
 
       {/* Creative concepts */}
       {(c.concepts?.length ?? 0) > 0 && (
@@ -360,6 +363,66 @@ function BudgetEditor({ campaignId, est, enhanced, onSaved }: { campaignId: stri
         <div className="text-signal-green">Within budget ({needed} of {est.budget} credits).</div>
       )}
     </div>
+  );
+}
+
+const ENVIRONMENTS = [
+  'A luxury dark studio: the product on a black marble pedestal, warm rim light, soft haze, golden bokeh',
+  'A bright minimal white studio with a slowly rotating turntable and soft shadows',
+  'A cosy festive gift table with candles, wrapping paper and warm evening light',
+  'A magical green forest clearing with moss, morning sun rays and floating dust',
+  'A modern art gallery plinth under a spotlight, clean concrete walls',
+];
+
+/**
+ * Only the product, somewhere completely new: product angles are taken from the footage and an AI
+ * film stages them in the chosen environment (turntable orbit, macro details, hero shot). The
+ * screenplay and price come first; nothing is generated before approval.
+ */
+function AiScenesCard({ campaignId, existing, lengthSec }: { campaignId: string; existing: { projectId: string; environment: string; createdAt: string }[]; lengthSec: number }) {
+  const router = useRouter();
+  const [env, setEnv] = useState(ENVIRONMENTS[0]!);
+  const [len, setLen] = useState(Math.max(15, Math.min(60, lengthSec)));
+  const [busy, setBusy] = useState(false);
+  const start = async () => {
+    setBusy(true);
+    try {
+      const r = await api<{ projectId: string }>(`/api/ads/campaigns/${campaignId}/ai-scenes`, { body: { environment: env, lengthSec: len } });
+      toast.success('Writing the scenes — review them and the price before anything is generated');
+      router.push(`/app/movie/${r.projectId}`);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Could not start');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card className="space-y-3 border-iris-500/30 bg-gradient-to-br from-iris-500/10 to-transparent p-4">
+      <div>
+        <div className="text-sm font-medium text-white">Only your product, in a completely new place</div>
+        <p className="mt-1 max-w-3xl text-xs text-fog-300">We take the product itself from your footage (the sharpest frames from different sides) and AI films it in a new environment: a slow 360° turntable, macro details, a hero shot, your logo at the end. No hands, no original background. The product is re-created by AI from your frames, so check every shot.</p>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {ENVIRONMENTS.map((e) => (
+          <button key={e} type="button" onClick={() => setEnv(e)} className={cn('rounded-lg border px-2.5 py-1 text-left text-[11px]', env === e ? 'border-iris-400 bg-iris-500/15 text-white' : 'hairline text-fog-300 hover:border-white/25')}>{e.split(':')[0]!.split(' with ')[0]}</button>
+        ))}
+      </div>
+      <Textarea rows={2} value={env} maxLength={500} onChange={(e) => setEnv(e.target.value)} aria-label="New environment" />
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 text-xs text-fog-300">Length <Input type="number" min={15} max={60} className="h-8 w-20" value={len} onChange={(e) => setLen(Math.max(15, Math.min(60, Number(e.target.value) || 15)))} /> s</label>
+        <Button onClick={start} loading={busy} disabled={env.trim().length < 3}><Sparkles /> Write the new scenes</Button>
+        <span className="text-[11px] text-fog-400">Free · next you see every shot and the exact price, and approve it before generation</span>
+      </div>
+      {existing.length > 0 && (
+        <div className="space-y-1 text-[11px] text-fog-400">
+          {existing.map((x) => (
+            <div key={x.projectId}>
+              <Link href={`/app/movie/${x.projectId}`} className="text-iris-200 hover:text-white">Open AI scenes</Link> · {x.environment.slice(0, 80)} · {new Date(x.createdAt).toLocaleString()}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
 

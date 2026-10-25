@@ -31,7 +31,7 @@ const LENGTHS = [10, 15, 30, 45, 60];
 const IDENTITY = [
   { key: 'strict', label: 'Strict Original', hint: 'Only your real footage with deterministic editing — the product is never synthesized.', mode: 'original', preservation: 'strict' },
   { key: 'safe', label: 'Brand-Safe AI', hint: 'Careful AI enhancements (light, background) that keep the product identical; every change is reviewed.', mode: 'enhanced', preservation: 'guided' },
-  { key: 'creative', label: 'Creative AI', hint: 'More creative freedom, clearly disclosed; the product stays recognisable and uncertain results need review.', mode: 'enhanced', preservation: 'creative' },
+  { key: 'creative', label: 'Creative AI', hint: 'More freedom, clearly disclosed. After the analysis you can also stage only the product in a completely new place (AI scenes, 360° turntable) — every result is reviewed.', mode: 'enhanced', preservation: 'creative' },
 ] as const;
 
 const DRAFT_KEY = 'framecraft.ad-draft.v1';
