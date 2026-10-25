@@ -153,7 +153,8 @@ export async function analyzeCampaign(ctx: AppContext, campaignId: string, onPro
     for (let fi = 0; fi < files.length; fi++) {
       const a = files[fi]!;
       await onProgress(`Analysing ${a.originalName ?? `file ${fi + 1}`} (${fi + 1}/${files.length})`, 0.05 + (0.6 * fi) / Math.max(1, files.length));
-      const src = await downloadAssetToTemp(ctx, a as Asset);
+      // The editing proxy has the same timeline and is far lighter than a 4K master.
+      const src = await downloadAssetToTemp(ctx, a as Asset, { prefer: 'proxy' });
       try {
         const meta = await probe(src);
         const isImage = a.mediaType === 'image';

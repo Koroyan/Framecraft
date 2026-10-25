@@ -20,6 +20,20 @@ export type ProbeResult = {
   fps?: number;
   videoCodec?: string;
   formatName?: string;
+  /** Display rotation in degrees (phone footage); width/height above are already display-oriented. */
+  rotation?: number;
+  /** Frame rate varies (average differs from the nominal rate) — common for phone recordings. */
+  vfr?: boolean;
+  /** Overall bitrate (bits/s). */
+  bitRate?: number;
+  pixFmt?: string;
+  colorTransfer?: string;
+  colorPrimaries?: string;
+  /** HDR transfer (PQ / HLG): needs conversion to SDR for previews and providers. */
+  hdr?: boolean;
+  audioCodec?: string;
+  audioSampleRate?: number;
+  audioChannels?: number;
 };
 
 let ffmpegPathCache: string | undefined;
@@ -60,25 +74,60 @@ export const ffmpeg = (args: string[], opts?: { cwd?: string; timeoutMs?: number
 export async function probe(file: string): Promise<ProbeResult> {
   const { stdout } = await run(ffprobePath(), ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file], { timeoutMs: 60_000 });
   const data = JSON.parse(stdout) as {
-    format?: { duration?: string; format_name?: string };
-    streams?: { codec_type?: string; codec_name?: string; width?: number; height?: number; duration?: string; avg_frame_rate?: string; r_frame_rate?: string }[];
+    format?: { duration?: string; format_name?: string; bit_rate?: string };
+    streams?: {
+      codec_type?: string;
+      codec_name?: string;
+      width?: number;
+      height?: number;
+      duration?: string;
+      avg_frame_rate?: string;
+      r_frame_rate?: string;
+      pix_fmt?: string;
+      color_transfer?: string;
+      color_primaries?: string;
+      sample_rate?: string;
+      channels?: number;
+      tags?: { rotate?: string };
+      side_data_list?: { rotation?: number }[];
+      disposition?: { attached_pic?: number };
+    }[];
   };
-  const v = data.streams?.find((s) => s.codec_type === 'video');
+  // Cover art in audio files / HEIF thumbnails is an "attached picture", not footage.
+  const v = data.streams?.find((s) => s.codec_type === 'video' && !s.disposition?.attached_pic) ?? data.streams?.find((s) => s.codec_type === 'video');
   const a = data.streams?.find((s) => s.codec_type === 'audio');
   const duration = Number(data.format?.duration ?? v?.duration ?? a?.duration ?? 0);
   const rate = (r?: string) => {
     const [num, den] = (r ?? '').split('/').map(Number);
     return num && den ? num / den : undefined;
   };
+  // Phones store portrait video as landscape frames plus a rotation (tag or display matrix).
+  // FFmpeg rotates while decoding, so report the size as it is shown.
+  const rawRot = Number(v?.tags?.rotate ?? v?.side_data_list?.find((d) => d.rotation !== undefined)?.rotation ?? 0) || 0;
+  const rotation = ((Math.round(rawRot / 90) * 90) % 360 + 360) % 360;
+  const swap = rotation === 90 || rotation === 270;
+  const avg = rate(v?.avg_frame_rate);
+  const nominal = rate(v?.r_frame_rate);
+  const transfer = v?.color_transfer;
   return {
-    fps: rate(v?.avg_frame_rate) ?? rate(v?.r_frame_rate),
+    fps: avg ?? nominal,
     durationSec: Number.isFinite(duration) ? duration : 0,
-    width: v?.width,
-    height: v?.height,
+    width: swap ? v?.height : v?.width,
+    height: swap ? v?.width : v?.height,
     hasVideo: Boolean(v),
     hasAudio: Boolean(a),
     videoCodec: v?.codec_name,
     formatName: data.format?.format_name,
+    rotation,
+    vfr: Boolean(avg && nominal && Math.abs(avg - nominal) / nominal > 0.02),
+    bitRate: Number(data.format?.bit_rate) || undefined,
+    pixFmt: v?.pix_fmt,
+    colorTransfer: transfer,
+    colorPrimaries: v?.color_primaries,
+    hdr: transfer === 'smpte2084' || transfer === 'arib-std-b67',
+    audioCodec: a?.codec_name,
+    audioSampleRate: Number(a?.sample_rate) || undefined,
+    audioChannels: a?.channels,
   };
 }
 

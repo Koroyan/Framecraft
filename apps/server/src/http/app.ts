@@ -16,6 +16,7 @@ import { billingRoutes } from './routes/billing';
 import { adminRoutes } from './routes/admin';
 import { mediaRoutes } from './routes/media';
 import { webhookRoutes } from './routes/webhooks';
+import { uploadRoutes } from './routes/uploads';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -103,6 +104,7 @@ export async function buildApp(ctx: AppContext): Promise<FastifyInstance> {
   await app.register(async (r) => chatRoutes(r, ctx));
   await app.register(async (r) => editingRoutes(r, ctx));
   await app.register(async (r) => adsRoutes(r, ctx));
+  await app.register(async (r) => uploadRoutes(r, ctx));
   await app.register(async (r) => billingRoutes(r, ctx));
   await app.register(async (r) => adminRoutes(r, ctx));
   await app.register(async (r) => mediaRoutes(r, ctx));

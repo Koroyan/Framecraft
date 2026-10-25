@@ -3,7 +3,11 @@ import { z } from 'zod';
 import { adBriefSchema, adBriefSchema as briefSchema, adPlanSchema } from '@framecraft/shared';
 import type { AppContext } from '../../context';
 import { parse, requireUser } from '../app';
-import { brandKitInputSchema, createCampaign, createVariant, estimateCampaign, getCampaign, listBrandKits, listCampaigns, replan, runEnhancements, saveBrandKit, startAssembly, updatePlan } from '../../ads/campaigns';
+import { applyReviewOption, brandKitInputSchema, chooseConcept, createCampaign, createVariant, estimateCampaign, getCampaign, listBrandKits, listCampaigns, replan, runEnhancements, saveBrandKit, startAssembly, updatePlan } from '../../ads/campaigns';
+import { analyzeWebsite } from '../../brand/website';
+import { FetchBlocked } from '../../brand/safe-fetch';
+import { deleteProduct, importBrandImage, listProducts, productInputSchema, saveProduct } from '../../brand/brand';
+import { badRequest } from '../../lib/errors';
 
 
 const idParam = z.object({ id: z.string().uuid() });
@@ -17,6 +21,38 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
   app.put('/api/brand-kits/:id', async (req) => {
     const { id } = parse(idParam, req.params);
     return { brandKit: await saveBrandKit(ctx, requireUser(req), parse(brandKitInputSchema, req.body), id) };
+  });
+
+  // Brand intelligence: read the brand's public website into a draft the user reviews.
+  app.post('/api/brand-kits/analyze-website', limit, async (req) => {
+    requireUser(req);
+    const { url } = parse(z.object({ url: z.string().trim().min(3).max(500) }), req.body);
+    try {
+      return { draft: await analyzeWebsite(ctx, url) };
+    } catch (err) {
+      if (err instanceof FetchBlocked) throw badRequest(err.message);
+      throw err;
+    }
+  });
+  app.post('/api/brand-kits/import-image', limit, async (req, reply) => {
+    const body = parse(z.object({ url: z.string().url().max(1000), rightsConfirmed: z.boolean() }), req.body);
+    try {
+      return reply.status(201).send(await importBrandImage(ctx, requireUser(req), body.url, { rightsConfirmed: body.rightsConfirmed, ip: req.ip }));
+    } catch (err) {
+      if (err instanceof FetchBlocked) throw badRequest(err.message);
+      throw err;
+    }
+  });
+  const productParams = z.object({ id: z.string().uuid(), productId: z.string().uuid() });
+  app.get('/api/brand-kits/:id/products', async (req) => ({ products: await listProducts(ctx, requireUser(req), parse(idParam, req.params).id) }));
+  app.post('/api/brand-kits/:id/products', async (req, reply) => reply.status(201).send({ product: await saveProduct(ctx, requireUser(req), parse(idParam, req.params).id, parse(productInputSchema, req.body)) }));
+  app.put('/api/brand-kits/:id/products/:productId', async (req) => {
+    const { id, productId } = parse(productParams, req.params);
+    return { product: await saveProduct(ctx, requireUser(req), id, parse(productInputSchema, req.body), productId) };
+  });
+  app.delete('/api/brand-kits/:id/products/:productId', async (req) => {
+    const { id, productId } = parse(productParams, req.params);
+    return deleteProduct(ctx, requireUser(req), id, productId);
   });
 
   app.get('/api/ads/campaigns', async (req) => ({ campaigns: await listCampaigns(ctx, requireUser(req)) }));
@@ -36,6 +72,16 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
     const { id } = parse(idParam, req.params);
     const body = parse(z.union([z.object({ scope: z.literal('all') }), z.object({ scope: z.literal('scene'), sceneIndex: z.number().int().min(0) })]), req.body);
     return replan(ctx, requireUser(req), id, body);
+  });
+  app.post('/api/ads/campaigns/:id/concept', limit, async (req) => {
+    const { id } = parse(idParam, req.params);
+    const { key } = parse(z.object({ key: z.string().min(1).max(40) }), req.body);
+    return chooseConcept(ctx, requireUser(req), id, key);
+  });
+  app.post('/api/ads/campaigns/:id/review-option', limit, async (req) => {
+    const { id } = parse(idParam, req.params);
+    const { key } = parse(z.object({ key: z.enum(['shorter', 'crops']) }), req.body);
+    return applyReviewOption(ctx, requireUser(req), id, key);
   });
   app.post('/api/ads/campaigns/:id/estimate', async (req) => {
     const u = requireUser(req);

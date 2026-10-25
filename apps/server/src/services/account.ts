@@ -25,4 +25,8 @@ export async function deleteAsset(ctx: AppContext, userId: string, assetId: stri
     .returning();
   if (!a) throw notFound('Asset');
   await ctx.storage.delete(a.storageKey).catch(() => undefined);
+  // Prepared representations live next to the master: the editing proxy and AI inputs go too.
+  const src = a.source as { prep?: { proxyKey?: string }; aiInputs?: Record<string, unknown> };
+  const derived = [src.prep?.proxyKey, ...Object.keys(src.aiInputs ?? {}).map((sig) => a.storageKey.replace(/\/[^/]+$/, `/ai-${sig}.mp4`))].filter((k): k is string => Boolean(k));
+  await Promise.all(derived.map((k) => ctx.storage.delete(k).catch(() => undefined)));
 }

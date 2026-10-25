@@ -2,7 +2,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { eq, inArray } from 'drizzle-orm';
-import { adStyle, ASPECT_DIMENSIONS, cameraPreset, LOOKS, timelineSchema, type AdBrief, type AdPlan, type LayerInput, type TimelineInput } from '@framecraft/shared';
+import { adStyle, ASPECT_DIMENSIONS, cameraPreset, clampKeyframe, LOOKS, timelineSchema, type AdBrief, type AdPlan, type ClipCamera, type LayerInput, type TimelineInput } from '@framecraft/shared';
 import type { AppContext } from '../context';
 import { assets, brandKits, footageSegments, projects, scenes, shots } from '../db/schema';
 import type { SessionLike } from '../generation/service';
@@ -60,8 +60,11 @@ export async function assembleAd(ctx: AppContext, user: SessionLike, p: { campai
       // Deterministic exposure correction from the analysed brightness, on top of the style's look.
       const exposureFix = m.exposure ? Math.max(-0.6, Math.min(0.6, (0.48 - m.exposure) * 1.6)) : 0;
       const inSec = imageSrc ? 0 : seg.startSec + sc.inSec;
-      // A still never sits frozen: static styles still get a gentle push-in on photos.
-      const move = style.camera && style.camera !== 'static' ? style.camera : imageSrc ? 'push_in' : null;
+      // The storyboard's camera for this shot, else the style's; a still never sits frozen.
+      const planned = sc.camera ?? style.camera;
+      const move = planned && planned !== 'static' ? planned : imageSrc ? 'push_in' : null;
+      const energy = { calm: 0.7, balanced: 1, bold: 1.4 }[p.brief.intensity ?? 'balanced'];
+      const base = style.pacing === 'fast' ? 0.5 : move === style.camera ? 0.3 : 0.2;
       clips.push({
         id: `clip-${i + 1}`,
         assetId: clipAsset.id,
@@ -73,7 +76,7 @@ export async function assembleAd(ctx: AppContext, user: SessionLike, p: { campai
         volume: p.brief.voiceover ? 0 : 0.6,
         transition: i < p.plan.scenes.length - 1 && sc.transition !== 'cut' ? { type: sc.transition, durationSec: Math.min(0.6, dur / 3) } : undefined,
         adjust: { ...look, exposure: Math.round(((look.exposure ?? 0) + exposureFix) * 100) / 100 },
-        camera: move ? cameraPreset(move, dur, style.pacing === 'fast' ? 0.5 : move === style.camera ? 0.3 : 0.2) : undefined,
+        camera: sc.crop ? cropCamera(sc.crop, dur, move) : move ? cameraPreset(move, dur, Math.min(1, base * energy)) : undefined,
       });
       if (sc.overlay) {
         const isCta = sc.overlay.kind === 'cta' || sc.overlay.kind === 'price';
@@ -135,6 +138,13 @@ export async function assembleAd(ctx: AppContext, user: SessionLike, p: { campai
     await ctx.db.delete(projects).where(eq(projects.id, project!.id));
     throw err;
   }
+}
+
+/** A detail crop inside the source (a reused take becomes a visibly new shot), with a gentle move. */
+function cropCamera(crop: { x: number; y: number; scale: number }, dur: number, move: string | null): ClipCamera {
+  const drift = move === 'pull_out' ? -0.08 : 0.08;
+  const k = (t: number, scale: number) => clampKeyframe({ t: Math.round(t * 1000) / 1000, x: crop.x, y: crop.y, scale: Math.round(Math.max(1, scale) * 1000) / 1000, rotation: 0 });
+  return { keyframes: [k(0, crop.scale), k(dur, crop.scale * (1 + drift))], easing: 'ease', preset: 'zoom_to' };
 }
 
 async function photoClip(ctx: AppContext, userId: string, projectId: string, photo: Asset, aspect: AdBrief['aspectRatio'], durationSec: number) {

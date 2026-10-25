@@ -3,9 +3,9 @@
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowDown, ArrowUp, Download, RefreshCw, Shuffle, Sparkles, Trash2, Wand2 } from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, Crop, Download, Info, RefreshCw, Shuffle, Sparkles, Trash2, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { AI_EDIT_MODES, type AdPlan, type AdScene } from '@framecraft/shared';
+import { AI_EDIT_MODES, CAMERA_MOVES, type AdConcept, type AdPlan, type AdScene, type DiversityReport } from '@framecraft/shared';
 import { api, ApiError } from '@/lib/api';
 import { useJob } from '@/lib/hooks';
 import { Badge, Button, Card, Input, NativeSelect, Skeleton, Textarea, buttonVariants } from '@/components/ui';
@@ -13,8 +13,8 @@ import { ProgressBar } from '@/components/studio/progress';
 import { cn, seconds } from '@/lib/utils';
 
 type Segment = { id: string; assetId: string; index: number; startSec: number; endSec: number; frameUrl: string | null; sourceName: string | null; description: string; tags: string[]; scores: Record<string, number>; metrics: Record<string, number>; duplicateOf: string | null };
-type Estimate = { voice: number; music: number; enhance: number; assembleTotal: number; voiceAvailable: boolean; musicAvailable: boolean; note: string };
-type Campaign = { id: string; title: string; status: string; phase: string | null; progress: number | null; error: string | null; brief: { mode: 'original' | 'enhanced'; language: string; aspectRatio: string; lengthSec: number }; plan: (AdPlan & { estimate?: Estimate; renderJobId?: string; source?: string }) | null; projectId: string | null; variants: { projectId: string; label: string; aspectRatio: string; lengthSec: number; language: string; renderJobId?: string }[] };
+type Estimate = { voice: number; music: number; enhance: number; assembleTotal: number; voiceAvailable: boolean; musicAvailable: boolean; note: string; budget?: number | null; withinBudget?: boolean };
+type Campaign = { id: string; title: string; status: string; phase: string | null; progress: number | null; error: string | null; concepts: AdConcept[] | null; review: { diversity?: DiversityReport } | null; brief: { mode: 'original' | 'enhanced'; language: string; aspectRatio: string; lengthSec: number; conceptKey?: string }; plan: (AdPlan & { estimate?: Estimate; renderJobId?: string; source?: string }) | null; projectId: string | null; variants: { projectId: string; label: string; aspectRatio: string; lengthSec: number; language: string; renderJobId?: string }[] };
 
 const BUSY = ['analyzing', 'planning', 'assembling'];
 
@@ -66,7 +66,7 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
     <div className="mx-auto max-w-6xl space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <Link href="/app/ads/footage" className="text-xs text-fog-400 hover:text-white">← Ads from my videos</Link>
+          <Link href="/app/ads/campaigns" className="text-xs text-fog-400 hover:text-white">← Creative Studio</Link>
           <h1 className="mt-1 text-xl font-semibold text-white">{c.title}</h1>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-fog-300">
             <Badge tone={c.status === 'ready' ? 'green' : c.status === 'failed' ? 'red' : 'iris'}>{c.status}</Badge>
@@ -104,6 +104,37 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
         </Card>
       )}
 
+      {/* Creative concepts */}
+      {(c.concepts?.length ?? 0) > 0 && (
+        <Card className="space-y-3 p-4">
+          <div className="text-sm font-medium text-white">Creative concepts</div>
+          <div className="grid gap-3 md:grid-cols-3">
+            {c.concepts!.map((k) => {
+              const chosen = (plan?.conceptKey || c.plan?.conceptKey) === k.key;
+              return (
+                <div key={k.key} className={cn('flex flex-col rounded-xl border p-3', chosen ? 'border-iris-400 bg-iris-500/10' : 'hairline')}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-medium text-white">{k.name}</div>
+                    {k.recommended && <Badge tone="iris">recommended</Badge>}
+                  </div>
+                  <p className="mt-1 text-xs text-fog-200">{k.logline}</p>
+                  <p className="mt-2 line-clamp-4 text-[11px] text-fog-400">{k.treatment}</p>
+                  <ol className="mt-2 space-y-0.5 text-[11px] text-fog-300">
+                    {k.beats.map((b) => <li key={b.beat}><span className="mr-1 font-medium uppercase text-fog-500">{b.beat}</span>{b.idea}</li>)}
+                  </ol>
+                  <div className="mt-2 text-[10px] text-fog-500">{k.pacing} · {k.music}</div>
+                  <div className="mt-auto pt-3">
+                    {chosen ? <span className="flex items-center gap-1 text-xs text-signal-green"><CheckCircle2 className="size-3.5" /> Storyboard below</span> : <Button size="sm" variant="secondary" disabled={BUSY.includes(c.status)} loading={busy === `concept-${k.key}`} onClick={() => run(`concept-${k.key}`, () => api(`/api/ads/campaigns/${id}/concept`, { body: { key: k.key } }).then(() => setDirty(false)), 'Storyboarding this concept…')}>Use this concept</Button>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {c.review?.diversity && plan && !dirty && <DiversityPanel r={c.review.diversity} busy={busy} onOption={(key) => run(`opt-${key}`, () => api(`/api/ads/campaigns/${id}/review-option`, { body: { key } }), key === 'shorter' ? 'Re-cutting a shorter ad…' : 'Keeping the length with detail crops')} />}
+
       {/* Storyboard */}
       {plan && (
         <Card className="space-y-4 p-4">
@@ -126,7 +157,8 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
                 <div key={sc.id} className="grid gap-2 rounded-xl border hairline p-2 md:grid-cols-[120px_1fr_1fr_auto]">
                   <div>
                     {s?.frameUrl && <img src={s.frameUrl} alt="" className="aspect-video w-full rounded-lg object-cover" />}
-                    <div className="mt-1 text-[10px] text-fog-400">{i + 1} · {sc.role}</div>
+                    <div className="mt-1 text-[10px] text-fog-400">{i + 1} · {sc.role} · {seconds(plan.scenes.slice(0, i).reduce((t, x) => t + x.durationSec, 0))}</div>
+                    {sc.purpose && <div className="line-clamp-2 text-[10px] text-fog-500">{sc.purpose}</div>}
                   </div>
                   <div className="space-y-1.5 text-xs">
                     <NativeSelect value={sc.segmentId} onChange={(e) => editScene(i, { segmentId: e.target.value, inSec: 0 })}>
@@ -136,7 +168,18 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
                       <label className="text-fog-400">Start in clip <Input type="number" step={0.1} min={0} value={sc.inSec} onChange={(e) => editScene(i, { inSec: Number(e.target.value) })} /></label>
                       <label className="text-fog-400">Duration <Input type="number" step={0.1} min={0.5} max={12} value={sc.durationSec} onChange={(e) => editScene(i, { durationSec: Number(e.target.value) })} /></label>
                     </div>
-                    <NativeSelect value={sc.transition} onChange={(e) => editScene(i, { transition: e.target.value as AdScene['transition'] })}>{['cut', 'fade', 'dissolve', 'fadeblack'].map((x) => <option key={x}>{x}</option>)}</NativeSelect>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <NativeSelect aria-label="Framing" value={sc.framing ?? ''} onChange={(e) => editScene(i, { framing: (e.target.value || null) as AdScene['framing'] })}><option value="">framing</option>{['wide', 'medium', 'close', 'macro', 'detail'].map((x) => <option key={x}>{x}</option>)}</NativeSelect>
+                      <NativeSelect aria-label="Camera" value={sc.camera ?? ''} onChange={(e) => editScene(i, { camera: (e.target.value || null) as AdScene['camera'] })}><option value="">style camera</option>{CAMERA_MOVES.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}</NativeSelect>
+                      <NativeSelect aria-label="Transition" value={sc.transition} onChange={(e) => editScene(i, { transition: e.target.value as AdScene['transition'] })}>{['cut', 'fade', 'dissolve', 'fadeblack'].map((x) => <option key={x}>{x}</option>)}</NativeSelect>
+                    </div>
+                    {(sc.lighting || sc.sound || sc.crop) && (
+                      <div className="flex flex-wrap gap-x-3 text-[10px] text-fog-400">
+                        {sc.lighting && <span>Light: {sc.lighting}</span>}
+                        {sc.sound && <span>Sound: {sc.sound}</span>}
+                        {sc.crop && <button type="button" className="flex items-center gap-1 text-iris-200 hover:text-white" title="Detail crop of the source — remove to show the full frame" onClick={() => editScene(i, { crop: null })}><Crop className="size-3" /> detail crop ×{sc.crop.scale.toFixed(1)}</button>}
+                      </div>
+                    )}
                   </div>
                   <div className="space-y-1.5 text-xs">
                     <div className="flex gap-1.5">
@@ -185,6 +228,7 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
                 <div className="text-sm text-white">Cost to assemble: {est.assembleTotal} credits</div>
                 <div>Voice-over {est.voice} {est.voiceAvailable ? '' : '(provider not configured)'} · music {est.music} {est.musicAvailable ? '' : '(provider not configured)'}{c.brief.mode === 'enhanced' ? ` · AI enhancements later: ${est.enhance}` : ''}</div>
                 <div className="text-fog-400">{est.note}</div>
+                {est.budget != null && <div className={est.withinBudget ? 'text-signal-green' : 'text-signal-red'}>Budget for this ad: {est.budget} credits{est.withinBudget ? '' : ' — this exceeds it; raise the budget or remove voice/music'}</div>}
               </div>
               <Button disabled={dirty || BUSY.includes(c.status)} loading={busy === 'assemble'} onClick={() => run('assemble', () => api(`/api/ads/campaigns/${id}/assemble`, { body: { approvedCredits: est.assembleTotal } }), 'Assembling your ad…')}><Wand2 /> {c.projectId ? 'Re-assemble' : 'Assemble the ad'} · {est.assembleTotal} cr</Button>
             </div>
@@ -207,7 +251,7 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
           <div>
             <div className="mb-2 text-xs font-medium text-fog-200">Variants (same footage and edits; only voice is re-recorded for another language)</div>
             <div className="flex flex-wrap gap-1.5">
-              {[{ aspectRatio: '1:1' }, { aspectRatio: '16:9' }, { aspectRatio: '4:5' }, { lengthSec: 15 }, { language: 'en' }, { language: 'ru' }, { language: 'ka' }].filter((v) => !('language' in v) || v.language !== c.brief.language).map((v) => (
+              {[{ aspectRatio: '9:16' }, { aspectRatio: '1:1' }, { aspectRatio: '16:9' }, { aspectRatio: '4:5' }, { lengthSec: 10 }, { lengthSec: 15 }, { lengthSec: 30 }, { language: 'en' }, { language: 'ru' }, { language: 'ka' }].filter((v) => !('aspectRatio' in v) || v.aspectRatio !== c.brief.aspectRatio).filter((v) => !('language' in v) || v.language !== c.brief.language).map((v) => (
                 <Button key={JSON.stringify(v)} size="sm" variant="ghost" loading={busy === JSON.stringify(v)} onClick={() => run(JSON.stringify(v), () => api(`/api/ads/campaigns/${id}/variants`, { body: v }), 'Making the variant…')}>
                   {'aspectRatio' in v ? v.aspectRatio : 'lengthSec' in v ? `${v.lengthSec} s cut` : (v.language ?? '').toUpperCase()}
                 </Button>
@@ -238,5 +282,45 @@ function RenderResult({ jobId, label }: { jobId: string; label: string }) {
       {job.outputUrl && <video src={job.outputUrl} controls playsInline className="max-h-[60dvh] rounded-xl bg-black" />}
       {job.outputUrl && <a href={job.outputUrl} download className={cn(buttonVariants({ variant: 'white', size: 'sm' }))}><Download /> Download {label}</a>}
     </div>
+  );
+}
+
+function DiversityPanel({ r, busy, onOption }: { r: DiversityReport; busy: string | null; onOption: (key: 'shorter' | 'crops') => void }) {
+  const tone = r.score >= 80 ? 'text-signal-green' : r.score >= 55 ? 'text-signal-amber' : 'text-signal-red';
+  return (
+    <Card className="space-y-3 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm font-medium text-white">Shot diversity review</div>
+        <div className={cn('text-sm font-semibold', tone)}>{r.score}/100</div>
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-fog-400">
+        <span>{r.stats.scenes} shots from {r.stats.uniqueSources} source file{r.stats.uniqueSources === 1 ? '' : 's'}</span>
+        <span>{r.stats.uniqueSegments} distinct moments</span>
+        <span>avg {r.stats.avgShotSec} s per shot</span>
+        <span>{r.stats.productShots} product shots</span>
+        <span>{r.stats.usableFootageSec} s distinct footage for {r.stats.targetSec} s</span>
+        {r.stats.reusedSeconds > 0 && <span>{r.stats.reusedSeconds} s reused as detail crops</span>}
+      </div>
+      {r.issues.length === 0 && <p className="flex items-center gap-1.5 text-xs text-signal-green"><CheckCircle2 className="size-3.5" /> Varied shots, no repeated footage, clear progression.</p>}
+      <ul className="space-y-1">
+        {r.issues.map((x, i) => (
+          <li key={i} className={cn('flex items-start gap-1.5 text-xs', x.severity === 'error' ? 'text-signal-red' : x.severity === 'warning' ? 'text-signal-amber' : 'text-fog-300')}>
+            {x.severity === 'info' ? <Info className="mt-0.5 size-3.5 shrink-0" /> : <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />}
+            {x.message}
+          </li>
+        ))}
+      </ul>
+      {r.options.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {r.options.map((o) =>
+            o.key === 'more_footage' ? (
+              <Link key={o.key} href="/app/ads/library" className={buttonVariants({ size: 'sm', variant: 'ghost' })}>{o.label}</Link>
+            ) : (
+              <Button key={o.key} size="sm" variant={o.key === 'shorter' ? 'secondary' : 'ghost'} loading={busy === `opt-${o.key}`} onClick={() => onOption(o.key as 'shorter' | 'crops')}>{o.label}</Button>
+            ),
+          )}
+        </div>
+      )}
+    </Card>
   );
 }

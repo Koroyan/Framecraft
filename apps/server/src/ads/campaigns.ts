@@ -1,11 +1,11 @@
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { adBriefSchema, adPlanSchema, adStyle, clipStartTimes, timelineSchema, type AdBrief, type AdPlan } from '@framecraft/shared';
+import { AD_STYLES, adBriefSchema, adConceptSchema, adPlanSchema, adStyle, clipStartTimes, reviewPlanDiversity, timelineSchema, type AdBrief, type AdConcept, type AdPlan } from '@framecraft/shared';
 import type { AppContext } from '../context';
-import { adCampaigns, assets, brandKits, footageSegments, generationJobs, shots } from '../db/schema';
+import { adCampaigns, assets, brandKits, brandProducts, footageSegments, generationJobs, shots } from '../db/schema';
 import { enqueue, type JobResult, type QueueJob } from '../queue/queue';
 import type { SessionLike } from '../generation/service';
-import { assetUrl, getOwnedAsset } from '../services/assets';
+import { assetUrl, getOwnedAsset, prepOf } from '../services/assets';
 import { getConfig } from '../services/admin-config';
 import { quoteCredits } from '../pricing/pricing';
 import { createAudioJob, estimateAudio } from '../audio/audio';
@@ -14,7 +14,7 @@ import { createAiEdit } from '../editing/ai-edit';
 import { ALEPH } from '../providers/video/aleph';
 import { badRequest, conflict, notFound, paymentRequired } from '../lib/errors';
 import { analyzeCampaign, sceneCuts } from './analyze';
-import { planAd } from './plan';
+import { generateConcepts, planAd, type BrandContext } from './plan';
 import { assembleAd } from './assemble';
 import { ffmpeg as _ff, probe } from '../media/ffmpeg';
 import { downloadAssetToTemp, type Asset } from '../services/assets';
@@ -37,6 +37,20 @@ export const brandKitInputSchema = z.object({
   website: z.string().max(300).nullable().optional(),
   musicStyle: z.string().max(200).default(''),
   offers: z.string().max(600).default(''),
+  description: z.string().max(2000).default(''),
+  industry: z.string().max(120).default(''),
+  audience: z.string().max(600).default(''),
+  markets: z.array(z.string().max(60)).max(20).default([]),
+  languages: z.array(z.string().max(10)).max(10).default([]),
+  contact: z.object({ email: z.string().max(200).optional(), phone: z.string().max(60).optional(), address: z.string().max(300).optional() }).default({}),
+  restrictions: z.string().max(1500).default(''),
+  vocabulary: z.array(z.string().max(60)).max(40).default([]),
+  knowledge: z
+    .object({
+      facts: z.array(z.object({ id: z.string().max(40), text: z.string().min(1).max(500), kind: z.enum(['about', 'product', 'claim', 'audience', 'contact', 'price', 'other']), sourceUrl: z.string().max(500).nullable(), confidence: z.number().min(0).max(1), status: z.enum(['approved', 'pending', 'rejected']) })).max(200),
+      sources: z.array(z.object({ url: z.string().max(500), kind: z.enum(['website', 'social', 'manual']), fetchedAt: z.string().max(40), status: z.enum(['read', 'blocked', 'manual']), note: z.string().max(500).optional() })).max(60),
+    })
+    .optional(),
 });
 
 export async function listBrandKits(ctx: AppContext, user: SessionLike) {
@@ -44,7 +58,8 @@ export async function listBrandKits(ctx: AppContext, user: SessionLike) {
   return Promise.all(rows.map(async (b) => ({ ...b, logoUrl: b.logoAssetId ? await assetUrl(ctx, await getOwnedAsset(ctx, user.id, b.logoAssetId)).catch(() => null) : null })));
 }
 
-export async function saveBrandKit(ctx: AppContext, user: SessionLike, input: z.infer<typeof brandKitInputSchema>, id?: string) {
+export async function saveBrandKit(ctx: AppContext, user: SessionLike, raw: z.input<typeof brandKitInputSchema>, id?: string) {
+  const input = brandKitInputSchema.parse(raw);
   if (input.logoAssetId) await getOwnedAsset(ctx, user.id, input.logoAssetId);
   if (id) {
     const [b] = await ctx.db.select().from(brandKits).where(and(eq(brandKits.id, id), eq(brandKits.userId, user.id)));
@@ -66,13 +81,26 @@ const set = (ctx: AppContext, id: string, patch: Partial<typeof adCampaigns.$inf
 
 export async function createCampaign(ctx: AppContext, user: SessionLike, input: z.input<typeof adBriefSchema> & { title?: string }) {
   const brief = adBriefSchema.parse(input);
+  let product: typeof brandProducts.$inferSelect | undefined;
+  if (brief.productId) {
+    [product] = await ctx.db.select().from(brandProducts).where(and(eq(brandProducts.id, brief.productId), eq(brandProducts.userId, user.id)));
+    if (!product) throw notFound('Product');
+    brief.brandKitId ??= product.brandKitId;
+    // Nothing picked: use this product's own media (never another product's).
+    if (!brief.footageAssetIds.length && !brief.imageAssetIds.length && product.mediaAssetIds.length) {
+      const media = await ctx.db.select({ id: assets.id, mediaType: assets.mediaType }).from(assets).where(and(inArray(assets.id, product.mediaAssetIds), eq(assets.userId, user.id)));
+      brief.footageAssetIds = media.filter((m) => m.mediaType === 'video').map((m) => m.id).slice(0, 20);
+      brief.imageAssetIds = media.filter((m) => m.mediaType === 'image').map((m) => m.id).slice(0, 20);
+    }
+    if (!brief.productRefAssetIds.length) brief.productRefAssetIds = product.references.map((r) => r.assetId).slice(0, 8);
+  }
   if (!brief.footageAssetIds.length && !brief.imageAssetIds.length) throw badRequest('Upload at least one video or photo of your product');
   for (const id of [...brief.footageAssetIds, ...brief.imageAssetIds, ...brief.productRefAssetIds, ...(brief.referenceAdAssetId ? [brief.referenceAdAssetId] : []), ...(brief.musicAssetId ? [brief.musicAssetId] : [])]) await getOwnedAsset(ctx, user.id, id);
   if (brief.brandKitId) {
     const [b] = await ctx.db.select().from(brandKits).where(and(eq(brandKits.id, brief.brandKitId), eq(brandKits.userId, user.id)));
     if (!b) throw notFound('Brand kit');
   }
-  const [c] = await ctx.db.insert(adCampaigns).values({ userId: user.id, brandKitId: brief.brandKitId ?? null, title: (input.title || brief.request).slice(0, 80), brief, status: 'analyzing', phase: 'Waiting to analyse your footage', progress: 0 }).returning();
+  const [c] = await ctx.db.insert(adCampaigns).values({ userId: user.id, brandKitId: brief.brandKitId ?? null, productId: product?.id ?? null, title: (input.title || brief.request).slice(0, 80), brief, status: 'analyzing', phase: 'Waiting to analyse your footage', progress: 0 }).returning();
   await enqueue(ctx.db, 'ad.analyze', { campaignId: c!.id }, { queue: 'media', dedupeKey: `ad-analyze:${c!.id}`, maxAttempts: 2 });
   return c!;
 }
@@ -111,7 +139,8 @@ export async function estimateCampaign(ctx: AppContext, user: SessionLike, brief
   const rules = await getConfig(ctx.db, 'pricing');
   const enhancements = brief.mode === 'enhanced' ? plan.scenes.filter((s) => s.enhance).map((s) => ({ sceneId: s.id, credits: quoteCredits(Math.max(ALEPH.minUsd, Math.min(ALEPH.maxInputSec, s.durationSec + 2) * ALEPH.usdPerSecond), s.durationSec, 'verified', rules).credits })) : [];
   const enhance = enhancements.reduce((s, e) => s + e.credits, 0);
-  return { voice, voiceAvailable, music, musicAvailable, enhance, enhancements, editingAndRender: 0, assembleTotal: voice + music, note: 'Cutting, colour, titles, logo and export are local processing and cost no credits. AI enhancements run only when you start them, and each result is reviewed before it is used.' };
+  const budget = brief.budgetCredits ?? null;
+  return { voice, voiceAvailable, music, musicAvailable, enhance, enhancements, editingAndRender: 0, assembleTotal: voice + music, budget, withinBudget: budget === null || voice + music + enhance <= budget, note: 'Cutting, colour, titles, logo and export are local processing and cost no credits. AI enhancements run only when you start them, and each result is reviewed before it is used.' };
 }
 
 // ---------------------------------------------------------------- plan editing
@@ -125,8 +154,36 @@ export async function updatePlan(ctx: AppContext, user: SessionLike, id: string,
   const brief = adBriefSchema.parse(c.brief);
   if (brief.mode === 'original') plan.scenes.forEach((s) => (s.enhance = null));
   const estimate = await estimateCampaign(ctx, user, brief, plan);
-  await set(ctx, id, { plan: { ...plan, estimate }, status: 'planned' });
-  return { plan, estimate };
+  const segments = await ctx.db.select().from(footageSegments).where(eq(footageSegments.campaignId, id));
+  const review = reviewPlanDiversity(plan, segments, brief.lengthSec);
+  await set(ctx, id, { plan: { ...plan, estimate }, review: { diversity: review }, status: 'planned' });
+  return { plan, estimate, review };
+}
+
+/** Re-plan with another concept (no new analysis). */
+export async function chooseConcept(ctx: AppContext, user: SessionLike, id: string, key: string) {
+  const c = await ownedCampaign(ctx, user, id);
+  if (['analyzing', 'planning', 'assembling'].includes(c.status)) throw conflict('Wait until the current step finishes');
+  const concepts = (c.concepts ?? []).map((x) => adConceptSchema.parse(x));
+  if (!concepts.some((x) => x.key === key)) throw notFound('Concept');
+  await set(ctx, id, { brief: { ...c.brief, conceptKey: key }, status: 'planning', phase: 'Storyboarding the chosen concept', progress: 0.2 });
+  await enqueue(ctx.db, 'ad.plan', { campaignId: id }, { queue: 'generation', dedupeKey: `ad-plan:${id}:${Date.now()}`, maxAttempts: 1 });
+  return { queued: true };
+}
+
+/** Act on a diversity-review option (e.g. make the polished shorter ad the footage supports). */
+export async function applyReviewOption(ctx: AppContext, user: SessionLike, id: string, key: 'shorter' | 'crops') {
+  const c = await ownedCampaign(ctx, user, id);
+  if (['analyzing', 'planning', 'assembling'].includes(c.status)) throw conflict('Wait until the current step finishes');
+  const review = (c.review as { diversity?: ReturnType<typeof reviewPlanDiversity> } | null)?.diversity;
+  const option = review?.options.find((o) => o.key === key);
+  if (!option) throw badRequest('This option is not available for the current plan');
+  if (key === 'shorter') {
+    await set(ctx, id, { brief: { ...c.brief, lengthSec: option.lengthSec }, status: 'planning', phase: `Re-cutting as a ${option.lengthSec} s ad`, progress: 0.2 });
+    await enqueue(ctx.db, 'ad.plan', { campaignId: id }, { queue: 'generation', dedupeKey: `ad-plan:${id}:${Date.now()}`, maxAttempts: 1 });
+  }
+  // 'crops': repeats are already separated into detail crops by the planner; accepting keeps the length.
+  return { ok: true };
 }
 
 /** Re-plan everything, or swap one scene for the best unused segment (no AI call). */
@@ -144,7 +201,7 @@ export async function replan(ctx: AppContext, user: SessionLike, id: string, wha
   const used = new Set(plan.scenes.map((s) => s.segmentId));
   const alt = segs.filter((s) => s.role === 'footage' && !used.has(s.id) && !s.duplicateOf && s.endSec - s.startSec >= Math.min(sc.durationSec, 1)).sort((a, b) => ((b.scores as Record<string, number>).overall ?? 0) - ((a.scores as Record<string, number>).overall ?? 0))[0];
   if (!alt) throw badRequest('No other footage is available for this scene');
-  plan.scenes[what.sceneIndex] = { ...sc, segmentId: alt.id, inSec: 0, durationSec: Math.min(sc.durationSec, alt.endSec - alt.startSec) };
+  plan.scenes[what.sceneIndex] = { ...sc, segmentId: alt.id, inSec: 0, crop: null, durationSec: Math.min(sc.durationSec, alt.endSec - alt.startSec) };
   return updatePlan(ctx, user, id, plan);
 }
 
@@ -158,14 +215,17 @@ export async function startAssembly(ctx: AppContext, user: SessionLike, id: stri
   const plan = adPlanSchema.parse(c.plan);
   const est = await estimateCampaign(ctx, user, brief, plan);
   if (est.assembleTotal > approvedCredits) throw paymentRequired(`Voice-over and music need ${est.assembleTotal} credits — approve that amount to continue.`, { required: est.assembleTotal });
+  if (brief.budgetCredits !== null && est.assembleTotal > brief.budgetCredits) throw paymentRequired(`This step needs ${est.assembleTotal} credits, above your ${brief.budgetCredits}-credit budget for this ad. Raise the budget or turn off voice-over/music.`, { required: est.assembleTotal, budget: brief.budgetCredits });
   await set(ctx, id, { status: 'assembling', phase: 'Building the timeline', progress: 0.05, error: null });
   await enqueue(ctx.db, 'ad.assemble', { campaignId: id, userId: user.id, role: user.role }, { queue: 'generation', dedupeKey: `ad-assemble:${id}:${Date.now()}`, maxAttempts: 1 });
   return { queued: true, estimate: est };
 }
 
-async function narrator(ctx: AppContext, language: string) {
+async function narrator(ctx: AppContext, language: string, gender: AdBrief['voiceGender'] = 'auto') {
   const voices = await getConfig(ctx.db, 'voices');
   const pool = voices[language] ?? voices.default!;
+  if (gender === 'female') return pool.female[0] ?? pool.narrator;
+  if (gender === 'male') return pool.male[0] ?? pool.narrator;
   return pool.narrator ?? pool.male[0];
 }
 
@@ -176,7 +236,7 @@ async function assembleOne(ctx: AppContext, user: SessionLike, campaignId: strin
   const { projectId, durationSec } = await assembleAd(ctx, user, { campaignId, brief, plan, title: `${plan.title || 'Ad'}${o.variant ? ` · ${o.label}` : ''}`, aspectRatio: o.aspectRatio, lengthScale: o.lengthScale });
   const vo: Pending['vo'] = [];
   if (brief.voiceover && plan.voiceover.length && ctx.liveEnabled) {
-    const voiceId = await narrator(ctx, brief.language);
+    const voiceId = await narrator(ctx, brief.language, brief.voiceGender);
     for (const [i, line] of plan.voiceover.entries()) {
       try {
         const job = await createAudioJob(ctx, user, { kind: 'tts', text: line.text, language: brief.language, voiceId, projectId, idempotencyKey: `ad-vo:${projectId}:${i}` });
@@ -311,6 +371,7 @@ export async function runEnhancements(ctx: AppContext, user: SessionLike, id: st
   const plan = adPlanSchema.parse(c.plan);
   const est = await estimateCampaign(ctx, user, brief, plan);
   if (est.enhance > approvedCredits) throw paymentRequired(`The enhancements need ${est.enhance} credits — approve that amount to start them.`, { required: est.enhance });
+  if (brief.budgetCredits !== null && est.enhance + est.assembleTotal > brief.budgetCredits) throw paymentRequired(`The enhancements would take this ad to ${est.enhance + est.assembleTotal} credits, above your ${brief.budgetCredits}-credit budget.`, { required: est.enhance, budget: brief.budgetCredits });
   const { timeline } = await getTimeline(ctx, user, c.projectId);
   const projShots = await ctx.db.select().from(shots).where(eq(shots.projectId, c.projectId));
   const started: string[] = [];
@@ -332,6 +393,14 @@ export async function runAnalyzeJob(ctx: AppContext, qj: QueueJob): Promise<JobR
   const [c] = await ctx.db.select().from(adCampaigns).where(eq(adCampaigns.id, campaignId));
   if (!c) return;
   try {
+    // Wait for MOV/HEVC/4K uploads to get their editing proxy (analysis reads the proxy).
+    const ids = (c.brief as AdBrief).footageAssetIds ?? [];
+    const files = ids.length ? await ctx.db.select().from(assets).where(inArray(assets.id, ids)) : [];
+    const preparing = files.filter((a) => prepOf(a)?.status === 'processing');
+    if (preparing.length && Date.now() - c.createdAt.getTime() < 60 * 60_000) {
+      await set(ctx, campaignId, { phase: `Optimizing ${preparing.length} video${preparing.length > 1 ? 's' : ''} for AI (converting and compressing)`, progress: 0.02 });
+      return { rescheduleMs: 3000 };
+    }
     const result = await analyzeCampaign(ctx, campaignId, async (phase, progress) => {
       await set(ctx, campaignId, { phase, progress });
     });
@@ -357,6 +426,29 @@ export async function runAnalyzeJob(ctx: AppContext, qj: QueueJob): Promise<JobR
   }
 }
 
+/** Brand facts the planner may use: approved knowledge only, and the selected product. */
+export async function brandContext(ctx: AppContext, brief: AdBrief, productId?: string | null): Promise<BrandContext> {
+  const brand = brief.brandKitId ? (await ctx.db.select().from(brandKits).where(eq(brandKits.id, brief.brandKitId)))[0] : undefined;
+  if (!brand) return null;
+  const [product] = productId ? await ctx.db.select().from(brandProducts).where(eq(brandProducts.id, productId)) : [];
+  const facts = (brand.knowledge?.facts ?? []).filter((f) => f.status === 'approved').map((f) => f.text).slice(0, 40);
+  return {
+    name: brand.name,
+    voice: brand.voice,
+    products: brand.products,
+    ctas: brand.ctas,
+    slogans: brand.slogans,
+    offers: brand.offers,
+    website: brand.website,
+    description: brand.description,
+    audience: brand.audience,
+    restrictions: brand.restrictions,
+    vocabulary: brand.vocabulary,
+    facts,
+    product: product ? { name: product.name, description: product.description, claims: product.claims, price: product.price } : null,
+  };
+}
+
 export async function runPlanJob(ctx: AppContext, qj: QueueJob): Promise<JobResult> {
   const { campaignId } = qj.payload as { campaignId: string };
   const [c] = await ctx.db.select().from(adCampaigns).where(eq(adCampaigns.id, campaignId));
@@ -364,12 +456,24 @@ export async function runPlanJob(ctx: AppContext, qj: QueueJob): Promise<JobResu
   try {
     const brief = adBriefSchema.parse(c.brief);
     const segments = await ctx.db.select().from(footageSegments).where(eq(footageSegments.campaignId, campaignId)).orderBy(asc(footageSegments.index));
-    const brand = brief.brandKitId ? (await ctx.db.select().from(brandKits).where(eq(brandKits.id, brief.brandKitId)))[0] : undefined;
+    const brand = await brandContext(ctx, brief, c.productId);
     const reference = (c.analysis as { reference?: { shots: number; avgShotSec: number; hookSec: number } | null } | null)?.reference ?? null;
-    const plan = await planAd(ctx, { brief, segments, brand: brand ? { name: brand.name, voice: brand.voice, products: brand.products, ctas: brand.ctas, slogans: brand.slogans, offers: brand.offers, website: brand.website } : null, reference });
+    // Concepts once per campaign (re-planning with another concept reuses them).
+    let concepts: AdConcept[] = (c.concepts ?? []).map((x) => adConceptSchema.parse(x));
+    if (!concepts.length) {
+      await set(ctx, campaignId, { phase: 'Developing three creative concepts', progress: 0.88 });
+      concepts = (await generateConcepts(ctx, { brief, segments, brand, styleKeys: AD_STYLES.map((s) => s.key) })).concepts;
+    }
+    const concept = concepts.find((x) => x.key === brief.conceptKey) ?? concepts.find((x) => x.recommended) ?? concepts[0] ?? null;
+    await set(ctx, campaignId, { concepts, phase: `Storyboarding "${concept?.name ?? 'the ad'}"`, progress: 0.92 });
+    // The concept sets the style, unless the user picked a style and has not chosen another concept.
+    const explicitStyle = !brief.conceptKey && AD_STYLES.some((s) => s.key === brief.style) && brief.style !== concept?.style && !concepts.some((x) => x.style === brief.style) ? brief.style : null;
+    const styled = { ...brief, style: explicitStyle ?? concept?.style ?? (AD_STYLES.some((s) => s.key === brief.style) ? brief.style : AD_STYLES[0]!.key) };
+    const plan = await planAd(ctx, { brief: styled, segments, brand, concept: explicitStyle ? null : concept, reference });
     const user = { id: c.userId, role: 'user' as const };
     const estimate = await estimateCampaign(ctx, user, brief, plan);
-    await set(ctx, campaignId, { plan: { ...plan, estimate }, title: plan.title || c.title, status: 'planned', phase: plan.source === 'offline' ? 'Plan ready (without the AI Director — review it)' : 'Plan ready — review the storyboard', progress: 1 });
+    const review = reviewPlanDiversity(plan, segments, brief.lengthSec);
+    await set(ctx, campaignId, { plan: { ...plan, estimate }, review: { diversity: review }, title: plan.title || c.title, status: 'planned', phase: plan.source === 'offline' ? 'Plan ready (without the AI Director — review it)' : 'Plan ready — review the storyboard', progress: 1 });
   } catch (err) {
     await set(ctx, campaignId, { status: 'failed', error: (err as Error).message.slice(0, 300), phase: 'Planning failed' });
   }

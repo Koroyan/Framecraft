@@ -11,6 +11,8 @@ import { configuredProviders, syncCatalog } from './services/registry';
 import { seedReferenceData } from './db/seed';
 import type { ProviderKey } from './catalog/types';
 
+import { guardedFetch, type PageFetcher } from './brand/safe-fetch';
+
 export type Logger = { info: (msg: string, extra?: unknown) => void; warn: (msg: string, extra?: unknown) => void; error: (msg: string, extra?: unknown) => void };
 
 export type AppContext = {
@@ -30,10 +32,12 @@ export type AppContext = {
   /** Paid provider calls are allowed (LIVE_GENERATION_ENABLED + credentials). */
   liveEnabled: boolean;
   fetch: HttpFetch;
+  /** Fetches user-supplied public URLs (brand websites) with SSRF protection. */
+  webFetch: PageFetcher;
   log: Logger;
 };
 
-export type ContextOverrides = { fetch?: HttpFetch; llm?: LlmClient; dbHandle?: DbHandle; storage?: StorageDriver; log?: Logger };
+export type ContextOverrides = { fetch?: HttpFetch; webFetch?: PageFetcher; llm?: LlmClient; dbHandle?: DbHandle; storage?: StorageDriver; log?: Logger };
 
 const consoleLogger: Logger = {
   info: (m, e) => console.log(`[info] ${m}`, e ?? ''),
@@ -63,6 +67,7 @@ export async function createContext(env: Env, o: ContextOverrides = {}): Promise
     configured,
     liveEnabled: env.LIVE_GENERATION_ENABLED,
     fetch: fetchImpl,
+    webFetch: o.webFetch ?? guardedFetch,
     log: o.log ?? consoleLogger,
   };
 }

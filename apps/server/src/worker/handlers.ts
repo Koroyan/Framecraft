@@ -11,6 +11,7 @@ import { runImageJob } from '../images/images';
 import { runChatTurn } from '../chat/chat';
 import { runEditJob } from '../editing/ai-edit';
 import { runAnalyzeJob, runAssembleJob, runFinishJob, runPlanJob } from '../ads/campaigns';
+import { runPrepareJob, sweepExpiredUploads } from '../services/uploads';
 
 export function createHandlers(ctx: AppContext): Record<string, JobHandler> {
   return {
@@ -26,10 +27,12 @@ export function createHandlers(ctx: AppContext): Record<string, JobHandler> {
     'ad.plan': (job) => runPlanJob(ctx, job),
     'ad.assemble': (job) => runAssembleJob(ctx, job),
     'ad.finish': (job) => runFinishJob(ctx, job),
+    'media.prepare': (job) => runPrepareJob(ctx, job),
     'maintenance.sweep': async () => {
       const released = await releaseExpiredReservations(ctx.db);
       const reclaimed = await reclaimStale(ctx.db);
       await recoverOrphanedJobs(ctx);
+      await sweepExpiredUploads(ctx);
       if (released || reclaimed) ctx.log.info('maintenance', { released, reclaimed });
       return { rescheduleMs: 2 * 60_000 };
     },

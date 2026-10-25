@@ -12,8 +12,9 @@ import { clearConfigCache } from '../../src/services/admin-config';
 import { invalidateRegistryCache } from '../../src/services/registry';
 import type { HttpFetch } from '../../src/providers/video/types';
 import type { LlmClient } from '../../src/director/llm';
+import type { PageFetcher } from '../../src/brand/safe-fetch';
 
-export async function createTestContext(opts: { env?: Record<string, string>; fetch?: HttpFetch; llm?: LlmClient } = {}) {
+export async function createTestContext(opts: { env?: Record<string, string>; fetch?: HttpFetch; llm?: LlmClient; webFetch?: PageFetcher } = {}) {
   clearConfigCache();
   invalidateRegistryCache();
   const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fc-test-storage-'));
@@ -26,7 +27,7 @@ export async function createTestContext(opts: { env?: Record<string, string>; fe
     ...opts.env,
   });
   const quiet = { info: () => undefined, warn: () => undefined, error: (m: string, e?: unknown) => console.error(m, e) };
-  const ctx = await createContext(env, { fetch: opts.fetch, llm: opts.llm, log: quiet });
+  const ctx = await createContext(env, { fetch: opts.fetch, webFetch: opts.webFetch, llm: opts.llm, log: quiet });
   const worker = new Worker(ctx.db, createHandlers(ctx), { queues: ['generation', 'media', 'maintenance'], concurrency: 4 });
 
   /** Run queued work to completion, fast-forwarding provider poll delays. */

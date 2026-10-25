@@ -22,12 +22,14 @@ import { parse, requireUser } from '../app';
 import { assets, characterReferences, characters, consents, generationJobs, locationReferences, locations, notifications, projects, savedPrompts, templates, userSettings } from '../../db/schema';
 import { cancelGeneration, createGeneration, estimateGeneration, getOwnedJob, listJobs, providerJobsFor, retryGeneration, toPublicJob } from '../../generation/service';
 import { loadRoutableModels, toPublicModel } from '../../services/registry';
-import { ALLOWED_UPLOADS, assetUrl, downloadAssetToTemp, getOwnedAsset, sniffMime, storeAsset, tmpFile } from '../../services/assets';
+import { ALLOWED_UPLOADS, assetUrl, downloadAssetToTemp, getOwnedAsset, prepOf, sniffMime, storeAsset, tmpFile } from '../../services/assets';
+import { publicAsset } from '../../services/uploads';
 import { removeSolidBackground } from '../../media/remove-bg';
 import { deleteAsset } from '../../services/account';
 import { badRequest, notFound } from '../../lib/errors';
 import { audit } from '../../services/common';
 import { TERMS_VERSION } from '../../auth/auth';
+import { enqueue } from '../../queue/queue';
 import { createImageJob } from '../../images/images';
 
 const uuid = z.object({ id: z.string().uuid() });
@@ -222,15 +224,18 @@ export async function studioRoutes(app: FastifyInstance, ctx: AppContext) {
       if (file.file.truncated) throw badRequest(`Files must be under ${ctx.env.MAX_UPLOAD_MB} MB`);
       const sniffed = (await sniffMime(tmp)) ?? (file.mimetype === 'text/plain' || file.filename.endsWith('.srt') ? 'text/plain' : undefined);
       const mediaType = sniffed ? ALLOWED_UPLOADS[sniffed] : undefined;
-      if (!sniffed || !mediaType) throw badRequest('Unsupported file type. Upload JPG, PNG, WebP, MP4, MOV, WebM, MP3, WAV, M4A or SRT.');
+      if (!sniffed || !mediaType) throw badRequest('Unsupported file type. Upload JPG, PNG, WebP, MP4, MOV, M4V, WebM, MKV, MP3, WAV, M4A or SRT.');
       if (meta.rightsConfirmed !== 'true') throw badRequest('Please confirm you own or have permission to use this file.');
       if (meta.projectId) {
         const [p] = await ctx.db.select({ id: projects.id }).from(projects).where(and(eq(projects.id, meta.projectId), eq(projects.userId, u.id)));
         if (!p) throw notFound('Project');
       }
-      const asset = await storeAsset(ctx, { userId: u.id, projectId: meta.projectId, kind: meta.kind, mediaType, filePath: tmp, mimeType: sniffed, originalName: file.filename, source: { uploaded: true, containsPeople: meta.containsPeople === 'true' } });
+      if (sniffed === 'image/heic') throw badRequest('HEIC photos cannot be decoded on this server. Upload as JPEG.');
+      const asset = await storeAsset(ctx, { userId: u.id, projectId: meta.projectId, kind: meta.kind, mediaType, filePath: tmp, mimeType: sniffed, originalName: file.filename, source: { uploaded: true, containsPeople: meta.containsPeople === 'true', ...(mediaType === 'video' ? { prep: { status: 'processing' } } : {}) } });
       await ctx.db.insert(consents).values({ userId: u.id, kind: meta.containsPeople === 'true' ? 'likeness' : 'copyright', version: TERMS_VERSION, subjectRef: asset.id, ip: req.ip });
-      return reply.status(201).send({ asset: { ...asset, url: await assetUrl(ctx, asset) } });
+      // Editing proxy for MOV/HEVC/4K/HDR footage (the master stays untouched).
+      if (mediaType === 'video') await enqueue(ctx.db, 'media.prepare', { assetId: asset.id }, { queue: 'media', dedupeKey: `media-prepare:${asset.id}`, maxAttempts: 3 });
+      return reply.status(201).send({ asset: await publicAsset(ctx, asset) });
     } finally {
       await fsp.rm(tmp, { force: true });
     }
@@ -252,7 +257,7 @@ export async function studioRoutes(app: FastifyInstance, ctx: AppContext) {
           .filter((a) => (a.source as { segment?: number }).segment === undefined)
           .map(async (a) => {
             const t = thumbs.find((x) => x.id === a.thumbnailAssetId);
-            return { ...a, url: await assetUrl(ctx, a), downloadUrl: await assetUrl(ctx, a, { download: true }), thumbnailUrl: t ? await assetUrl(ctx, t) : null };
+            return { ...a, url: await assetUrl(ctx, a), downloadUrl: await assetUrl(ctx, a, { download: true }), thumbnailUrl: t ? await assetUrl(ctx, t) : null, prep: prepOf(a) ?? null };
           }),
       ),
     };

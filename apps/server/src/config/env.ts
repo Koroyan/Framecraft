@@ -43,6 +43,11 @@ const envSchema = z.object({
   S3_SECRET_ACCESS_KEY: optionalSecret,
   S3_FORCE_PATH_STYLE: bool.default(false),
   MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(2048).default(200),
+  /** Resumable chunked uploads (phone 4K videos): the per-file limit, the chunk size, and per-user storage. */
+  MAX_LARGE_UPLOAD_MB: z.coerce.number().int().min(1).max(65_536).default(8192),
+  UPLOAD_CHUNK_MB: z.coerce.number().int().min(1).max(64).default(8),
+  /** Total storage per user (0 = unlimited). */
+  STORAGE_QUOTA_MB: z.coerce.number().int().min(0).default(51_200),
 
   // Media
   FFMPEG_PATH: z.string().optional(),

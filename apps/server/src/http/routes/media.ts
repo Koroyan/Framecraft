@@ -17,9 +17,11 @@ export async function mediaRoutes(app: FastifyInstance, ctx: AppContext) {
     if (!q.sig || !verifyLocalSignature(ctx.env.storageSigningSecret, key, Number(q.exp), q.sig, q.dl)) throw forbidden('Link expired or invalid');
     const [a] = await ctx.db.select({ mimeType: assets.mimeType }).from(assets).where(eq(assets.storageKey, key));
     const stat = await ctx.storage.stat(key);
-    if (!a || !stat) throw notFound('File');
+    // Prepared representations of a master (editing proxy, AI inputs) are stored next to it, without a row.
+    const mimeType = a?.mimeType ?? (/\/(proxy|ai-[\w-]+)\.mp4$/.test(key) ? 'video/mp4' : undefined);
+    if (!mimeType || !stat) throw notFound('File');
 
-    reply.header('Content-Type', a.mimeType);
+    reply.header('Content-Type', mimeType);
     reply.header('Accept-Ranges', 'bytes');
     reply.header('Cache-Control', 'private, max-age=3600');
     if (q.dl) reply.header('Content-Disposition', `attachment; filename="${q.dl.replace(/[^\w.-]/g, '_')}"`);

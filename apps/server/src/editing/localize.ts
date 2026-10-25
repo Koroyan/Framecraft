@@ -1,5 +1,5 @@
-import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { fitToProviderLimits } from '../media/prepare';
 import { piecewiseExpr, type EditMask } from '@framecraft/shared';
 import { ffmpeg, probe } from '../media/ffmpeg';
 import { writeMaskPgm } from '../media/mask-raster';
@@ -13,25 +13,16 @@ import { writeMaskPgm } from '../media/mask-raster';
 const even = (v: number) => Math.max(2, Math.round(v / 2) * 2);
 
 /**
- * Extract [startSec, endSec) as a silent H.264 clip small enough for an inline provider upload.
- * Lowers quality, then size, until it fits `maxBytes`.
+ * Extract [startSec, endSec) as a silent H.264 clip small enough for an inline provider upload
+ * (at most `maxBytes`).
  */
 export async function extractWindow(src: string, output: string, o: { startSec: number; endSec: number; maxBytes: number; maxSide?: number }): Promise<{ width: number; height: number; bytes: number }> {
-  const p = await probe(src);
-  const w0 = p.width ?? 1280;
-  const h0 = p.height ?? 720;
-  const sides = [o.maxSide ?? 1280, 960, 720, 540];
-  for (const side of sides) {
-    const k = Math.min(1, side / Math.max(w0, h0));
-    const width = even(w0 * k);
-    const height = even(h0 * k);
-    for (const crf of [22, 26, 30, 34]) {
-      await ffmpeg(['-ss', String(o.startSec), '-t', String(Math.max(0.1, o.endSec - o.startSec)), '-i', src, '-an', '-vf', `scale=${width}:${height},format=yuv420p`, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(crf), '-movflags', '+faststart', output]);
-      const bytes = (await fsp.stat(output)).size;
-      if (bytes <= o.maxBytes) return { width, height, bytes };
-    }
-  }
-  throw new Error('The selected part of the shot is too large to send for editing; select a shorter time range.');
+  // Bitrate from the byte budget, resolution from the bitrate (see media/prepare.ts).
+  const durationSec = Math.max(0.1, o.endSec - o.startSec);
+  const r = await fitToProviderLimits(src, output, { maxBytes: o.maxBytes, maxDurationSec: durationSec, maxLongSide: o.maxSide ?? 1280, audio: false }, { startSec: o.startSec, durationSec }).catch(() => {
+    throw new Error('The selected part of the shot is too large to send for editing; select a shorter time range.');
+  });
+  return { width: r.width, height: r.height, bytes: r.bytes };
 }
 
 export { writeMaskPgm } from '../media/mask-raster';
