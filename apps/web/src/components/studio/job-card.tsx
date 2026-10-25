@@ -7,6 +7,9 @@ import { cn, timeAgo } from '@/lib/utils';
 import { isActive } from '@/lib/hooks';
 import { formatEta, ProgressBar } from './progress';
 
+/** Human names for job kinds. */
+const JOB_LABEL: Record<string, string> = { video: 'AI video', image: 'Image', audio: 'Music & voice', render: 'Export', edit: 'AI edit', movie: 'Film', plan: 'Screenplay' };
+
 export function JobCard({ job, onClick, className }: { job: PublicJob; onClick?: () => void; className?: string }) {
   return (
     <button type="button" onClick={onClick} className={cn('group surface block w-full overflow-hidden rounded-2xl text-left transition hover:border-white/15', className)}>
@@ -27,9 +30,9 @@ export function JobCard({ job, onClick, className }: { job: PublicJob; onClick?:
         )}
       </div>
       <div className="p-3">
-        <div className="line-clamp-2 text-[13px] text-fog-100">{job.prompt ?? (job.kind === 'render' ? 'Export' : job.kind)}</div>
+        <div className="line-clamp-2 text-[13px] text-fog-100">{job.prompt ?? JOB_LABEL[job.kind] ?? job.kind}</div>
         <div className="mt-1 text-[11px] text-fog-400">
-          {timeAgo(job.createdAt)} · {job.kind}
+          {timeAgo(job.createdAt)} · {JOB_LABEL[job.kind] ?? job.kind}
         </div>
       </div>
     </button>

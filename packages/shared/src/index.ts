@@ -8,3 +8,4 @@ export * from './grade';
 export * from './layers';
 export * from './ads';
 export * from './ad-modes';
+export * from './beats';

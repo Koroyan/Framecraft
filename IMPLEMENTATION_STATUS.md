@@ -101,6 +101,13 @@ _Last updated: 2026-10-25._ Verification legend: **✅ verified** (automated tes
 - **Saved characters & locations**: deletable from the cast picker (confirmation); usable in chat with **@Name** (autocomplete with photo + description) — their photos join the conversation's references so faces and places stay consistent.
 - **Shot Diversity Checker**: repeated intervals, near-duplicates, same framing in a row, static-heavy, few product shots, weak progression, monotonous transitions, insufficient footage → options: polished shorter ad (one click re-cut), keep length with crops, upload more footage.
 
+## Video Editor & navigation (CapCut-style) ✅ *checked in the browser 2026-10-26*
+- **Navigation**: sidebar grouped into Create / Library / Account with short hints; *Video Editor* (`/app/edit`: pick 9:16 / 16:9 / 1:1 / 4:5, recent edits) and *Media* (`/app/media`, shared library with delete) pages; **Ctrl/Cmd + K** command palette (pages, actions, projects); compact account footer; mobile tab bar has *Editor*. Home shows six quick actions and "continue where you left off"; studio status only for admins. Projects page filters AI video / Edits / Ads / Social / Cinematic / Films and opens each kind in its own place; edit projects take their first clip's thumbnail.
+- **Editor workspace**: full-screen (no sidebar), toolbox left · preview · inspector right · full-width timeline; on smaller screens the toolbox sits under the preview. Toolbox tabs: Media, Audio (music, voice-over, **beat detection + snap cuts to the beat**), Text (TikTok text styles + templates), Stickers, Captions (subtitles → word-by-word styled caption layers), Filters (looks, selected clip or all, live in the preview), Transitions (this clip or every cut, current one highlighted).
+- **Shortcuts**: Space play/pause, S split at the playhead, Delete, Ctrl+D duplicate, ←/→ frame, Shift+←/→ 1 s, Home/End, Ctrl+Z / Shift+Ctrl+Z, Ctrl+S, `?` shows them. Clicking a clip selects it and puts the playhead under the cursor.
+- **Beat detection** (`POST /api/assets/:id/beats`, cached on the asset): onset autocorrelation with octave correction and fractional period/phase; 80 BPM / 23 beats on a real generated track.
+- **Georgian text** in the *black* and *mono* fonts rendered as boxes on Windows (those font files have no Georgian); rendering now falls back to a font that has it (raster cache `v2`).
+
 ## Ad Studio 4.0 — honest limits
 - Social accounts are **not** read: links are stored and the UI says why (owner OAuth via official APIs is not connected).
 - AI B-roll to fill short footage is not offered yet (no button without a real pipeline).
@@ -109,7 +116,7 @@ _Last updated: 2026-10-25._ Verification legend: **✅ verified** (automated tes
 
 ## Manual editor & ads — honest limits
 - Tracking is a classic template tracker (translation only, no rotation/scale, no AI segmentation); hard occlusions need manual correction or a shorter range.
-- Not built yet: multi-clip primary video tracks with blend modes, slip/slide edits, clip grouping, audio volume automation curves, beat detection / beat-synced cuts, GIF/animated stickers, cover-image editor, captions/hashtags generator for ads, upscaling/denoise/stabilisation presets for uploads, reference-ad remix beyond pacing.
+- Not built yet: multi-clip primary video tracks with blend modes, slip/slide edits, clip grouping, audio volume automation curves, GIF/animated stickers, cover-image editor, captions/hashtags generator for ads, upscaling/denoise/stabilisation presets for uploads, reference-ad remix beyond pacing.
 - Custom colour presets are stored in the browser (localStorage).
 
 ## Editor studio — honest limits

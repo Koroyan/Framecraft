@@ -132,7 +132,7 @@ export function MediaDropzone({ onAsset, accept = ACCEPT, kind = 'upload', proje
       >
         <UploadCloud className={cn('text-iris-300', compact ? 'size-6' : 'size-9')} />
         <span className="text-sm font-medium text-white">{label}</span>
-        <span className="max-w-md text-xs text-fog-400">MOV, MP4, M4V, WebM, MKV, JPG, PNG, WebP, HEIC — straight from the phone, 4K and multi-gigabyte files included. We keep your original and prepare an optimized copy automatically.</span>
+        {compact ? <span className="text-[11px] text-fog-500">MOV, MP4, photos · any size</span> : <span className="max-w-md text-xs text-fog-400">MOV, MP4, M4V, WebM, MKV, JPG, PNG, WebP, HEIC — straight from the phone, 4K and multi-gigabyte files included. We keep your original and prepare an optimized copy automatically.</span>}
       </button>
 
       {visible.length > 0 && (

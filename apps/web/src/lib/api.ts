@@ -70,7 +70,7 @@ export type Asset = {
 
 export type Project = {
   id: string;
-  kind: 'quick' | 'social' | 'cinematic' | 'movie' | 'edit';
+  kind: 'quick' | 'social' | 'cinematic' | 'movie' | 'edit' | 'ad';
   title: string;
   status: string;
   aspectRatio: string;

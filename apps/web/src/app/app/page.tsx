@@ -4,12 +4,14 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowUp, Clapperboard, Coins, FolderKanban, LayoutTemplate, Smartphone, Sparkles, Wand2 } from 'lucide-react';
+import { ArrowUp, Clapperboard, Coins, FolderKanban, LayoutTemplate, Megaphone, Scissors, Smartphone, Sparkles, Wand2 } from 'lucide-react';
 import { endpoints } from '@/lib/api';
+import { KIND_LABEL, projectHref } from '@/lib/projects';
 import { useMe, useSystemStatus, useTemplates } from '@/lib/hooks';
 import { Badge, Card, EmptyState, Skeleton, buttonVariants } from '@/components/ui';
 import { JobCard } from '@/components/studio/job-card';
 import { cn, formatCredits, timeAgo } from '@/lib/utils';
+
 
 export default function Dashboard() {
   const { data: me } = useMe();
@@ -40,15 +42,19 @@ export default function Dashboard() {
             <ArrowUp className="size-5" />
           </button>
         </form>
-        <div className="mt-6 grid grid-cols-2 gap-2 md:grid-cols-4">
+        <div className="mt-6 grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-6">
           {[
-            { href: '/app/create', icon: Wand2, label: 'Quick video' },
-            { href: '/app/social', icon: Smartphone, label: 'Social post' },
-            { href: '/app/cinematic', icon: Sparkles, label: 'Cinematic shot' },
-            { href: '/app/movie', icon: Clapperboard, label: 'AI short film' },
+            { href: '/app/create', icon: Wand2, label: 'AI video', hint: 'From one sentence' },
+            { href: '/app/edit', icon: Scissors, label: 'Edit a video', hint: 'Your own clips' },
+            { href: '/app/social', icon: Smartphone, label: 'Social post', hint: 'TikTok · Reels' },
+            { href: '/app/ads', icon: Megaphone, label: 'Product ad', hint: 'For your brand' },
+            { href: '/app/movie', icon: Clapperboard, label: 'AI short film', hint: 'With a story' },
+            { href: '/app/cinematic', icon: Sparkles, label: 'Cinematic shot', hint: 'One great shot' },
           ].map((a) => (
-            <Link key={a.href} href={a.href} className="flex items-center gap-3 rounded-2xl border hairline bg-white/[0.03] p-3 text-sm text-fog-100 transition hover:bg-white/[0.06]">
-              <a.icon className="size-4 text-iris-300" /> {a.label}
+            <Link key={a.href} href={a.href} className="flex flex-col gap-1 rounded-2xl border hairline bg-white/[0.03] p-3 text-sm text-fog-100 transition hover:border-iris-400/40 hover:bg-white/[0.06]">
+              <a.icon className="size-4 text-iris-300" />
+              <span className="font-medium">{a.label}</span>
+              <span className="text-[11px] text-fog-400">{a.hint}</span>
             </Link>
           ))}
         </div>
@@ -63,8 +69,9 @@ export default function Dashboard() {
           <div className="mt-1 text-xs text-fog-400">{me?.plan?.name} plan</div>
           <Link href="/app/billing" className={cn(buttonVariants({ variant: 'secondary', size: 'sm' }), 'mt-4')}>Get more credits</Link>
         </Card>
+        {me?.user?.role === 'admin' ? (
         <Card className="p-5 md:col-span-2">
-          <div className="text-sm text-fog-300">Studio status</div>
+          <div className="text-sm text-fog-300">Studio status <span className="text-[11px] text-fog-500">(admins only)</span></div>
           <div className="mt-3 flex flex-wrap gap-2">
             <Badge tone={status?.liveGenerationEnabled ? 'green' : 'amber'}>{status?.liveGenerationEnabled ? 'Live AI generation on' : 'Live generation off'}</Badge>
             <Badge tone={status?.aiDirector === 'llm' ? 'green' : 'neutral'}>AI Director: {status?.aiDirector === 'llm' ? 'Claude' : 'offline planner'}</Badge>
@@ -75,11 +82,23 @@ export default function Dashboard() {
           </div>
           <p className="mt-3 text-xs text-fog-400">Providers activate automatically when their API keys are configured on the server.</p>
         </Card>
+        ) : (
+          <Card className="space-y-2 p-5 md:col-span-2">
+            <div className="text-sm text-fog-300">Continue where you left off</div>
+            {(projects.data?.projects ?? []).slice(0, 3).map((p) => (
+              <Link key={p.id} href={projectHref(p)} className="flex items-center justify-between rounded-xl px-2 py-1.5 text-sm text-fog-100 hover:bg-white/[0.04]">
+                <span className="truncate">{p.title}</span>
+                <span className="shrink-0 text-[11px] text-fog-500">{KIND_LABEL[p.kind] ?? p.kind} · {timeAgo(p.updatedAt)}</span>
+              </Link>
+            ))}
+            {!projects.data?.projects.length && <p className="text-xs text-fog-400">Your projects will appear here.</p>}
+          </Card>
+        )}
       </div>
 
       <section>
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-white">Recent generations</h2>
+          <h2 className="text-lg font-semibold text-white">Recent work</h2>
           <Link href="/app/history" className="text-sm text-fog-300 hover:text-white">View all</Link>
         </div>
         {jobs.isLoading ? (
@@ -103,14 +122,14 @@ export default function Dashboard() {
         {projects.data?.projects.length ? (
           <div className="grid gap-3 md:grid-cols-3">
             {projects.data.projects.slice(0, 6).map((p) => (
-              <Link key={p.id} href={p.kind === 'movie' ? `/app/movie/${p.id}` : `/app/projects/${p.id}`} className="surface flex items-center gap-3 rounded-2xl p-3 transition hover:border-white/15">
+              <Link key={p.id} href={projectHref(p)} className="surface flex items-center gap-3 rounded-2xl p-3 transition hover:border-white/15">
                 <div className="grid size-12 shrink-0 place-items-center overflow-hidden rounded-xl bg-ink-700">
                   {p.thumbnailUrl ? <img src={p.thumbnailUrl} alt="" className="size-full object-cover" /> : <FolderKanban className="size-5 text-fog-400" />}
                 </div>
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium text-white">{p.title}</div>
                   <div className="text-xs text-fog-400">
-                    {p.kind} · {timeAgo(p.updatedAt)}
+                    {KIND_LABEL[p.kind] ?? p.kind} · {timeAgo(p.updatedAt)}
                   </div>
                 </div>
               </Link>

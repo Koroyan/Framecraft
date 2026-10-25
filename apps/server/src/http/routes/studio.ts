@@ -25,6 +25,7 @@ import { loadRoutableModels, toPublicModel } from '../../services/registry';
 import { ALLOWED_UPLOADS, assetUrl, downloadAssetToTemp, getOwnedAsset, prepOf, sniffMime, storeAsset, tmpFile } from '../../services/assets';
 import { publicAsset } from '../../services/uploads';
 import { removeSolidBackground } from '../../media/remove-bg';
+import { detectBeats, type BeatAnalysis } from '../../media/beats';
 import { deleteAsset } from '../../services/account';
 import { badRequest, notFound } from '../../lib/errors';
 import { audit } from '../../services/common';
@@ -271,6 +272,24 @@ export async function studioRoutes(app: FastifyInstance, ctx: AppContext) {
     const { id } = parse(uuid, req.params);
     const a = await getOwnedAsset(ctx, u.id, id);
     return { asset: { ...a, url: await assetUrl(ctx, a), downloadUrl: await assetUrl(ctx, a, { download: true }) } };
+  });
+
+  /** Beats of a music track (for cutting to the beat). Cached on the asset; local analysis, free. */
+  app.post('/api/assets/:id/beats', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(uuid, req.params);
+    const a = await getOwnedAsset(ctx, u.id, id);
+    if (a.mediaType !== 'audio' && a.mediaType !== 'video') throw badRequest('Only music or video files have beats');
+    const cached = (a.source as { beats?: BeatAnalysis }).beats;
+    if (cached) return { beats: cached };
+    const file = await downloadAssetToTemp(ctx, a);
+    try {
+      const beats = await detectBeats(file);
+      await ctx.db.update(assets).set({ source: sql`jsonb_set(${assets.source}, '{beats}', ${JSON.stringify(beats)}::jsonb)` }).where(eq(assets.id, a.id));
+      return { beats };
+    } finally {
+      await fsp.rm(file, { force: true });
+    }
   });
 
   /** Logo "no background" variant: local flood-fill background removal (free). Cached per source + tolerance. */

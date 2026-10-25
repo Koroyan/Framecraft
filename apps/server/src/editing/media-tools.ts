@@ -83,7 +83,8 @@ export async function rasterLayer(ctx: AppContext, user: SessionLike, input: Lay
   if (layer.kind !== 'text' && layer.kind !== 'shape') throw badRequest('Only text and shape layers need a raster');
   const h = Math.min(2160, Math.max(240, Math.round(frameHeight)));
   const hash = rasterHash(layer);
-  const key = `raster:${hash}:${h}`;
+  // v2: Georgian text no longer falls back to boxes in fonts without Georgian glyphs.
+  const key = `raster:v2:${hash}:${h}`;
   const hit = await derived(ctx, user.id, key);
   if (hit) return { assetId: hit.id, url: await assetUrl(ctx, hit), hash, ...(hit.source as { width: number; height: number; rows: number }) };
   return withTemp(async (dir) => {

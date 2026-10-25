@@ -19,8 +19,16 @@ const FONTS: Record<TextStyle['font'], string[]> = {
   mono: ['C:/Windows/Fonts/consola.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf'],
 };
 
-export function fontFile(font: TextStyle['font']): string {
-  const f = [process.env.FFMPEG_FONT_FILE, ...FONTS[font], ...FONTS.sans].find((p): p is string => Boolean(p && fs.existsSync(p)));
+/** Windows fonts without Georgian glyphs, and the closest font that has them. */
+const NO_GEORGIAN: Record<string, TextStyle['font']> = { 'seguibl.ttf': 'bold', 'consola.ttf': 'sans' };
+const GEORGIAN = /[Ⴀ-ჿᲐ-Ჿⴀ-⴯]/;
+
+export function fontFile(font: TextStyle['font'], content = ''): string {
+  const pick = (f: TextStyle['font']) => [process.env.FFMPEG_FONT_FILE, ...FONTS[f], ...FONTS.sans].find((p): p is string => Boolean(p && fs.existsSync(p)));
+  let f = pick(font);
+  // Georgian text in a font that lacks it would render as empty boxes: use the nearest weight that has it.
+  const alt = f && GEORGIAN.test(content) ? NO_GEORGIAN[path.basename(f).toLowerCase()] : undefined;
+  if (alt) f = pick(alt);
   if (!f) throw new Error('No font with Georgian/Cyrillic glyphs found on the server (install fonts-noto-core)');
   return f;
 }
@@ -51,7 +59,7 @@ export async function rasterizeLayer(layer: Layer, frameHeight: number, outFile:
     if (layer.kind !== 'text' || !layer.text) throw new Error('Only text and shape layers are rasterised');
     const st = layer.text;
     const size = Math.max(8, Math.round(st.size * k));
-    await fsp.copyFile(fontFile(st.font), path.join(dir, 'font.ttf'));
+    await fsp.copyFile(fontFile(st.font, st.content), path.join(dir, 'font.ttf'));
     const units = revealUnits(layer) ?? [st.content];
     const full = st.content;
     const lines = full.split('\n').length;

@@ -24,7 +24,11 @@ import {
   Sparkles,
   Users,
   Wand2,
+  Scissors,
+  Search,
+  Image as ImageIcon,
 } from 'lucide-react';
+import { CommandPalette, type PaletteItem } from '@/components/command-palette';
 import { api, ApiError } from '@/lib/api';
 import { toast } from 'sonner';
 import { useMe, useSystemStatus } from '@/lib/hooks';
@@ -33,14 +37,17 @@ import { Logo } from '@/components/logo';
 import { Dialog, Spinner } from '@/components/ui';
 
 const NAV = [
-  { href: '/app', label: 'Dashboard', icon: Home, exact: true },
-  { href: '/app/create', label: 'Quick Create', icon: Wand2 },
-  { href: '/app/social', label: 'Social Studio', icon: Smartphone },
-  { href: '/app/cinematic', label: 'Cinematic Studio', icon: Sparkles },
-  { href: '/app/movie', label: 'AI Movie Maker', icon: Clapperboard },
-  { href: '/app/ads', label: 'Ad Studio', icon: Megaphone },
+  { href: '/app', label: 'Home', icon: Home, exact: true },
+  { divider: 'Create' },
+  { href: '/app/create', label: 'Quick video', icon: Wand2, hint: 'AI video from a sentence' },
+  { href: '/app/edit', label: 'Video Editor', icon: Scissors, hint: 'Edit your own clips' },
+  { href: '/app/social', label: 'Social Studio', icon: Smartphone, hint: 'TikTok, Reels, Shorts' },
+  { href: '/app/ads', label: 'Ad Studio', icon: Megaphone, hint: 'Product ads' },
+  { href: '/app/movie', label: 'AI Movie Maker', icon: Clapperboard, hint: 'Films with a story' },
+  { href: '/app/cinematic', label: 'Cinematic Studio', icon: Sparkles, hint: 'Single cinematic shots' },
   { divider: 'Library' },
   { href: '/app/projects', label: 'Projects', icon: FolderKanban },
+  { href: '/app/media', label: 'Media', icon: ImageIcon },
   { href: '/app/templates', label: 'Templates', icon: LayoutTemplate },
   { href: '/app/characters', label: 'Characters', icon: Users },
   { href: '/app/locations', label: 'Locations', icon: MapPin },
@@ -50,7 +57,17 @@ const NAV = [
   { href: '/app/settings', label: 'Settings', icon: Settings },
 ] as const;
 
-type NavItem = { href: string; label: string; icon: typeof Home; exact?: boolean };
+const PALETTE: PaletteItem[] = [
+  ...NAV.filter((n): n is Extract<(typeof NAV)[number], { href: string }> => 'href' in n).map((n) => ({ label: n.label, hint: 'hint' in n ? n.hint : 'Go to', href: n.href, icon: n.icon })),
+  { label: 'New AI video', hint: 'Action', href: '/app/create', icon: Plus, keywords: 'generate create' },
+  { label: 'New edit project', hint: 'Action', href: '/app/edit', icon: Scissors, keywords: 'capcut timeline editor' },
+  { label: 'Create an ad for my brand', hint: 'Action', href: '/app/ads/create', icon: Megaphone, keywords: 'advert commercial' },
+  { label: 'Chat with the AI Director', hint: 'Action', href: '/app/movie/chat', icon: Clapperboard, keywords: 'film story' },
+  { label: 'Upload media', hint: 'Action', href: '/app/media', icon: ImageIcon, keywords: 'import video photo' },
+  { label: 'Buy credits', hint: 'Action', href: '/app/billing', icon: Coins, keywords: 'payment price' },
+];
+
+type NavItem = { href: string; label: string; icon: typeof Home; exact?: boolean; hint?: string };
 
 function NavLink({ item, onClick }: { item: NavItem; onClick?: () => void }) {
   const path = usePathname();
@@ -60,9 +77,11 @@ function NavLink({ item, onClick }: { item: NavItem; onClick?: () => void }) {
     <Link
       href={item.href}
       onClick={onClick}
-      className={cn('flex items-center gap-3 rounded-xl px-3 py-2 text-[14px] transition', active ? 'bg-white/[0.07] text-white' : 'text-fog-300 hover:bg-white/[0.04] hover:text-white')}
+      title={item.hint}
+      aria-current={active ? 'page' : undefined}
+      className={cn('flex items-center gap-3 rounded-xl px-3 py-[7px] text-[13.5px] transition', active ? 'bg-white/[0.08] text-white' : 'text-fog-300 hover:bg-white/[0.04] hover:text-white')}
     >
-      <Icon className={cn('size-[18px]', active ? 'text-iris-300' : '')} />
+      <Icon className={cn('size-[17px]', active ? 'text-iris-300' : '')} />
       {item.label}
     </Link>
   );
@@ -73,7 +92,7 @@ function NavList({ isAdmin, onNavigate }: { isAdmin: boolean; onNavigate?: () =>
     <nav className="space-y-0.5">
       {NAV.map((n, i) =>
         'divider' in n ? (
-          <div key={i} className="px-3 pb-1 pt-5 text-[11px] font-medium uppercase tracking-[0.14em] text-fog-400">
+          <div key={i} className="px-3 pb-1 pt-4 text-[10.5px] font-medium uppercase tracking-[0.14em] text-fog-500">
             {n.divider}
           </div>
         ) : (
@@ -172,6 +191,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     router.push('/');
   };
 
+  // The editor is a full-screen workspace (like desktop and mobile video editors).
+  if (/^\/app\/editor\/[^/]+$/.test(path))
+    return (
+      <div className="flex min-h-dvh flex-col">
+        <CommandPalette items={PALETTE} />
+        <header className="sticky top-0 z-30 flex h-12 items-center justify-between gap-3 border-b hairline bg-ink-950/85 px-3 backdrop-blur-xl">
+          <div className="flex items-center gap-3">
+            <Link href="/app" aria-label="Home"><Logo small /></Link>
+            <Link href="/app/projects" className="text-xs text-fog-400 hover:text-white">Projects</Link>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <SearchButton compact />
+            {data.wallet && <CreditPill balance={data.wallet.balance} reserved={data.wallet.reserved} />}
+            <Notifications />
+          </div>
+        </header>
+        <main className="flex-1 px-3 pb-6 pt-3">{children}</main>
+      </div>
+    );
+
   return (
     <div className="min-h-dvh lg:grid lg:grid-cols-[260px_1fr]">
       {/* Desktop sidebar */}
@@ -185,23 +224,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="flex-1 overflow-y-auto">
           <NavList isAdmin={isAdmin} />
         </div>
-        <div className="mt-4 rounded-2xl border hairline p-3">
-          <div className="truncate text-sm font-medium text-white">{data.user.name}</div>
-          <div className="truncate text-xs text-fog-400">{data.plan?.name} plan</div>
-          <button onClick={logout} className="mt-2 flex items-center gap-2 text-xs text-fog-300 hover:text-white">
-            <LogOut className="size-3.5" /> Sign out
+        <div className="mt-3 flex items-center gap-2.5 rounded-xl border hairline p-2">
+          <span className="grid size-8 shrink-0 place-items-center rounded-full bg-iris-500/25 text-xs font-semibold text-iris-200">{initials(data.user.name)}</span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13px] font-medium text-white">{data.user.name}</div>
+            <div className="truncate text-[11px] text-fog-400">{data.plan?.name} plan</div>
+          </div>
+          <button onClick={logout} aria-label="Sign out" title="Sign out" className="grid size-8 place-items-center rounded-lg text-fog-400 hover:bg-white/5 hover:text-white">
+            <LogOut className="size-4" />
           </button>
         </div>
       </aside>
 
       <div className="flex min-h-dvh min-w-0 flex-col">
+        <CommandPalette items={PALETTE} />
         <DevBanner />
         <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b hairline bg-ink-950/80 px-4 backdrop-blur-xl md:px-6">
           <Link href="/app" className="lg:hidden">
             <Logo small />
           </Link>
-          <div className="hidden text-sm text-fog-400 lg:block">{data.plan?.name} · up to {data.plan?.limits.maxResolution}</div>
+          <div className="hidden min-w-0 flex-1 lg:block"><SearchButton /></div>
           <div className="flex items-center gap-1.5">
+            <span className="lg:hidden"><SearchButton compact /></span>
             {data.wallet && <CreditPill balance={data.wallet.balance} reserved={data.wallet.reserved} />}
             <Notifications />
           </div>
@@ -224,7 +268,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Link href="/app/create" aria-label="Create" className="mx-auto -mt-5 mb-1 grid size-14 place-items-center rounded-2xl bg-iris-500 text-white shadow-[0_10px_30px_-8px_rgb(124_108_255/0.9)]">
             <Plus className="size-6" />
           </Link>
-          <MobileTab href="/app/history" icon={History} label="History" />
+          <MobileTab href="/app/edit" icon={Scissors} label="Editor" />
           <button type="button" onClick={() => setMoreOpen(true)} className="flex flex-col items-center gap-0.5 py-1.5 text-[10.5px] text-fog-300">
             <Menu className="size-5" />
             More
@@ -238,6 +282,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </button>
       </Dialog>
     </div>
+  );
+}
+
+const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('') || '?';
+
+/** Opens the command palette (Ctrl/Cmd + K). */
+function SearchButton({ compact }: { compact?: boolean }) {
+  const open = () => window.dispatchEvent(new Event('fc-open-palette'));
+  if (compact)
+    return (
+      <button type="button" aria-label="Search (Ctrl+K)" onClick={open} className="grid size-9 place-items-center rounded-full text-fog-300 hover:bg-white/5 hover:text-white">
+        <Search className="size-[18px]" />
+      </button>
+    );
+  return (
+    <button type="button" onClick={open} className="flex h-9 w-full max-w-sm items-center gap-2 rounded-xl border hairline bg-white/[0.03] px-3 text-left text-[13px] text-fog-400 transition hover:border-white/20">
+      <Search className="size-4" />
+      <span className="flex-1">Search or jump to…</span>
+      <kbd className="rounded border hairline px-1.5 text-[10px]">Ctrl K</kbd>
+    </button>
   );
 }
 

@@ -22,6 +22,7 @@ import {
   Trash2,
   Type,
   Undo2,
+  Keyboard,
   Upload,
   Bot,
   CheckCheck,
@@ -47,6 +48,7 @@ import { MultiTrack } from '@/components/editor/multitrack';
 import { StoryGraph } from '@/components/editor/story-graph';
 import { ShotEditor } from '@/components/editor/shot-editor';
 import { Copilot } from '@/components/editor/copilot';
+import { EditorToolbox } from '@/components/editor/toolbox';
 import { useStudio } from '@/lib/studio';
 import { cn, newKey, seconds } from '@/lib/utils';
 
@@ -169,6 +171,12 @@ function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, selected
   const frame = useRef<HTMLDivElement>(null);
   const [safe, setSafe] = useState<'off' | 'tiktok' | 'reels'>('off');
   const [playing, setPlaying] = useState(false);
+  // Space (editor shortcut) toggles playback.
+  useEffect(() => {
+    const toggle = () => setPlaying((v) => !v);
+    window.addEventListener('fc-editor-toggle-play', toggle);
+    return () => window.removeEventListener('fc-editor-toggle-play', toggle);
+  }, []);
   const starts = useMemo(() => clipStarts(timeline), [timeline]);
   const total = timelineDuration(timeline);
   const index = Math.max(0, starts.findLastIndex((s) => s <= playhead + 0.001));
@@ -282,7 +290,7 @@ function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, selected
 
   return (
     <div className="space-y-3">
-      <div ref={frame} className="relative mx-auto max-h-[56dvh] overflow-hidden rounded-2xl border hairline bg-black" style={{ aspectRatio: `${w}/${h}` }} onPointerDown={() => onSelectLayer(null)}>
+      <div ref={frame} className="relative mx-auto max-h-[46dvh] overflow-hidden rounded-2xl border hairline bg-black" style={{ aspectRatio: `${w}/${h}` }} onPointerDown={() => onSelectLayer(null)}>
         {asset ? (
           <div className="absolute inset-0 overflow-hidden" style={{ opacity: Math.max(0, fade) }}>
             <div className="size-full" style={cameraStyle(clip?.camera, clipT)}>
@@ -338,7 +346,6 @@ function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, selected
           <option value="reels">Reels</option>
         </select>
       </div>
-      <p className="text-[11px] text-fog-400">Preview plays clips, voice-over and music in sequence with text and subtitles. Transitions and the final audio mix are rendered exactly in the exported MP4 — export to get one file with everything.</p>
     </div>
   );
 }
@@ -453,6 +460,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
   const qc = useQueryClient();
   const { timeline, apply, undo, redo, load, selected, select, dirty, markSaved, past, future } = useEditor();
   const [playhead, setPlayhead] = useState(0);
+  const playheadRef = useRef(0);
+  playheadRef.current = playhead;
   const [saving, setSaving] = useState(false);
   const [libraryFor, setLibraryFor] = useState<null | { kind: 'clip' | 'replace' | 'audio' | 'logo' | 'overlay' | 'layer-image' | 'layer-video' }>(null);
   const [ttsOpen, setTtsOpen] = useState(false);
@@ -498,11 +507,48 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     return () => clearTimeout(t);
   }, [dirty, timeline, save]);
 
-  // Keyboard shortcuts: Ctrl/Cmd+Z, Shift+Ctrl/Cmd+Z, Ctrl/Cmd+S.
+  // Keyboard shortcuts: Space play/pause, S split, Delete remove, Ctrl+D duplicate, ←/→ step,
+  // Home/End, ? help, Ctrl/Cmd+Z undo, Shift+Ctrl/Cmd+Z redo, Ctrl/Cmd+S save.
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [inspectorTab, setInspectorTab] = useState('clip');
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'TEXTAREA') return;
+      const el = e.target as HTMLElement;
+      if (el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA' || el?.tagName === 'SELECT' || el?.isContentEditable) return;
+      const st = useEditor.getState();
+      const t = st.timeline;
+      if (!t) return;
+      const starts0 = clipStarts(t);
+      const ci = t.clips.findIndex((c) => c.id === st.selected);
+      if (!(e.ctrlKey || e.metaKey)) {
+        if (e.key === ' ') {
+          e.preventDefault();
+          window.dispatchEvent(new Event('fc-editor-toggle-play'));
+        } else if (e.key === '?') setHelpOpen(true);
+        else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+          e.preventDefault();
+          const d = (e.shiftKey ? 1 : 1 / 30) * (e.key === 'ArrowRight' ? 1 : -1);
+          setPlayhead((ph) => Math.max(0, Math.min(timelineDuration(t), ph + d)));
+        } else if (e.key === 'Home') setPlayhead(0);
+        else if (e.key === 'End') setPlayhead(Math.max(0, timelineDuration(t) - 0.05));
+        else if (e.key.toLowerCase() === 's' && ci >= 0) {
+          const c = t.clips[ci]!;
+          st.apply((x) => splitClip(x, c.id, c.inSec + (playheadRef.current - (starts0[ci] ?? 0)) * (c.speed || 1)));
+        } else if ((e.key === 'Delete' || e.key === 'Backspace') && ci >= 0 && t.clips.length > 1) {
+          e.preventDefault();
+          st.apply((x) => ({ ...x, clips: x.clips.filter((c) => c.id !== st.selected) }));
+        }
+        return;
+      }
+      if (e.key.toLowerCase() === 'd' && ci >= 0) {
+        e.preventDefault();
+        st.apply((x) => {
+          const c = x.clips[ci]!;
+          x.clips.splice(ci + 1, 0, { ...c, id: newId('clip'), transition: undefined });
+          return x;
+        });
+        return;
+      }
       if (e.key.toLowerCase() === 'z') {
         e.preventDefault();
         if (e.shiftKey) redo();
@@ -674,12 +720,12 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       {audioUp.element}
       {videoUp.element}
       {logoUp.element}
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
-          <Link href={tq.data!.project.kind === 'movie' ? `/app/movie/${id}` : `/app/projects/${id}`} className="text-xs text-fog-400 hover:text-white">
-            ← {tq.data!.project.title}
+          <Link href={tq.data!.project.kind === 'movie' ? `/app/movie/${id}` : tq.data!.project.kind === 'edit' ? '/app/edit' : `/app/projects/${id}`} className="text-[11px] text-fog-400 hover:text-white">
+            ← Back
           </Link>
-          <h1 className="mt-1 text-xl font-semibold text-white">Editor studio</h1>
+          <h1 className="max-w-[40ch] truncate text-base font-semibold text-white" title={tq.data!.project.title}>{tq.data!.project.title}</h1>
         </div>
         <div className="flex flex-wrap items-center gap-1 rounded-xl border hairline bg-white/[0.02] p-1">
           {(
@@ -701,11 +747,13 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
           <Button size="icon" variant="ghost" aria-label="Undo" onClick={undo} disabled={!past.length}><Undo2 /></Button>
           <Button size="icon" variant="ghost" aria-label="Redo" onClick={redo} disabled={!future.length}><Redo2 /></Button>
           <Button size="icon" variant="ghost" aria-label="Versions" onClick={() => setVersionsOpen(true)}><History /></Button>
-          <Button size="sm" variant="secondary" onClick={() => save(false, 'Manual save')}><Save /> Save version</Button>
+          <Button size="icon" variant="ghost" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)" onClick={() => setHelpOpen(true)}><Keyboard /></Button>
+          <Button size="icon" variant="ghost" aria-label="Save a version" title="Save a version (Ctrl+S)" onClick={() => save(false, 'Manual save')}><Save /></Button>
           {(tq.data!.project.settings as { ad?: { campaignId?: string } } | undefined)?.ad?.campaignId && (
-            <Link href={`/app/ads/footage/${(tq.data!.project.settings as { ad: { campaignId: string } }).ad.campaignId}`} className={buttonVariants({ size: 'sm', variant: 'ghost' })}>Product ad · storyboard &amp; variants</Link>
+            <Link href={`/app/ads/footage/${(tq.data!.project.settings as { ad: { campaignId: string } }).ad.campaignId}`} className={buttonVariants({ size: 'sm', variant: 'ghost' })}>Ad storyboard</Link>
           )}
           <Button size="sm" variant={assistantOpen ? 'primary' : 'outline'} onClick={() => setAssistantOpen((o) => !o)}><Bot /> Assistant</Button>
+          <Button size="sm" onClick={() => { setWorkspace('edit'); setInspectorTab('export'); }}><Download /> Export</Button>
         </div>
       </div>
 
@@ -760,15 +808,29 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       )}
 
       {workspace === 'edit' && (
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
-        <div className="min-w-0 space-y-5">
-          {previewCard}
-          <Card className="p-3 md:p-4">{timelineCard}</Card>
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[300px_minmax(0,1fr)_360px]">
+        {/* Left: CapCut-style tools (media, audio, text, stickers, captions, filters, transitions) */}
+        <div className="order-2 h-[360px] min-h-0 lg:hidden xl:order-none xl:block xl:h-[max(380px,calc(46dvh+5.5rem))]">
+          <EditorToolbox
+            projectId={id}
+            timeline={timeline}
+            apply={apply}
+            assets={assets}
+            playhead={playhead}
+            selectedClipId={selected}
+            onAddClip={(a) => { addAssetAsClip(a); toast.success('Added to the end of the timeline'); }}
+            onAddMusic={(a) => apply((t) => { t.audio.push({ id: newId('aud'), assetId: a.id, kind: 'music', startSec: 0, inSec: 0, outSec: Math.max(1, Math.min((a.durationMs ?? total * 1000) / 1000, total || 600)), volume: 0.6, fadeInSec: 0, fadeOutSec: 1, muted: false, duck: true, denoise: false }); return t; })}
+            onTts={() => setTtsOpen(true)}
+            onUploaded={() => void assetsQ.refetch()}
+            onSelectLayer={setSelectedLayer}
+            transcribe={<TranscribeButton projectId={id} timeline={timeline} assets={assets} onCues={(cues) => apply((t) => ({ ...t, subtitles: cues.map((c) => ({ ...c, id: newId('sub') })) }))} />}
+          />
         </div>
+        <div className="order-1 min-w-0 xl:order-none">{previewCard}</div>
 
-        {/* Inspector */}
-        <Card className="p-3 md:p-4">
-          <Tabs defaultValue="clip">
+        {/* Right: inspector */}
+        <Card className="order-3 p-3 md:p-4 lg:max-h-[max(380px,calc(46dvh+5.5rem))] lg:overflow-y-auto xl:order-none">
+          <Tabs value={inspectorTab} onValueChange={setInspectorTab}>
             <TabsList className="mb-4">
               <TabsTrigger value="clip"><Scissors className="mr-1 inline size-3.5" />Clip</TabsTrigger>
               <TabsTrigger value="audio"><AudioLines className="mr-1 inline size-3.5" />Audio</TabsTrigger>
@@ -986,9 +1048,32 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             </TabsContent>
           </Tabs>
         </Card>
+        {/* Bottom: the multi-track timeline across the full width */}
+        <Card className="order-4 p-3 md:p-4 lg:col-span-2 xl:order-none xl:col-span-3">{timelineCard}</Card>
       </div>
 
       )}
+
+      <Dialog open={helpOpen} onOpenChange={setHelpOpen} title="Keyboard shortcuts">
+        <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">
+          {[
+            ['Space', 'Play / pause'],
+            ['S', 'Split the selected clip at the playhead'],
+            ['Delete', 'Remove the selected clip'],
+            ['Ctrl + D', 'Duplicate the selected clip'],
+            ['← / →', 'Step one frame (Shift: one second)'],
+            ['Home / End', 'Go to the start / end'],
+            ['Ctrl + Z / Ctrl + Shift + Z', 'Undo / redo'],
+            ['Ctrl + S', 'Save a version'],
+            ['?', 'This list'],
+          ].map(([k, v]) => (
+            <div key={k} className="contents">
+              <kbd className="rounded-md border hairline bg-white/[0.04] px-2 py-0.5 text-xs text-fog-100">{k}</kbd>
+              <span className="text-fog-300">{v}</span>
+            </div>
+          ))}
+        </div>
+      </Dialog>
 
       <Dialog open={Boolean(libraryFor)} onOpenChange={(o) => !o && setLibraryFor(null)} title={libraryFor?.kind === 'audio' ? 'Choose audio' : libraryFor?.kind === 'logo' ? 'Choose logo' : 'Choose a clip'} wide>
         <div className="grid grid-cols-3 gap-2 md:grid-cols-4">

@@ -187,10 +187,18 @@ export async function getTimeline(ctx: AppContext, user: SessionLike, projectId:
 
 /** Save a timeline version. Autosaves replace the previous autosave instead of piling up. */
 export async function saveTimeline(ctx: AppContext, user: SessionLike, projectId: string, input: TimelineInput, opts: { label?: string; autosave?: boolean } = {}) {
-  await getOwnedProject(ctx, user, projectId);
+  const project = await getOwnedProject(ctx, user, projectId);
   const timeline = timelineSchema.parse(input);
   await assertTimelineAssets(ctx, user.id, timeline);
+  // Edit projects have no generated poster: use the first clip's thumbnail so the project lists show a picture.
+  let thumbnailAssetId: string | undefined;
+  const first = timeline.clips[0]?.assetId;
+  if (!project.thumbnailAssetId && first) {
+    const [a] = await ctx.db.select({ id: assets.id, thumb: assets.thumbnailAssetId, mediaType: assets.mediaType }).from(assets).where(eq(assets.id, first));
+    thumbnailAssetId = a?.thumb ?? (a?.mediaType === 'image' ? a.id : undefined);
+  }
   return ctx.db.transaction(async (tx) => {
+    if (thumbnailAssetId) await tx.update(projects).set({ thumbnailAssetId }).where(eq(projects.id, projectId));
     const [latest] = await tx.select().from(projectVersions).where(eq(projectVersions.projectId, projectId)).orderBy(desc(projectVersions.version)).limit(1).for('update');
     if (opts.autosave && latest?.label === 'autosave') {
       await tx.update(projectVersions).set({ timeline, createdAt: new Date() }).where(eq(projectVersions.id, latest.id));

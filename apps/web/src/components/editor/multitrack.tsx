@@ -199,7 +199,10 @@ export function MultiTrack({
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onSelectClip(c.id, (starts[i] ?? 0) + 0.01);
+                        // Select the clip and put the playhead where it was clicked (so S splits there).
+                        const r = e.currentTarget.getBoundingClientRect();
+                        const within = Math.max(0, Math.min(clipLen(c) - 0.01, ((e.clientX - r.left) / Math.max(1, r.width)) * clipLen(c)));
+                        onSelectClip(c.id, (starts[i] ?? 0) + Math.max(0.01, within));
                       }}
                       title={c.label ?? `Clip ${i + 1}`}
                       aria-label={`Clip ${i + 1}${c.label ? ` · ${c.label}` : ''}`}
