@@ -70,6 +70,66 @@ describe('FFmpeg media pipeline (real binary)', () => {
   }, 120_000);
 });
 
+describe('transitions keep the editor timing', () => {
+  // Layers, voices and captions are placed with clipStartTimes: a soft transition overlaps the clips.
+  const solid = async (name: string, c: string) => {
+    const f = path.join(dir, name);
+    await ffmpeg(['-y', '-f', 'lavfi', '-i', `color=c=${c}:s=320x240:r=30:d=2`, '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', f]);
+    return f;
+  };
+  const pixel = async (file: string, at: number) => {
+    const raw = path.join(dir, `px-${at}.rgb`);
+    await ffmpeg(['-y', '-ss', String(at), '-i', file, '-frames:v', '1', '-vf', 'crop=2:2:159:119,format=rgb24', '-f', 'rawvideo', raw]);
+    const [r, g, b] = fs.readFileSync(raw);
+    return { r: r!, g: g!, b: b! };
+  };
+
+  it('a dissolve overlaps the clips by its duration; a cut does not', async () => {
+    const red = await solid('red.mp4', 'red');
+    const blue = await solid('blue.mp4', 'blue');
+    const green = await solid('green.mp4', 'green');
+    const out = path.join(dir, 'tx.mp4');
+    await joinClips([red, blue, green], [{ type: 'dissolve', durationSec: 0.6 }, { type: 'cut', durationSec: 0 }], out);
+    expect((await probe(out)).durationSec).toBeCloseTo(5.4, 1); // 2 + 2 − 0.6 + 2
+    const mid = await pixel(out, 1.7); // half-way through the dissolve: both colours
+    expect(mid.r).toBeGreaterThan(60);
+    expect(mid.b).toBeGreaterThan(60);
+    const b = await pixel(out, 2.6);
+    expect(b.b).toBeGreaterThan(180);
+    expect(b.r).toBeLessThan(60);
+    const g = await pixel(out, 3.6); // blue ends at 1.4 + 2 = 3.4, then green
+    expect(g.g).toBeGreaterThan(90);
+    expect(g.b).toBeLessThan(60);
+  }, 120_000);
+
+  it('a full-size 9:16 ad with five clips and mixed transitions joins (no crash on old FFmpeg builds)', async () => {
+    const clips: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const f = path.join(dir, `big${i}.mp4`);
+      await ffmpeg(['-y', '-f', 'lavfi', '-i', 'testsrc2=s=1080x1920:r=30:d=3', '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000', '-t', '3', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', f]);
+      clips.push(f);
+    }
+    const out = path.join(dir, 'big.mp4');
+    await joinClips(clips, [{ type: 'fade', durationSec: 0.6 }, { type: 'dissolve', durationSec: 0.6 }, { type: 'cut', durationSec: 0 }, { type: 'fadeblack', durationSec: 0.4 }], out);
+    const m = await probe(out);
+    expect([m.width, m.height]).toEqual([1080, 1920]);
+    expect(m.durationSec).toBeCloseTo(15 - 0.6 - 0.6 - 0.4, 1);
+    expect(m.hasAudio).toBe(true);
+  }, 300_000);
+
+  it('a fade to black dips inside the same overlap window', async () => {
+    const red = await solid('red2.mp4', 'red');
+    const blue = await solid('blue2.mp4', 'blue');
+    const out = path.join(dir, 'tx-black.mp4');
+    await joinClips([red, blue], [{ type: 'fadeblack', durationSec: 0.8 }], out);
+    expect((await probe(out)).durationSec).toBeCloseTo(3.2, 1);
+    const dip = await pixel(out, 1.6); // overlap 1.2–2.0: black at its middle
+    expect(dip.r + dip.g + dip.b).toBeLessThan(70);
+    const after = await pixel(out, 2.3);
+    expect(after.b).toBeGreaterThan(180);
+  }, 120_000);
+});
+
 describe('logo background removal', () => {
   it('clears the plain background but keeps light areas inside the logo', async () => {
     const src = path.join(dir, 'logo-src.png');

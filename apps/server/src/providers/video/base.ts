@@ -64,6 +64,9 @@ export function httpErrorToNormalized(err: ProviderHttpError): NormalizedError {
       return { ...base, code: 'not_found', message: detail, retryable: false };
     case err.status === 413:
       return { ...base, code: 'invalid_request', message: 'Input file is too large for the provider', retryable: false };
+    // A quota of zero (e.g. a free-tier key for a paid-only model) never clears by waiting.
+    case err.status === 429 && /limit:\s*0\b|free tier|quota exceeded|billing/i.test(detail):
+      return { ...base, code: 'insufficient_provider_balance', message: `The provider account has no quota for this model: ${detail.slice(0, 200)}`, retryable: false };
     case err.status === 429:
       return { ...base, code: 'rate_limited', message: 'Provider rate limit reached', retryable: true };
     case err.status >= 500:

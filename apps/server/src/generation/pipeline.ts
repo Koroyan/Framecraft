@@ -287,6 +287,8 @@ async function submitSegment(
     references: mode === 'reference-to-video' ? await Promise.all((await Promise.all(refIds.map((id) => getOwnedAsset(ctx, job.userId, id)))).map((a) => providerInputUrl(ctx, a))) : undefined,
     camera: spec.camera,
     draft: spec.renderPass === 'draft',
+    // Lip-sync: the first (and only) clip follows the recorded line.
+    speechAudio: spec.speechAudioAssetId && seg.index === 0 ? await providerInputUrl(ctx, await getOwnedAsset(ctx, job.userId, spec.speechAudioAssetId)) : undefined,
   };
 
   const problems = job.isFixture ? [] : provider.validateRequest(req);

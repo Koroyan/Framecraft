@@ -16,7 +16,8 @@ import { AppError, badRequest, notFound } from '../lib/errors';
 import { committedProviderSpendToday, getUserPlan, notify } from '../services/common';
 import { getConfig } from '../services/admin-config';
 import type { MoviePlan } from '../director/director';
-import { clearVoiceSelection, dubTrack, dubsDialogue, estimateDialogue, NO_SPEECH_DIRECTION, selectVoiceTake, startDubbing } from './dub';
+import { clearVoiceSelection, dubTrack, dubsDialogue, estimateDialogue, filmDialogue, LIP_SYNC_DIRECTION, NO_SPEECH_DIRECTION, selectVoiceTake, shotSpeechTrack, startDubbing } from './dub';
+import { VIDEO_MODELS } from '../catalog/video-models';
 import { estimateSoundtrack, soundtrackTrack, startSoundtrack } from './soundtrack';
 
 type Shot = typeof shots.$inferSelect;
@@ -335,13 +336,16 @@ async function sceneLocationRefs(db: Db, projectId: string): Promise<Map<string,
  * then starts from that exact frame (image-to-video), so identity comes from the frame and the
  * cheapest image-to-video models can be used.
  */
-function shotSpec(project: typeof projects.$inferSelect, shot: Shot, brief: MovieBrief, locationRefs: string[] = [], keyframeId?: string): VideoSpecInput {
-  // English lines are spoken by the video model; other languages are dubbed (see dub.ts), so the
-  // model only shows who is talking and keeps the audio to ambience.
+function shotSpec(project: typeof projects.$inferSelect, shot: Shot, brief: MovieBrief, locationRefs: string[] = [], keyframeId?: string, speechAssetId?: string): VideoSpecInput {
+  // English lines are spoken by the video model; other languages are dubbed (see dub.ts). With a
+  // recording (lip-sync) the model moves the mouth to those words; otherwise it only shows who talks.
+  const speakers = `${[...new Set(shot.dialogue.map((d) => d.speaker))].join(' and ')} ${shot.dialogue.length > 1 ? 'talk' : 'speaks'} on camera.`;
   const dialogueText = !shot.dialogue.length
     ? ''
     : dubsDialogue(brief)
-      ? `${[...new Set(shot.dialogue.map((d) => d.speaker))].join(' and ')} ${shot.dialogue.length > 1 ? 'talk' : 'speaks'} on camera. ${NO_SPEECH_DIRECTION}`
+      ? speechAssetId
+        ? `${speakers} ${LIP_SYNC_DIRECTION}`
+        : `${speakers} ${NO_SPEECH_DIRECTION}`
       : shot.dialogue.map((d) => `${d.speaker} says: "${d.line}"`).join(' ');
   return {
     prompt: [shot.prompt, dialogueText].filter(Boolean).join(' ').slice(0, 3900),
@@ -352,7 +356,8 @@ function shotSpec(project: typeof projects.$inferSelect, shot: Shot, brief: Movi
     camera: shot.camera ?? undefined,
     shotType: shot.shotType ?? undefined,
     // Native audio only where lines are spoken, so voices are not paid for twice.
-    nativeAudio: brief.withDialogue && shot.dialogue.length > 0,
+    nativeAudio: !speechAssetId && brief.withDialogue && shot.dialogue.length > 0,
+    speechAudioAssetId: speechAssetId,
     characterIds: shot.characterIds,
     // Objects/products and the location photo; character photos are added from the character library.
     referenceAssetIds: keyframeId ? [] : [...new Set([...shot.referenceAssetIds, ...locationRefs])].slice(0, 7),
@@ -367,8 +372,13 @@ function shotSpec(project: typeof projects.$inferSelect, shot: Shot, brief: Movi
 
 // ----------------------------------------------------------------- keyframes
 
+/** Lip-sync: non-English dialogue, a live provider with a reference-audio video model, and the brief allows it. */
+const lipSyncOn = (ctx: AppContext, brief: MovieBrief) => dubsDialogue(brief) && brief.lipSync && ctx.liveEnabled && VIDEO_MODELS.some((m) => m.capabilities.referenceAudio && m.status === 'active' && ctx.configured.has(m.provider));
+const LIP_SYNC_MAX_SEC = 15;
+
 /** Keyframes are drawn first when live image generation is available (and the brief allows it). */
 const keyframesOn = (ctx: AppContext, brief: MovieBrief) => brief.keyframes && ctx.liveEnabled && ctx.images.available();
+const lipSyncFramesOn = (ctx: AppContext) => ctx.liveEnabled && ctx.images.available();
 
 /** Shots whose storyboard frame is a real AI keyframe (not a labelled placeholder). */
 async function usableKeyframes(db: Db, list: Shot[]): Promise<Map<string, string>> {
@@ -406,7 +416,16 @@ async function startKeyframes(ctx: AppContext, user: SessionLike, project: typeo
  * offers it together with the shot's reference photos, keep the references (consistency) and
  * flag that the line needs a voice-over or subtitles instead.
  */
-async function bestShotSpec(ctx: AppContext, user: SessionLike, spec: VideoSpecInput, opts: { assumeFirstFrame?: boolean } = {}) {
+async function bestShotSpec(ctx: AppContext, user: SessionLike, spec: VideoSpecInput, opts: { assumeFirstFrame?: boolean; assumeSpeech?: boolean; lipSyncFrame?: boolean } = {}): Promise<{ spec: VideoSpecInput; estimate: Awaited<ReturnType<typeof prepareEstimate>>['estimate']; audioDropped: boolean; lipSync?: boolean }> {
+  // Lip-sync first; if no model in reach can follow a recording, generate without it (voice-over only).
+  // `lipSyncFrame`: a keyframe will be drawn for this shot if (and only if) it is lip-synced.
+  if (opts.assumeSpeech || spec.speechAudioAssetId) {
+    const ls = await prepareEstimate(ctx, user, { ...spec, nativeAudio: false }, { assumeSpeech: opts.assumeSpeech, assumeFirstFrame: opts.assumeFirstFrame || opts.lipSyncFrame });
+    if (ls.estimate.ok) return { spec: { ...spec, nativeAudio: false }, estimate: ls.estimate, audioDropped: false, lipSync: true };
+    const { speechAudioAssetId: _s, ...rest } = spec;
+    void _s;
+    return { ...(await bestShotSpec(ctx, user, rest, { assumeFirstFrame: opts.assumeFirstFrame })), lipSync: false };
+  }
   const first = await prepareEstimate(ctx, user, spec, opts);
   if (first.estimate.ok || !spec.nativeAudio) return { spec, estimate: first.estimate, audioDropped: false };
   const alt = { ...spec, nativeAudio: false };
@@ -421,19 +440,22 @@ export async function estimateMovie(ctx: AppContext, user: SessionLike, projectI
   const allShots = movie.scenes.flatMap((sc) => sc.shots);
   const keyframes = await usableKeyframes(ctx.db, allShots);
   const drawFrames = keyframesOn(ctx, brief);
-  const frame = drawFrames ? await estimateImage(ctx, true) : null;
-  const items: { shotId: string; sceneTitle: string; description: string; credits: number; providerCostUsd: number; modelName: string | null; ok: boolean; blockers: string[]; status: string; liveAvailable: boolean; audioDropped: boolean; keyframe: 'ready' | 'drawn first' | null }[] = [];
+  const speaking = lipSyncOn(ctx, brief) ? new Set((await filmDialogue(ctx.db, projectId)).map((l) => l.shotId)) : new Set<string>();
+  const frame = drawFrames || (speaking.size && lipSyncFramesOn(ctx)) ? await estimateImage(ctx, true) : null;
+  const items: { shotId: string; sceneTitle: string; description: string; credits: number; providerCostUsd: number; modelName: string | null; ok: boolean; blockers: string[]; status: string; liveAvailable: boolean; audioDropped: boolean; keyframe: 'ready' | 'drawn first' | null; lipSync: boolean }[] = [];
   for (const sc of movie.scenes) {
     for (const sh of sc.shots) {
       // Skip shots that are finished or already being generated (never charge twice).
       if (opts.onlyMissing && ((sh.currentAssetId && sh.status === 'ready') || sh.status === 'queued')) continue;
       if (isLogoShot(sh)) {
-        items.push({ shotId: sh.id, sceneTitle: sc.title, description: sh.description, credits: 0, providerCostUsd: 0, modelName: LOGO_CARD_MODEL, ok: true, blockers: [], status: sh.status, liveAvailable: true, audioDropped: false, keyframe: null });
+        items.push({ shotId: sh.id, sceneTitle: sc.title, description: sh.description, credits: 0, providerCostUsd: 0, modelName: LOGO_CARD_MODEL, ok: true, blockers: [], status: sh.status, liveAvailable: true, audioDropped: false, keyframe: null, lipSync: false });
         continue;
       }
       const kf = keyframes.get(sh.id);
-      const needsFrame = !kf && drawFrames && Boolean(frame?.available);
-      const { estimate, audioDropped } = await bestShotSpec(ctx, user, shotSpec(movie.project, sh, brief, locRefs.get(sh.sceneId), kf), { assumeFirstFrame: needsFrame });
+      const canDraw = !kf && Boolean(frame?.available);
+      const { estimate, audioDropped, lipSync } = await bestShotSpec(ctx, user, shotSpec(movie.project, sh, brief, locRefs.get(sh.sceneId), kf), { assumeFirstFrame: canDraw && drawFrames, assumeSpeech: speaking.has(sh.id), lipSyncFrame: canDraw });
+      // A lip-synced shot always starts from a keyframe (the face the recording animates).
+      const needsFrame = canDraw && (drawFrames || Boolean(lipSync));
       items.push({
         shotId: sh.id,
         sceneTitle: sc.title,
@@ -448,6 +470,7 @@ export async function estimateMovie(ctx: AppContext, user: SessionLike, projectI
         liveAvailable: estimate.liveGenerationAvailable,
         audioDropped,
         keyframe: kf ? 'ready' : needsFrame ? 'drawn first' : null,
+        lipSync: Boolean(lipSync),
       });
     }
   }
@@ -507,29 +530,43 @@ export async function generateMovie(ctx: AppContext, user: SessionLike, projectI
 
   const movieJobId = crypto.randomUUID();
   const kf = await usableKeyframes(ctx.db, todo);
-  const needFrames = keyframesOn(ctx, brief) ? todo.filter((s) => !kf.has(s.id)) : [];
-  const request = { approvedCredits: p.approvedCredits, shotIds: todo.map((s) => s.id), keyframeShotIds: needFrames.map((s) => s.id) };
+  // Lip-sync: the speaking shots' lines are recorded first, then each shot is generated from its recording
+  // and its keyframe (drawn even when the film's keyframes are off — the provider needs a face to animate).
+  const lipShots = est.shots.filter((s) => s.lipSync).map((s) => s.shotId).filter((id) => todo.some((t) => t.id === id));
+  const needFrames = todo.filter((s) => !kf.has(s.id) && (keyframesOn(ctx, brief) || (lipShots.includes(s.id) && lipSyncFramesOn(ctx))));
+  const request = { approvedCredits: p.approvedCredits, shotIds: todo.map((s) => s.id), keyframeShotIds: needFrames.map((s) => s.id), voiceShotIds: lipShots };
   const insertMovieJob = (t: Db, phase: string) =>
     t
       .insert(generationJobs)
       .values({ id: movieJobId, userId: user.id, projectId, kind: 'movie', status: 'generating', phase, request, estimatedCredits: est.totalCredits, estimatedCostUsd: est.providerCostUsd, idempotencyKey: p.idempotencyKey, startedAt: new Date() })
       .returning();
 
-  if (needFrames.length) {
-    // Phase 1: draw the missing keyframes with the characters' photos. The shots are committed
-    // (within the approved budget) when the frames are ready — see runMovieCheck.
+  if (needFrames.length || lipShots.length) {
+    // Phase 1: draw the missing keyframes with the characters' photos and record the lip-synced
+    // lines. The shots are committed (within the approved budget) when both are ready — see runMovieCheck.
+    const phase = [needFrames.length && `Drawing ${needFrames.length} keyframes with your characters`, lipShots.length && `recording the voices first so the lips match`].filter(Boolean).join(' and ');
     const [mj] = await ctx.db.transaction(async (tx) => {
-      const rows = await insertMovieJob(tx as unknown as Db, `Drawing ${needFrames.length} keyframes with your characters`);
+      const rows = await insertMovieJob(tx as unknown as Db, phase.charAt(0).toUpperCase() + phase.slice(1));
       await (tx as unknown as Db).update(projects).set({ approvedBudgetCredits: p.approvedCredits, updatedAt: new Date() }).where(eq(projects.id, projectId));
       return rows;
     });
-    try {
-      await startKeyframes(ctx, user, movie.project, needFrames, `kf:${movieJobId}`, movieJobId);
-    } catch (err) {
-      // e.g. not enough credits for the frames: continue without them (references / text-to-video).
-      ctx.log.warn('keyframes not started', { error: (err as Error).message });
-      await enqueue(ctx.db, 'movie.check', { movieJobId }, { queue: 'generation', dedupeKey: `movie-check:${movieJobId}:kf-skip` });
+    let started = 0;
+    if (needFrames.length) {
+      try {
+        started += (await startKeyframes(ctx, user, movie.project, needFrames, `kf:${movieJobId}`, movieJobId)).length;
+      } catch (err) {
+        // e.g. not enough credits for the frames: continue without them (references / text-to-video).
+        ctx.log.warn('keyframes not started', { error: (err as Error).message });
+      }
     }
+    if (lipShots.length) {
+      try {
+        started += await startDubbing(ctx, mj!, brief.language, { shotIds: lipShots });
+      } catch (err) {
+        ctx.log.warn('lip-sync voices not started', { error: (err as Error).message });
+      }
+    }
+    if (!started) await enqueue(ctx.db, 'movie.check', { movieJobId }, { queue: 'generation', dedupeKey: `movie-check:${movieJobId}:kf-skip` });
     return mj!;
   }
   // Plan every shot first (read-only), then commit the movie job and every shot job with its
@@ -546,11 +583,11 @@ export async function generateMovie(ctx: AppContext, user: SessionLike, projectI
   });
 }
 
-async function planShots(ctx: AppContext, user: SessionLike, project: typeof projects.$inferSelect, brief: MovieBrief, list: Shot[], keyframes: Map<string, string>, movieJobId: string, key: string) {
+async function planShots(ctx: AppContext, user: SessionLike, project: typeof projects.$inferSelect, brief: MovieBrief, list: Shot[], keyframes: Map<string, string>, movieJobId: string, key: string, speech: Map<string, string> = new Map()) {
   const locRefs = await sceneLocationRefs(ctx.db, project.id);
   const plans: GenerationPlan[] = [];
   for (const sh of list) {
-    const { spec } = await bestShotSpec(ctx, user, shotSpec(project, sh, brief, locRefs.get(sh.sceneId), keyframes.get(sh.id)));
+    const { spec } = await bestShotSpec(ctx, user, shotSpec(project, sh, brief, locRefs.get(sh.sceneId), keyframes.get(sh.id), speech.get(sh.id)));
     plans.push(await planGeneration(ctx, user, { spec, projectId: project.id, shotId: sh.id, idempotencyKey: `${key}:${sh.id}`, confirmEstimate: true, parentJobId: movieJobId, skipConcurrency: true }));
   }
   return plans;
@@ -569,9 +606,15 @@ async function commitShots(t: Db, plans: GenerationPlan[]) {
  */
 async function continueAfterKeyframes(ctx: AppContext, mj: typeof generationJobs.$inferSelect, children: (typeof generationJobs.$inferSelect)[]): Promise<'waiting' | 'started' | 'failed'> {
   const frames = children.filter((c) => c.kind === 'image');
-  const pending = frames.filter((c) => !['completed', 'failed', 'cancelled'].includes(c.status));
+  // Phase-1 voices (lip-sync): every audio child that exists before the shots start.
+  const voices = children.filter((c) => c.kind === 'audio');
+  const firstPhase = [...frames, ...voices];
+  const pending = firstPhase.filter((c) => !['completed', 'failed', 'cancelled'].includes(c.status));
   if (pending.length) {
-    await ctx.db.update(generationJobs).set({ phase: `Drawing keyframes with your characters — ${frames.length - pending.length} of ${frames.length} ready`, progress: 0.1 * ((frames.length - pending.length) / Math.max(1, frames.length)), progressSource: 'provider', updatedAt: new Date() }).where(eq(generationJobs.id, mj.id));
+    const fr = frames.filter((c) => !pending.includes(c)).length;
+    const vo = voices.filter((c) => !pending.includes(c)).length;
+    const parts = [frames.length && `keyframes ${fr}/${frames.length}`, voices.length && `voices for lip-sync ${vo}/${voices.length}`].filter(Boolean).join(' · ');
+    await ctx.db.update(generationJobs).set({ phase: `Preparing — ${parts}`, progress: 0.1 * ((firstPhase.length - pending.length) / Math.max(1, firstPhase.length)), progressSource: 'provider', updatedAt: new Date() }).where(eq(generationJobs.id, mj.id));
     return 'waiting';
   }
   // Only one concurrent check commits the shots.
@@ -581,15 +624,24 @@ async function continueAfterKeyframes(ctx: AppContext, mj: typeof generationJobs
     .where(and(eq(generationJobs.id, mj.id), eq(generationJobs.status, 'generating'), sql`coalesce(${generationJobs.checkpoint}->>'shotsStarted', '') = ''`))
     .returning({ id: generationJobs.id });
   if (!claimed.length) return 'waiting';
-  const req = mj.request as { approvedCredits: number; shotIds: string[] };
+  const req = mj.request as { approvedCredits: number; shotIds: string[]; voiceShotIds?: string[] };
   const user = { id: mj.userId, role: 'user' as const };
   const [project] = await ctx.db.select().from(projects).where(eq(projects.id, mj.projectId!));
   const brief = movieBriefSchema.parse((project!.settings as { brief: unknown }).brief);
   const list = (await ctx.db.select().from(shots).where(inArray(shots.id, req.shotIds))).sort((a, b) => req.shotIds.indexOf(a.id) - req.shotIds.indexOf(b.id));
   try {
-    const plans = await planShots(ctx, user, project!, brief, list, await usableKeyframes(ctx.db, list), mj.id, mj.idempotencyKey ?? mj.id);
-    // Never exceed what the user approved (keyframes already spent part of it).
-    const spent = frames.reduce((s, f) => s + (f.chargedCredits ?? 0), 0);
+    // One recording per lip-synced shot, laid out exactly like the voices on the timeline.
+    const speech = new Map<string, string>();
+    for (const sh of list.filter((s) => req.voiceShotIds?.includes(s.id))) {
+      const id = await shotSpeechTrack(ctx, mj.userId, project!.id, sh, LIP_SYNC_MAX_SEC).catch((err) => {
+        ctx.log.warn('lip-sync recording not built', { shotId: sh.id, error: (err as Error).message });
+        return null;
+      });
+      if (id) speech.set(sh.id, id);
+    }
+    const plans = await planShots(ctx, user, project!, brief, list, await usableKeyframes(ctx.db, list), mj.id, mj.idempotencyKey ?? mj.id, speech);
+    // Never exceed what the user approved (keyframes and voices already spent part of it).
+    const spent = firstPhase.reduce((s, f) => s + (f.chargedCredits ?? 0), 0);
     const needed = plans.reduce((s, pl) => s + pl.estimate.credits, 0);
     if (spent + needed > req.approvedCredits) throw new AppError('approval_required', `The shots now cost ${needed} credits — more than the approved budget allows. Please approve the new budget.`, 409);
     await ctx.db.transaction(async (tx) => commitShots(tx as unknown as Db, plans));
@@ -711,7 +763,8 @@ export async function runMovieCheck(ctx: AppContext, qj: QueueJob) {
   if (!mj || ['completed', 'failed', 'cancelled'].includes(mj.status)) return;
   const children = await ctx.db.select().from(generationJobs).where(eq(generationJobs.parentJobId, mj.id));
   // Keyframed film, phase 1 → 2: draw the frames, then start the shots from them.
-  const keyframed = ((mj.request as { keyframeShotIds?: string[] }).keyframeShotIds ?? []).length > 0;
+  const firstPhase = mj.request as { keyframeShotIds?: string[]; voiceShotIds?: string[] };
+  const keyframed = (firstPhase.keyframeShotIds ?? []).length > 0 || (firstPhase.voiceShotIds ?? []).length > 0;
   if (keyframed && !(mj.checkpoint as { shotsStarted?: boolean } | null)?.shotsStarted) {
     if ((await continueAfterKeyframes(ctx, mj, children)) !== 'started') return;
     return; // the shot jobs report back to this check as they finish

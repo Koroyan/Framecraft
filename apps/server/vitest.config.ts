@@ -7,6 +7,8 @@ export default defineConfig({
     testTimeout: 60_000,
     hookTimeout: 120_000,
     pool: 'forks',
+    // Many tests run real FFmpeg renders; too many at once exhausts a desktop machine.
+    maxWorkers: 3,
     env: { NODE_ENV: 'test' },
   },
 });

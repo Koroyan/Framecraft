@@ -91,6 +91,19 @@ export class RunwayProvider extends BaseVideoProvider {
     }
 
     if (c.nativeAudio !== 'none') body.audio = req.audio;
+    if (req.speechAudio && c.referenceAudio) {
+      // Lip-sync: the picture follows the recorded line; no generated voice on top of it.
+      body.referenceAudio = [{ type: 'audio', uri: req.speechAudio }];
+      // Audio cannot be combined with a first-frame keyframe: the keyframe becomes an (unpositioned)
+      // reference image — the look of the person and the place — and the ratio is set explicitly.
+      const anchored = typeof body.promptImage === 'string';
+      if (anchored) {
+        body.promptImage = [{ uri: body.promptImage }];
+        if (opts.aspectParam === 'ratio' && !body.ratio) body.ratio = req.aspectRatio;
+      }
+      body.promptText = `${req.prompt}\n\n${anchored ? 'The person and the setting look exactly as in the reference image. ' : ''}The speaking character says exactly the words of @Audio1, with natural lip and jaw movement precisely in sync with @Audio1 from the first frame. No other speech.`.slice(0, c.maxPromptChars);
+      if (c.nativeAudio !== 'none') body.audio = false;
+    }
     if (c.negativePrompt && req.negativePrompt) body.negativePrompt = req.negativePrompt;
     if (c.seed && req.seed !== undefined) body.seed = req.seed;
     if (req.draft && c.draftMode) body.draft = true;

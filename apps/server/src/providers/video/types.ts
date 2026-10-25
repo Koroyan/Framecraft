@@ -20,6 +20,8 @@ export type ProviderVideoRequest = {
   image?: string;
   endImage?: string;
   references?: string[];
+  /** Lip-sync: a recorded line (HTTPS URL or data: URI) the character must speak, in sync. */
+  speechAudio?: string;
   /** Framecraft camera preset key; adapters map it to a real API parameter when one exists. */
   camera?: string;
   draft?: boolean;

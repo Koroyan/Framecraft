@@ -57,6 +57,11 @@ export const videoSpecSchema = z.object({
    * it — the look stays consistent and cheaper image-to-video models can be used.
    */
   keyframe: z.boolean().default(true),
+  /**
+   * Lip-sync: a recorded line (audio asset) the picture must follow — the mouth moves to these exact
+   * words (e.g. a Georgian voice-over). Routes only to models that accept reference audio.
+   */
+  speechAudioAssetId: z.string().uuid().optional(),
   /** Manual model choice. Undefined means automatic routing. */
   modelKey: z.string().max(80).optional(),
   enhancePrompt: z.boolean().default(true),
@@ -142,6 +147,11 @@ export const movieBriefSchema = z.object({
   withMusic: z.boolean().default(true),
   /** Draw each shot's keyframe first (with the characters' photos), then animate it — consistent and cheaper. */
   keyframes: z.boolean().default(true),
+  /**
+   * Non-English dialogue: record the voices first and generate each speaking shot from its recording,
+   * so the mouth moves to those words (lip-sync) instead of generic or English-looking speech.
+   */
+  lipSync: z.boolean().default(true),
   mode: z.enum(['auto', 'director']).default('director'),
   /**
    * Optional user photos the story can refer to as photo1, photo2… (characters, places,

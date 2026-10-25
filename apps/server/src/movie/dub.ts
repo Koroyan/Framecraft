@@ -23,6 +23,57 @@ export const dubsDialogue = (brief: Pick<MovieBrief, 'language' | 'withDialogue'
 export const NO_SPEECH_DIRECTION =
   'They talk with natural lip movement, but the audio has no speech, no voices and no music: only ambient sound and sound effects (the dialogue is dubbed separately).';
 
+/** Lip-synced shots: the mouth follows the recorded line given to the model (reference audio). */
+export const LIP_SYNC_DIRECTION = 'The speaking character faces the camera with the mouth clearly visible.';
+
+/** Same lead-in and gap the timeline uses for voices (editor.buildDefaultTimeline), so lips and voice line up. */
+export const VOICE_LEAD_SEC = 0.3;
+export const VOICE_GAP_SEC = 0.25;
+
+/**
+ * One recording per shot for lip-sync: lead-in, each line, gaps — exactly as the voices will sit on
+ * the timeline. Returns null when the shot has no finished takes or the speech would not fit.
+ */
+export async function shotSpeechTrack(ctx: AppContext, userId: string, projectId: string, shot: { id: string; durationSec: number }, maxSec: number): Promise<string | null> {
+  const { voices } = await dubTrack(ctx.db, projectId);
+  const list = voices.get(shot.id) ?? [];
+  if (!list.length) return null;
+  const total = VOICE_LEAD_SEC + list.reduce((s, v) => s + v.durationSec, 0) + VOICE_GAP_SEC * (list.length - 1);
+  if (total > Math.min(maxSec, shot.durationSec)) return null;
+  const { downloadAssetToTemp, storeAsset } = await import('../services/assets');
+  const { ffmpeg } = await import('../media/ffmpeg');
+  const fsp = await import('node:fs/promises');
+  const path = await import('node:path');
+  const os = await import('node:os');
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'fc-speech-'));
+  try {
+    const files: string[] = [];
+    for (const v of list) {
+      const [a] = await ctx.db.select().from(assets).where(eq(assets.id, v.assetId));
+      if (!a) return null;
+      files.push(await downloadAssetToTemp(ctx, a as never));
+    }
+    const args: string[] = ['-f', 'lavfi', '-t', String(VOICE_LEAD_SEC), '-i', 'anullsrc=channel_layout=mono:sample_rate=44100'];
+    const parts = ['[0:a]'];
+    files.forEach((f, i) => {
+      args.push('-i', f);
+      parts.push(`[a${i}]`);
+      if (i < files.length - 1) {
+        args.push('-f', 'lavfi', '-t', String(VOICE_GAP_SEC), '-i', 'anullsrc=channel_layout=mono:sample_rate=44100');
+        parts.push(`[${2 + i * 2}:a]`);
+      }
+    });
+    const prep = files.map((_, i) => `[${1 + i * 2}:a]aresample=44100,aformat=channel_layouts=mono[a${i}]`);
+    const out = path.join(dir, 'speech.mp3');
+    await ffmpeg([...args, '-filter_complex', `${prep.join(';')};${parts.join('')}concat=n=${parts.length}:v=0:a=1[s]`, '-map', '[s]', '-c:a', 'libmp3lame', '-b:a', '128k', out]);
+    await Promise.all(files.map((f) => fsp.rm(f, { force: true })));
+    const asset = await storeAsset(ctx, { userId, projectId, kind: 'audio', mediaType: 'audio', filePath: out, mimeType: 'audio/mpeg', makeThumbnail: false, source: { lipSyncFor: shot.id, takes: list.map((v) => v.assetId) } });
+    return asset.id;
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+}
+
 /** Video prompts that asked the model to speak the lines ("X says: ..."). */
 export const promptHasSpokenLines = (prompt: string | undefined) => /\bsays: "/.test(prompt ?? '');
 

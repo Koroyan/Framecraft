@@ -226,8 +226,10 @@ export async function normalizeClip(input: string, output: string, o: NormalizeO
 export type JoinTransition = { type: string; durationSec: number } | undefined;
 
 /**
- * Join normalized clips. Uses `xfade`/`acrossfade` when the FFmpeg build has
- * them; otherwise falls back to fade-through-black, which works on any build.
+ * Join normalized clips. A soft transition OVERLAPS the two clips by its duration — exactly the
+ * timing the editor uses for layers, voices and captions (clipStartTimes); a cut does not.
+ * Uses `xfade` when the FFmpeg build has it; otherwise the transitions are blended piece by piece,
+ * which works on any build.
  */
 export async function joinClips(inputs: string[], transitions: JoinTransition[], output: string, fps = 30): Promise<void> {
   if (!inputs.length) throw new Error('No clips to join');
@@ -240,53 +242,72 @@ export async function joinClips(inputs: string[], transitions: JoinTransition[],
   const args: string[] = [];
   inputs.forEach((f) => args.push('-i', f));
   const filters: string[] = [];
-  const hasSoft = transitions.some((t) => t && t.type !== 'cut' && t.durationSec > 0);
+  const soft = (i: number) => {
+    const t = transitions[i - 1];
+    return t && t.type !== 'cut' && t.durationSec > 0 ? Math.min(t.durationSec, durations[i - 1]! / 2, durations[i]! / 2) : 0;
+  };
+  // Audio: crossfade over a soft transition, butt-join on a cut.
+  let aPrev = '[0:a]';
+  for (let i = 1; i < inputs.length; i++) {
+    const d = soft(i);
+    filters.push(d ? `${aPrev}[${i}:a]acrossfade=d=${d.toFixed(3)}[a${i}]` : `${aPrev}[${i}:a]concat=n=2:v=0:a=1[a${i}]`);
+    aPrev = `[a${i}]`;
+  }
 
-  if (xfade && hasSoft) {
+  if (xfade) {
     let vPrev = '[0:v]';
-    let aPrev = '[0:a]';
     let offset = durations[0]!;
     for (let i = 1; i < inputs.length; i++) {
+      const d = soft(i);
       const t = transitions[i - 1];
-      const soft = t && t.type !== 'cut' && t.durationSec > 0;
-      const d = soft ? Math.min(t!.durationSec, durations[i - 1]! / 2, durations[i]! / 2) : 0.04;
-      const kind = soft ? (t!.type === 'dissolve' ? 'dissolve' : t!.type) : 'fade';
       offset -= d;
-      const vOut = `[v${i}]`;
-      const aOut = `[a${i}]`;
-      filters.push(`${vPrev}[${i}:v]xfade=transition=${kind}:duration=${d.toFixed(3)}:offset=${offset.toFixed(3)}${vOut}`);
-      filters.push(`${aPrev}[${i}:a]acrossfade=d=${d.toFixed(3)}${aOut}`);
+      filters.push(d ? `${vPrev}[${i}:v]xfade=transition=${t!.type === 'dissolve' ? 'dissolve' : t!.type}:duration=${d.toFixed(3)}:offset=${offset.toFixed(3)}[v${i}]` : `${vPrev}[${i}:v]concat=n=2:v=1:a=0[v${i}]`);
       offset += durations[i]!;
-      vPrev = vOut;
-      aPrev = aOut;
+      vPrev = `[v${i}]`;
     }
     args.push('-filter_complex', filters.join(';'), '-map', vPrev, '-map', aPrev);
-  } else {
-    // Fade-through-black on each side of a soft transition, then concat.
-    const parts: string[] = [];
-    inputs.forEach((_, i) => {
-      const inT = i > 0 ? transitions[i - 1] : undefined;
-      const outT = transitions[i];
-      const vf: string[] = [];
-      const af: string[] = [];
-      const dur = durations[i]!;
-      if (inT && inT.type !== 'cut') {
-        const d = Math.min(inT.durationSec / 2, dur / 3);
-        vf.push(`fade=t=in:st=0:d=${d.toFixed(3)}`);
-        af.push(`afade=t=in:st=0:d=${d.toFixed(3)}`);
-      }
-      if (outT && outT.type !== 'cut' && i < inputs.length - 1) {
-        const d = Math.min(outT.durationSec / 2, dur / 3);
-        vf.push(`fade=t=out:st=${(dur - d).toFixed(3)}:d=${d.toFixed(3)}`);
-        af.push(`afade=t=out:st=${(dur - d).toFixed(3)}:d=${d.toFixed(3)}`);
-      }
-      filters.push(`[${i}:v]${vf.length ? vf.join(',') : 'null'}[v${i}]`);
-      filters.push(`[${i}:a]${af.length ? af.join(',') : 'anull'}[a${i}]`);
-      parts.push(`[v${i}][a${i}]`);
-    });
-    filters.push(`${parts.join('')}concat=n=${inputs.length}:v=1:a=1[vout][aout]`);
-    args.push('-filter_complex', filters.join(';'), '-map', '[vout]', '-map', '[aout]');
+    args.push('-filter_complex', filters.join(';'), '-map', vPrev, '-map', aPrev);
+    await encodeJoined(args, output, fps);
+    return;
   }
+  // Old builds (no xfade): each clip's body and each soft transition are rendered as separate short
+  // pieces — one small graph per piece, because big split/overlay graphs buffer every decoded
+  // frame and crash these builds at 1080p — then the pieces are concatenated in order.
+  await withWorkdir(async (dir) => {
+    const n = (x: number) => x.toFixed(3);
+    const enc = ['-an', '-r', String(fps), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', '-pix_fmt', 'yuv420p'];
+    const pieces: string[] = [];
+    for (let i = 0; i < inputs.length; i++) {
+      const dIn = i > 0 ? soft(i) : 0;
+      const dOut = i < inputs.length - 1 ? soft(i + 1) : 0;
+      if (dIn) {
+        const h = n(dIn / 2);
+        // Dip to black: the outgoing clip darkens in the first half, the incoming one brightens in the second.
+        const mix =
+          transitions[i - 1]!.type === 'fadeblack'
+            ? `[p]fade=t=out:st=0:d=${h}[pa];[q]fade=t=in:st=${h}:d=${h}[qa];[pa][qa]blend=all_expr='if(lt(T,${h}),A,B)'[v]`
+            : `[p][q]blend=all_expr='A*(1-T/${n(dIn)})+B*(T/${n(dIn)})'[v]`;
+        const x = path.join(dir, `x${i}.mp4`);
+        await ffmpeg(['-y', '-ss', n(durations[i - 1]! - dIn), '-t', n(dIn), '-i', inputs[i - 1]!, '-t', n(dIn), '-i', inputs[i]!, '-filter_complex', `[0:v]setpts=PTS-STARTPTS[p];[1:v]setpts=PTS-STARTPTS[q];${mix}`, '-map', '[v]', ...enc, x]);
+        pieces.push(x);
+      }
+      const len = durations[i]! - dIn - dOut;
+      if (len > 0.001) {
+        const b = path.join(dir, `b${i}.mp4`);
+        await ffmpeg(['-y', '-ss', n(dIn), '-t', n(len), '-i', inputs[i]!, '-map', '0:v', ...enc, b]);
+        pieces.push(b);
+      }
+    }
+    // Inputs 0..k-1 stay the original clips (their audio feeds the crossfade chain); the pieces follow.
+    pieces.forEach((f) => args.push('-i', f));
+    const vids = pieces.map((_, k) => `[${inputs.length + k}:v]`).join('');
+    filters.push(`${vids}concat=n=${pieces.length}:v=1:a=0[vout]`);
+    args.push('-filter_complex', filters.join(';'), '-map', '[vout]', '-map', aPrev);
+    await encodeJoined(args, output, fps);
+  });
+}
+
+async function encodeJoined(args: string[], output: string, fps: number) {
   args.push('-r', String(fps), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', output);
   await ffmpeg(args, { timeoutMs: 30 * 60_000 });
 }
@@ -362,6 +383,35 @@ export async function generateLogoCard(logo: string, output: string, o: { width:
       { cwd: dir },
     );
     await fsp.copyFile(path.join(dir, 'card.mp4'), output);
+  });
+}
+
+/**
+ * A photo as a video clip (no AI): the exact photo fitted inside the frame over a blurred,
+ * darkened cover-fill of itself, plus a silent audio track. Motion comes from the clip's camera.
+ */
+export async function stillToClip(image: string, output: string, o: { width: number; height: number; durationSec: number }): Promise<void> {
+  await withWorkdir(async (dir) => {
+    await fsp.copyFile(image, path.join(dir, 'still'));
+    const { width: w, height: h } = o;
+    const vf = [
+      `[0:v]format=yuv420p,split[a][b]`,
+      `[a]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},boxblur=28:2,eq=brightness=-0.08:saturation=0.85[bg]`,
+      `[b]scale=${w}:${h}:force_original_aspect_ratio=decrease[fg]`,
+      `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,format=yuv420p[v]`,
+    ].join(';');
+    await ffmpeg(
+      [
+        '-loop', '1', '-framerate', '30', '-i', 'still',
+        '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
+        '-filter_complex', vf,
+        '-map', '[v]', '-map', '1:a',
+        '-t', o.durationSec.toFixed(2),
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', '-r', '30', '-c:a', 'aac', '-movflags', '+faststart', 'still.mp4',
+      ],
+      { cwd: dir },
+    );
+    await fsp.copyFile(path.join(dir, 'still.mp4'), output);
   });
 }
 

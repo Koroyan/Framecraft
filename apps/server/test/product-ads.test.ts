@@ -36,6 +36,9 @@ beforeAll(async () => {
   mp3 = fs.readFileSync(f('voice.mp3'));
   await ffmpeg(['-f', 'lavfi', '-i', 'color=c=0xFF00FF:s=640x360:d=6:r=25', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', f('edited.mp4')]);
   edited = fs.readFileSync(f('edited.mp4'));
+  // Phone photos of finished figurines (portrait 3:4) — a common "I only have pictures" case.
+  await ffmpeg(['-f', 'lavfi', '-i', 'color=c=0xD04020:s=900x1200', '-frames:v', '1', f('photo1.jpg')]);
+  await ffmpeg(['-f', 'lavfi', '-i', 'color=c=0x2050D0:s=900x1200', '-frames:v', '1', f('photo2.jpg')]);
 }, 120_000);
 
 describe('product video → ad', () => {
@@ -160,6 +163,43 @@ describe('product video → ad', () => {
     const enTl = (await getTimeline(h.ctx, u, en.projectId)).timeline;
     expect(enTl.layers.some((l) => l.text?.content.startsWith('EN '))).toBe(true);
   }, 900_000);
+
+  it('photos only — each photo becomes a moving clip of the exact picture, and the ad renders', async () => {
+    const u = await h.makeUser(undefined, 'user', 50_000);
+    const photos: Awaited<ReturnType<typeof storeAsset>>[] = [];
+    for (const n of ['photo1.jpg', 'photo2.jpg']) photos.push(await storeAsset(h.ctx, { userId: u.id, kind: 'upload', mediaType: 'image', filePath: f(n), mimeType: 'image/jpeg', originalName: n }));
+    const c = await createCampaign(h.ctx, u, { request: 'საჩუქრის რეკლამა ფოტოებიდან', style: 'modern_minimal', mode: 'original', preservation: 'strict', language: 'ka', lengthSec: 6, aspectRatio: '9:16', voiceover: false, music: 'none', imageAssetIds: photos.map((x) => x.id) });
+    await h.drain(200);
+    let view = await getCampaign(h.ctx, u, c.id);
+    expect(view.campaign.status).toBe('planned');
+    await startAssembly(h.ctx, u, c.id, 0);
+    await h.drain(300);
+    view = await getCampaign(h.ctx, u, c.id);
+    expect(view.campaign.error ?? null).toBeNull();
+    expect(view.campaign.status).toBe('ready');
+    const { timeline } = await getTimeline(h.ctx, u, view.campaign.projectId!);
+    const used = await h.ctx.db.select().from(assets).where(inArray(assets.id, timeline.clips.map((x) => x.assetId)));
+    expect(used.length).toBe(2);
+    for (const a of used) {
+      expect(a.mediaType).toBe('video');
+      expect(photos.some((p) => p.id === (a.source as { fromPhoto?: string }).fromPhoto)).toBe(true);
+      expect((a.source as { aiGenerated?: boolean }).aiGenerated).toBe(false);
+    }
+    // A static style still moves on photos; the frame centre is the photo itself (red / blue), at 9:16.
+    expect(timeline.clips.every((x) => x.camera && x.camera.keyframes.length > 1)).toBe(true);
+    const clipFile = await downloadAssetToTemp(h.ctx, used.find((a) => (a.source as { fromPhoto: string }).fromPhoto === photos[0]!.id) as Asset);
+    const meta = await probe(clipFile);
+    expect([meta.width, meta.height]).toEqual([1080, 1920]);
+    const px = f('px.rgb');
+    await ffmpeg(['-y', '-ss', '0.5', '-i', clipFile, '-frames:v', '1', '-vf', 'crop=2:2:539:959,format=rgb24', '-f', 'rawvideo', px]);
+    const [r, g, b] = fs.readFileSync(px);
+    expect(r!).toBeGreaterThan(170);
+    expect(g!).toBeLessThan(110);
+    expect(b!).toBeLessThan(80);
+    const renderId = (view.campaign.plan as { renderJobId: string }).renderJobId;
+    const [render] = await h.ctx.db.select().from(generationJobs).where(eq(generationJobs.id, renderId));
+    expect(render!.status).toBe('completed');
+  }, 600_000);
 
   it('Test 9 — an AI-enhanced shot is reviewed: rejecting keeps the real footage, other shots stay as approved', async () => {
     const { u, c, footage } = await setup('enhanced');

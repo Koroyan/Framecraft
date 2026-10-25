@@ -43,6 +43,8 @@ export type RoutingRequest = {
   quality: QualityMode;
   minResolution?: Resolution;
   nativeAudio: boolean;
+  /** Lip-sync: the shot must follow a supplied speech recording (reference audio input). */
+  speechAudio?: boolean;
   referenceCount: number;
   modelKey?: string;
   maxCredits?: number;
@@ -156,6 +158,11 @@ function evaluateModel(
   if (!model.providerEnabled) reasons.push('provider disabled');
   if (!c.modes.includes(req.mode)) reasons.push(`does not support ${req.mode}`);
   if (req.nativeAudio && c.nativeAudio === 'none') reasons.push('no documented native audio');
+  if (req.speechAudio && !c.referenceAudio) reasons.push('cannot lip-sync to a voice recording');
+  // The recording drives one continuous clip; stitched segments would split the speech.
+  if (req.speechAudio && req.durationSec > c.durations.max) reasons.push('lip-sync needs the shot as one clip');
+  // Providers reject an audio reference as the only input: the face to animate must come from an image.
+  if (req.speechAudio && req.mode === 'text-to-video') reasons.push('lip-sync needs a first frame or reference image');
   if (req.referenceCount > 0 && req.mode === 'reference-to-video' && req.referenceCount > c.maxReferenceImages)
     reasons.push(`max ${c.maxReferenceImages} reference images`);
 

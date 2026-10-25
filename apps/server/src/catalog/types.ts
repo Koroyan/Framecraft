@@ -20,6 +20,8 @@ export type VideoCapabilities = {
    * here so routing never promises audio it cannot verify.
    */
   nativeAudio: 'none' | 'optional' | 'always';
+  /** Accepts reference audio the picture follows (lip-sync to a supplied voice). Max total seconds. */
+  referenceAudio?: { maxSec: number };
   maxReferenceImages: number;
   /** Real camera-control API parameter (not prompt text). */
   cameraControl?: string[];

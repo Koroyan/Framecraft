@@ -80,6 +80,15 @@ describe('routeVideo', () => {
     expect(total).toBeCloseTo(40, 1);
   });
 
+  it('lip-sync routes only to reference-audio models, and never as text-to-video (the face must come from an image)', () => {
+    const t2v = routeVideo(req({ speechAudio: true, durationSec: 5 }), all());
+    expect(t2v.chosen).toBeUndefined();
+    expect(t2v.rejected.some((r) => r.reasons.includes('lip-sync needs a first frame or reference image'))).toBe(true);
+    const i2v = routeVideo(req({ speechAudio: true, durationSec: 5, mode: 'image-to-video' }), all());
+    expect(i2v.chosen).toBeDefined();
+    expect(i2v.chosen!.model.capabilities.referenceAudio).toBeDefined();
+  });
+
   it('uses the image-to-video mode only on capable models', () => {
     const d = routeVideo(req({ mode: 'image-to-video' }), all());
     expect(d.chosen!.model.capabilities.modes).toContain('image-to-video');

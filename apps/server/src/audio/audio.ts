@@ -75,6 +75,8 @@ export async function createAudioJob(ctx: AppContext, user: SessionLike, input: 
         .insert(generationJobs)
         .values({ userId: user.id, projectId: input.projectId, ...link, kind: 'audio', status: 'completed', phase: 'Reused existing narration (no charge)', request: input, idempotencyKey: input.idempotencyKey, outputAssetId: cached.id, chargedCredits: 0, completedAt: new Date(), progress: 1 })
         .returning();
+      // Finished on the spot: tell the parent film, exactly as a recorded job does when it completes.
+      if (link.parentJobId) await enqueue(ctx.db, 'movie.check', { movieJobId: link.parentJobId }, { queue: 'generation', dedupeKey: `movie-check:${link.parentJobId}:${job!.id}` });
       return { job: job!, reused: true };
     }
   }

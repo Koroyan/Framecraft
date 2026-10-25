@@ -314,7 +314,6 @@ export function evalExpr(expr: string, T: number): number {
     .replace(/\bpow\(/g, 'Math.pow(')
     .replace(/\bmin\(/g, 'Math.min(')
     .replace(/\bfloor\(/g, 'Math.floor(');
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval
   return Function('__if', '__lt', '__clip', `return (${js});`)((c: number, a: number, b: number) => (c ? a : b), (a: number, b: number) => (a < b ? 1 : 0), (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v)));
 }
 

@@ -8,8 +8,9 @@ _Last updated: 2026-10-25._ Verification legend: **✅ verified** (automated tes
 |---|---|
 | `pnpm typecheck` (server, web, shared) | ✅ clean |
 | `pnpm lint` (ESLint + typescript-eslint + Next + React Hooks) | ✅ clean |
-| `packages/shared` unit tests | ✅ 18/18 |
-| `apps/server` unit + integration tests (PGlite Postgres, real FFmpeg, mocked provider HTTP) | ✅ 103/103 |
+| `packages/shared` unit tests | ✅ 24/24 |
+| `apps/server` unit + integration tests (PGlite Postgres, real FFmpeg, mocked provider HTTP) | ✅ 117/117 |
+| Real paid provider requests | Runway aleph2 video edit run by the user (localized edit result reviewed in the app); 2026-10-25: PIJILO photo ad (TTS + music, 8 credits) and one lip-sync shot (Wan 3.0, 81 credits + 2 for the voice and keyframe of two rejected, uncharged attempts) |
 | Playwright E2E (desktop + Pixel 7) on an isolated fixture stack (live generation off, separate DB) | ✅ 9/10 — the admin test needs `pnpm db:seed` on that DB; incl. the new editor-studio walkthrough. On the live dev server the paid paths skip themselves |
 | `pnpm build` (server bundle + Next.js production build, 22 routes) | ✅ |
 | Server bundle runs migrations; provider check CLI runs | ✅ |
@@ -69,7 +70,7 @@ _Last updated: 2026-10-25._ Verification legend: **✅ verified** (automated tes
 
 ## Partially implemented 🟡
 - Docker/compose: written; not run on this machine.
-- Gemini Omni direct: adapter present, model `unverified` (no documented duration control).
+- Gemini Omni direct: adapter present, model `unverified` (no documented duration control). The configured key is on the free tier: video requests return 429 "limit: 0" (no charge), now reported as "no quota for this model" instead of retried. Enable billing at ai.dev before it can be tested.
 - Several fal.ai models `unverified` (schema or price not confirmed) and excluded from routing.
 - Subscription cancellation is recorded locally; Stripe-side cancellation is not automated.
 - Plan watermark flag and storage quotas exist but are not enforced in render/upload.
@@ -81,6 +82,20 @@ _Last updated: 2026-10-25._ Verification legend: **✅ verified** (automated tes
 - Social platform publishing / analytics (requires platform approval).
 - BullMQ/Redis (deliberately replaced by the Postgres queue; see docs/ARCHITECTURE.md).
 
+## Manual editor & product ads (Framecraft 3.0)
+- **Colour**: one LUT per clip from basic tone (exposure…whites/blacks, vibrance, fade), curves (RGB + per channel), lift/gamma/gain wheels, 8 HSL bands, colour replacement, imported .cube LUTs and looks; FFmpeg `lut3d` in the export and a WebGL2 3D-texture preview with the same table (pixel-checked). Blur, sharpness, vignette, grain and glow are spatial filters (preview approximate).
+- **Local recolour + tracking**: pick a colour (eyedropper), choose the new one, limit it to a drawn area that follows a tracked object (NCC template tracker, forward/backward, confidence, smoothing). Masks used by AI edits can be tracked too.
+- **Layers**: picture-in-picture video, images, text (Georgian/English/Russian fonts, gradient, outline, shadow, background), shapes and stickers (pill, ellipse, bubble, arrow, burst, price/CTA/sale templates); keyframes, pop / slide / zoom / fade / typewriter / word-by-word animations, crop, green screen, flip, opacity, track order; text/shapes are rendered by the server so preview and export match; direct manipulation with snapping; TikTok/Reels safe zones.
+- **Timeline**: layer lanes (drag to move, drag edges to trim), filmstrips, waveforms, track lock/hide, audio ducking (sidechain), denoise, loudness normalisation, auto reframe (crop follows a tracked subject).
+- **Product video → ad** (Ad Studio → Create an ad from my videos): brand kits; footage analysis (scene cuts, sharpness, exposure, motion, shake, sound, duplicates, AI vision notes); AI creative plan in 15 styles validated against the footage; editable storyboard (swap footage, durations, texts, transitions, VO, CTA); assembly into a normal editable project keeping every clip's source file and interval; titles, CTA, logo + logo end card, voice-over, ducked music, render; variants by format, length and language; AI-enhanced mode with a product lock, each change reviewed per shot (reject = real footage).
+- **Lip-sync for Georgian/Russian dialogue** ✅ *run live 2026-10-25*: speaking lines are recorded first (ElevenLabs), a keyframe is drawn for each speaking shot (even when the film's keyframes are off), then the shot is generated from its recording with a Runway model that accepts reference audio (Seedance 2.5 / Seedance 2 Mini / Wan 3 / Wan 3 Prime / MiniMax H3); voices sit on the timeline at the same offsets. Live test (Wan 3.0, 5 s, 9:16, "შეხედეთ, ეს პატარა მე ვარ — PIJILO-ს საჩუქარი!"): the mouth opens and shapes during speech, closes in the pauses and rests after the line. Provider rules learned live (both rejected for free): audio cannot be the only reference, and a first-frame keyframe cannot be combined with audio — the keyframe is sent as an unpositioned reference image. Falls back to dubbed voice over a silent-mouth shot when no such model fits.
+- **Ads from photos only**: each photo becomes a clip of the exact picture (fitted over a blurred fill, gentle push-in even for static styles) — no AI. Live PIJILO ad (4 figurine photos, Georgian voice-over + music, 8 credits) rendered and reviewed; text sits above heads / in the lower third with a readable backing, logo enters after the title hook.
+
+## Manual editor & ads — honest limits
+- Tracking is a classic template tracker (translation only, no rotation/scale, no AI segmentation); hard occlusions need manual correction or a shorter range.
+- Not built yet: multi-clip primary video tracks with blend modes, slip/slide edits, clip grouping, audio volume automation curves, beat detection / beat-synced cuts, GIF/animated stickers, cover-image editor, captions/hashtags generator for ads, upscaling/denoise/stabilisation presets for uploads, reference-ad remix beyond pacing.
+- Custom colour presets are stored in the browser (localStorage).
+
 ## Editor studio — honest limits
 - Runway aleph2 was validated against its OpenAPI spec and with free validation requests; it has **not** yet been run with real credits from the app (mocked-contract tests). Its first live use should be reviewed.
 - aleph2 accepts no mask and no reference images: masks are enforced by local compositing (pixel-exact outside, model-dependent inside); reference images are not sent (an edited guide frame is).
@@ -91,7 +106,7 @@ _Last updated: 2026-10-25._ Verification legend: **✅ verified** (automated tes
 - Chat mode is covered by integration tests with a scripted model; replies from the real model should be reviewed in live use (each message is one Claude call). Replies are written by a queue job (`chat.turn`) while the chat shows "thinking", because a reply that writes ad ideas can take longer than the 30-second web proxy timeout.
 - The embedded dev database (PGlite) is single-process. Two API processes on one directory corrupted its WAL on 2026-10-24 (recovered by pointing pg_control at the last valid checkpoint; nothing lost). The API now holds a pid lock (`.data/pglite.lock`) and refuses to open a directory that another live process has open. Keep the project's `.data` out of OneDrive sync if possible.
 - Runway `muse_image` rejects `tag` on reference images (validated 2026-10-25); tags are sent only to gen4 image models. If a first frame is rejected (validation/policy), the shot continues without it instead of stalling.
-- The bundled FFmpeg is a 2018 build without `xfade`. Transitions fall back to fade-through-black locally; the Docker image uses a modern FFmpeg.
+- The bundled FFmpeg is a 2018 build without `xfade`. Transitions are blended piece by piece (each transition is a short separate render), with the same overlap the editor uses for layers and voices; earlier the fallback did not overlap, so overlays drifted after each transition. Large single-graph approaches (overlay chains, split) crash this build at 1080p. The Docker image uses a modern FFmpeg (`xfade`).
 - Quality tiers are provisional until real evaluations are recorded.
 - Provider prices change; review Admin → Models & pricing before launch.
 - Runway tier-1 accounts render **one video per model at a time** (`maxConcurrentGenerations: 1`), so film shots are serialised; higher Runway tiers or fal.ai parallelise.

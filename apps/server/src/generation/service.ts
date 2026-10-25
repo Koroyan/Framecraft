@@ -67,7 +67,7 @@ async function loadLocations(db: Db, userId: string, ids: string[]) {
  * Validate inputs, apply plan limits and route. No side effects.
  * `assumeFirstFrame`: estimate as image-to-video for a shot whose keyframe will be drawn first.
  */
-export async function prepareEstimate(ctx: AppContext, user: SessionLike, input: VideoSpecInput, opts: { assumeFirstFrame?: boolean } = {}): Promise<PreparedSpec> {
+export async function prepareEstimate(ctx: AppContext, user: SessionLike, input: VideoSpecInput, opts: { assumeFirstFrame?: boolean; assumeSpeech?: boolean } = {}): Promise<PreparedSpec> {
   const spec = videoSpecSchema.parse(input);
   const plan = await getUserPlan(ctx.db, user.id);
   const warnings: string[] = [];
@@ -82,6 +82,11 @@ export async function prepareEstimate(ctx: AppContext, user: SessionLike, input:
   for (const id of [spec.imageAssetId, spec.endImageAssetId, ...spec.referenceAssetIds].filter(Boolean) as string[]) {
     const a = await getOwnedAsset(ctx, user.id, id);
     if (a.mediaType !== 'image') throw badRequest('Reference and frame inputs must be images');
+  }
+  if (spec.speechAudioAssetId) {
+    const a = await getOwnedAsset(ctx, user.id, spec.speechAudioAssetId);
+    if (a.mediaType !== 'audio') throw badRequest('The lip-sync recording must be an audio file');
+    warnings.push('Lip-sync: the character’s mouth follows your recorded line, so it matches the voice-over language.');
   }
   const chars = await loadCharacters(ctx.db, user.id, spec.characterIds);
   const locs = await loadLocations(ctx.db, user.id, spec.locationIds);
@@ -107,6 +112,7 @@ export async function prepareEstimate(ctx: AppContext, user: SessionLike, input:
       quality: spec.quality,
       minResolution: spec.resolution,
       nativeAudio: spec.nativeAudio,
+      speechAudio: Boolean(spec.speechAudioAssetId || opts.assumeSpeech),
       referenceCount: mode === 'reference-to-video' ? referenceAssetIds.length : 0,
       modelKey: spec.modelKey,
       maxCredits: spec.maxCredits,
@@ -327,6 +333,18 @@ export async function getOwnedJob(ctx: AppContext, user: SessionLike, jobId: str
 export async function cancelGeneration(ctx: AppContext, user: SessionLike, jobId: string): Promise<Job> {
   const job = await getOwnedJob(ctx, user, jobId);
   if (['completed', 'failed', 'cancelled'].includes(job.status)) return job;
+  if (job.kind === 'movie') {
+    // A film has no worker of its own: cancel its unfinished parts, then close it with what they charged.
+    const children = await ctx.db.select().from(generationJobs).where(eq(generationJobs.parentJobId, jobId));
+    for (const c of children.filter((c) => !['completed', 'failed', 'cancelled'].includes(c.status))) await cancelGeneration(ctx, user, c.id);
+    const charged = (await ctx.db.select({ c: generationJobs.chargedCredits }).from(generationJobs).where(eq(generationJobs.parentJobId, jobId))).reduce((s, r) => s + (r.c ?? 0), 0);
+    const [closed] = await ctx.db
+      .update(generationJobs)
+      .set({ status: 'cancelled', phase: 'Cancelled', cancelRequestedAt: new Date(), completedAt: new Date(), updatedAt: new Date(), chargedCredits: charged })
+      .where(and(eq(generationJobs.id, jobId), inArray(generationJobs.status, ['queued', 'preparing', 'generating', 'processing', 'rendering'])))
+      .returning();
+    return closed ?? job;
+  }
   if (job.status === 'queued' && !(job.checkpoint as { segments?: { externalId?: string }[] }).segments?.some((s) => s.externalId)) {
     // Nothing submitted to a provider yet: cancel immediately and release everything.
     const [updated] = await ctx.db
