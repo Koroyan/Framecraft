@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { adBriefSchema, adBriefSchema as briefSchema, adPlanSchema } from '@framecraft/shared';
 import type { AppContext } from '../../context';
 import { parse, requireUser } from '../app';
-import { applyReviewOption, brandKitInputSchema, chooseConcept, createCampaign, createVariant, estimateCampaign, getCampaign, listBrandKits, listCampaigns, replan, runEnhancements, saveBrandKit, startAssembly, updatePlan } from '../../ads/campaigns';
+import { applyReviewOption, brandKitInputSchema, chooseConcept, setBudget, createCampaign, createVariant, estimateCampaign, getCampaign, listBrandKits, listCampaigns, replan, runEnhancements, saveBrandKit, startAssembly, updatePlan } from '../../ads/campaigns';
 import { analyzeWebsite } from '../../brand/website';
 import { FetchBlocked } from '../../brand/safe-fetch';
 import { deleteProduct, importBrandImage, listProducts, productInputSchema, saveProduct } from '../../brand/brand';
@@ -73,6 +73,11 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
     const body = parse(z.union([z.object({ scope: z.literal('all') }), z.object({ scope: z.literal('scene'), sceneIndex: z.number().int().min(0) })]), req.body);
     return replan(ctx, requireUser(req), id, body);
   });
+  app.put('/api/ads/campaigns/:id/budget', async (req) => {
+    const { id } = parse(idParam, req.params);
+    const { budgetCredits } = parse(z.object({ budgetCredits: z.number().int().min(0).max(10_000_000).nullable() }), req.body);
+    return setBudget(ctx, requireUser(req), id, budgetCredits);
+  });
   app.post('/api/ads/campaigns/:id/concept', limit, async (req) => {
     const { id } = parse(idParam, req.params);
     const { key } = parse(z.object({ key: z.string().min(1).max(40) }), req.body);
@@ -102,7 +107,7 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
   });
   app.post('/api/ads/campaigns/:id/enhance', limit, async (req) => {
     const { id } = parse(idParam, req.params);
-    const body = parse(z.object({ approvedCredits: z.number().int().min(0) }), req.body);
-    return runEnhancements(ctx, requireUser(req), id, body.approvedCredits);
+    const body = parse(z.object({ approvedCredits: z.number().int().min(0), sceneIds: z.array(z.string().max(40)).max(60).optional() }), req.body);
+    return runEnhancements(ctx, requireUser(req), id, body.approvedCredits, body.sceneIds);
   });
 }

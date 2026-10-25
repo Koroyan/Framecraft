@@ -140,7 +140,7 @@ export async function estimateCampaign(ctx: AppContext, user: SessionLike, brief
   const enhancements = brief.mode === 'enhanced' ? plan.scenes.filter((s) => s.enhance).map((s) => ({ sceneId: s.id, credits: quoteCredits(Math.max(ALEPH.minUsd, Math.min(ALEPH.maxInputSec, s.durationSec + 2) * ALEPH.usdPerSecond), s.durationSec, 'verified', rules).credits })) : [];
   const enhance = enhancements.reduce((s, e) => s + e.credits, 0);
   const budget = brief.budgetCredits ?? null;
-  return { voice, voiceAvailable, music, musicAvailable, enhance, enhancements, editingAndRender: 0, assembleTotal: voice + music, budget, withinBudget: budget === null || voice + music + enhance <= budget, note: 'Cutting, colour, titles, logo and export are local processing and cost no credits. AI enhancements run only when you start them, and each result is reviewed before it is used.' };
+  return { voice, voiceAvailable, music, musicAvailable, enhance, enhancements, editingAndRender: 0, assembleTotal: voice + music, budget, assembleWithinBudget: budget === null || voice + music <= budget, enhanceWithinBudget: budget === null || voice + music + enhance <= budget, note: 'Cutting, colour, titles, logo and export are local processing and cost no credits. AI enhancements run only when you start them, and each result is reviewed before it is used.' };
 }
 
 // ---------------------------------------------------------------- plan editing
@@ -158,6 +158,15 @@ export async function updatePlan(ctx: AppContext, user: SessionLike, id: string,
   const review = reviewPlanDiversity(plan, segments, brief.lengthSec);
   await set(ctx, id, { plan: { ...plan, estimate }, review: { diversity: review }, status: 'planned' });
   return { plan, estimate, review };
+}
+
+/** Change this ad's spending cap (null = no cap; every paid step still asks for approval). */
+export async function setBudget(ctx: AppContext, user: SessionLike, id: string, budgetCredits: number | null) {
+  const c = await ownedCampaign(ctx, user, id);
+  const brief = adBriefSchema.parse({ ...c.brief, budgetCredits });
+  const estimate = c.plan ? await estimateCampaign(ctx, user, brief, adPlanSchema.parse(c.plan)) : null;
+  await set(ctx, id, { brief, ...(estimate ? { plan: { ...c.plan, estimate } } : {}) });
+  return { budgetCredits, estimate };
 }
 
 /** Re-plan with another concept (no new analysis). */
@@ -363,20 +372,24 @@ const LOCK = {
 } as const;
 
 /** Start the plan's reviewable AI enhancements (each becomes a new version, never auto-used). */
-export async function runEnhancements(ctx: AppContext, user: SessionLike, id: string, approvedCredits: number) {
+export async function runEnhancements(ctx: AppContext, user: SessionLike, id: string, approvedCredits: number, sceneIds?: string[]) {
   const c = await ownedCampaign(ctx, user, id);
   const brief = adBriefSchema.parse(c.brief);
   if (brief.mode !== 'enhanced') throw badRequest('This ad uses original footage only');
   if (!c.projectId || !c.plan) throw badRequest('Assemble the ad first');
   const plan = adPlanSchema.parse(c.plan);
   const est = await estimateCampaign(ctx, user, brief, plan);
-  if (est.enhance > approvedCredits) throw paymentRequired(`The enhancements need ${est.enhance} credits — approve that amount to start them.`, { required: est.enhance });
-  if (brief.budgetCredits !== null && est.enhance + est.assembleTotal > brief.budgetCredits) throw paymentRequired(`The enhancements would take this ad to ${est.enhance + est.assembleTotal} credits, above your ${brief.budgetCredits}-credit budget.`, { required: est.enhance, budget: brief.budgetCredits });
+  // A subset (e.g. one shot as a preview) costs only its own shots.
+  const chosen = sceneIds?.length ? est.enhancements.filter((e) => sceneIds.includes(e.sceneId)) : est.enhancements;
+  if (sceneIds?.length && !chosen.length) throw badRequest('None of these shots has an AI enhancement planned');
+  const cost = chosen.reduce((t, e) => t + e.credits, 0);
+  if (cost > approvedCredits) throw paymentRequired(`The selected enhancements need ${cost} credits — approve that amount to start them.`, { required: cost });
+  if (brief.budgetCredits !== null && cost + est.assembleTotal > brief.budgetCredits) throw paymentRequired(`The enhancements would take this ad to ${cost + est.assembleTotal} credits, above your ${brief.budgetCredits}-credit budget.`, { required: cost, budget: brief.budgetCredits });
   const { timeline } = await getTimeline(ctx, user, c.projectId);
   const projShots = await ctx.db.select().from(shots).where(eq(shots.projectId, c.projectId));
   const started: string[] = [];
   for (const [i, sc] of plan.scenes.entries()) {
-    if (!sc.enhance) continue;
+    if (!sc.enhance || !chosen.some((e) => e.sceneId === sc.id)) continue;
     const shot = projShots.find((s) => s.index === i);
     const clip = shot && timeline.clips.find((x) => x.shotId === shot.id);
     if (!shot || !clip || clip.freezeSec) continue;

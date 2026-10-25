@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, ImagePlus, MapPin, Plus, UserRound, X } from 'lucide-react';
+import { Check, ImagePlus, MapPin, Plus, Trash2, UserRound, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, ApiError } from '@/lib/api';
 import { Button, Dialog, Field, Input, Textarea } from '@/components/ui';
@@ -28,6 +28,25 @@ export function CastPicker({ characterIds, locationIds, onCharacters, onLocation
   const chars = useElements('character');
   const locs = useElements('location');
   const [creating, setCreating] = useState<Kind | null>(null);
+  const [removing, setRemoving] = useState<{ kind: Kind; el: Element } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const qc = useQueryClient();
+  const remove = async () => {
+    if (!removing) return;
+    setDeleting(true);
+    try {
+      await api(`${API[removing.kind]}/${removing.el.id}`, { method: 'DELETE' });
+      if (removing.kind === 'character') onCharacters(characterIds.filter((x) => x !== removing.el.id));
+      else onLocations(locationIds.filter((x) => x !== removing.el.id));
+      await qc.invalidateQueries({ queryKey: [KEY[removing.kind]] });
+      toast.success(`${removing.el.name} deleted`);
+      setRemoving(null);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Could not delete');
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const toggle = (ids: string[], id: string, max: number, set: (v: string[]) => void) => {
     if (ids.includes(id)) set(ids.filter((x) => x !== id));
@@ -35,31 +54,49 @@ export function CastPicker({ characterIds, locationIds, onCharacters, onLocation
     else set([...ids, id]);
   };
 
-  const chip = (e: Element, on: boolean, onClick: () => void, Icon: typeof UserRound) => (
-    <button
-      key={e.id}
-      type="button"
-      onClick={onClick}
-      aria-pressed={on}
-      title={e.description}
-      className={cn('flex shrink-0 items-center gap-2 rounded-xl border py-1 pl-1 pr-3 text-xs transition', on ? 'border-iris-400 bg-iris-500/15 text-white' : 'border-white/10 text-fog-200 hover:border-white/25')}
-    >
-      {e.references[0] ? <img src={e.references[0].url} alt="" className="size-7 rounded-lg object-cover" /> : <span className="grid size-7 place-items-center rounded-lg bg-white/[0.06]"><Icon className="size-3.5" /></span>}
-      <span className="max-w-28 truncate">{e.name}</span>
-      {on && <Check className="size-3.5 text-iris-300" />}
-    </button>
+  const chip = (kind: Kind, e: Element, on: boolean, onClick: () => void, Icon: typeof UserRound) => (
+    <span key={e.id} className="group relative flex shrink-0">
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={on}
+        title={e.description}
+        className={cn('flex items-center gap-2 rounded-xl border py-1 pl-1 pr-7 text-xs transition', on ? 'border-iris-400 bg-iris-500/15 text-white' : 'border-white/10 text-fog-200 hover:border-white/25')}
+      >
+        {e.references[0] ? <img src={e.references[0].url} alt="" className="size-7 rounded-lg object-cover" /> : <span className="grid size-7 place-items-center rounded-lg bg-white/[0.06]"><Icon className="size-3.5" /></span>}
+        <span className="max-w-28 truncate">{e.name}</span>
+        {on && <Check className="size-3.5 text-iris-300" />}
+      </button>
+      <button type="button" aria-label={`Delete ${e.name}`} title={`Delete ${e.name}`} onClick={() => setRemoving({ kind, el: e })} className="absolute right-1.5 top-1/2 grid size-5 -translate-y-1/2 place-items-center rounded-md text-fog-500 transition hover:bg-signal-red/15 hover:text-signal-red focus-visible:text-signal-red">
+        <Trash2 className="size-3" />
+      </button>
+    </span>
   );
 
   return (
     <div className="space-y-3">
       <Row label="Characters" hint="Same face in every video" onAdd={() => setCreating('character')}>
-        {(chars.data ?? []).map((c) => chip(c, characterIds.includes(c.id), () => toggle(characterIds, c.id, 5, onCharacters), UserRound))}
+        {(chars.data ?? []).map((c) => chip('character', c, characterIds.includes(c.id), () => toggle(characterIds, c.id, 5, onCharacters), UserRound))}
         {chars.data && !chars.data.length && <span className="text-xs text-fog-400">No characters yet — add one with a photo.</span>}
       </Row>
       <Row label="Locations" hint="Same place every time" onAdd={() => setCreating('location')}>
-        {(locs.data ?? []).map((l) => chip(l, locationIds.includes(l.id), () => toggle(locationIds, l.id, 2, onLocations), MapPin))}
+        {(locs.data ?? []).map((l) => chip('location', l, locationIds.includes(l.id), () => toggle(locationIds, l.id, 2, onLocations), MapPin))}
         {locs.data && !locs.data.length && <span className="text-xs text-fog-400">No locations yet.</span>}
       </Row>
+      <Dialog
+        open={Boolean(removing)}
+        onOpenChange={(o) => !o && setRemoving(null)}
+        title={`Delete ${removing?.el.name ?? ''}?`}
+        description={removing?.kind === 'character' ? 'The character is removed from your library; its photos stay in your Media Library. Films already made are not changed.' : 'The location is removed from your library. Films already made are not changed.'}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setRemoving(null)}>Cancel</Button>
+            <Button variant="danger" loading={deleting} onClick={remove}><Trash2 /> Delete</Button>
+          </>
+        }
+      >
+        <span />
+      </Dialog>
       <QuickCreate
         kind={creating}
         onClose={() => setCreating(null)}

@@ -2,7 +2,7 @@ import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { movieBriefSchema, type MovieBrief } from '@framecraft/shared';
 import type { AppContext } from '../context';
-import { assets, chatMessages, chatSessions, generationJobs, projects, shots, userSettings, users } from '../db/schema';
+import { assets, characterReferences, characters, chatMessages, chatSessions, generationJobs, locationReferences, locations, projects, shots, userSettings, users } from '../db/schema';
 import { createMovie, replanMovie } from '../movie/movie';
 import { enqueue, type QueueJob } from '../queue/queue';
 import { assetUrl, getOwnedAsset } from '../services/assets';
@@ -227,10 +227,47 @@ function transcript(messages: (typeof chatMessages.$inferSelect)[]) {
 
 const APPROVE = /\b(approve|approved|go|generate|ok|yes|start)\b|დავადასტურ|დადასტურ|დაიწყე|გააკეთე|კარგი|დიახ|ჰო|გენერირ|утверж|давай|запуск|генерир|да\b/i;
 
-export async function postChatMessage(ctx: AppContext, user: SessionLike, sessionId: string, input: { content: string; attachments?: { assetId: string; kind?: 'photo' | 'logo' | 'product'; note?: string }[] }) {
+export type ChatMention = { kind: 'character' | 'location'; id: string };
+
+/**
+ * @Name mentions of saved characters and locations: their photos join the conversation's
+ * references (photoN, like attached photos) so the screenplay keeps the same face or place, and
+ * the mention in the text becomes "Name (photoN)" for the AI Director.
+ */
+async function resolveMentions(ctx: AppContext, user: SessionLike, state: AdState, content: string, mentions: ChatMention[]) {
+  let text = content;
+  for (const m of mentions) {
+    const table = m.kind === 'character' ? characters : locations;
+    const [el] = await ctx.db.select({ id: table.id, name: table.name, description: table.description }).from(table).where(and(eq(table.id, m.id), eq(table.userId, user.id)));
+    if (!el) throw notFound(m.kind === 'character' ? 'Character' : 'Location');
+    const photos =
+      m.kind === 'character'
+        ? (await ctx.db.select({ assetId: characterReferences.assetId, isPrimary: characterReferences.isPrimary }).from(characterReferences).where(eq(characterReferences.characterId, el.id))).sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary))
+        : await ctx.db.select({ assetId: locationReferences.assetId }).from(locationReferences).where(eq(locationReferences.locationId, el.id));
+    const refs = (state.references ??= []);
+    const tokens: string[] = [];
+    for (const p of photos.slice(0, 2)) {
+      const known = refs.find((r) => r.assetId === p.assetId);
+      if (known) {
+        tokens.push(known.token);
+        continue;
+      }
+      if (refs.length >= 12) break;
+      const token = `photo${refs.length + 1}`;
+      refs.push({ token, assetId: p.assetId, note: `${m.kind === 'character' ? 'saved character' : 'saved location'} ${el.name}${el.description ? `: ${el.description}` : ''}`.slice(0, 200) });
+      tokens.push(token);
+    }
+    const label = tokens.length ? `${el.name} (${tokens.join(', ')})` : `${el.name} (saved ${m.kind}${el.description ? `: ${el.description.slice(0, 160)}` : ''})`;
+    const mention = `@${el.name}`;
+    text = text.includes(mention) ? text.split(mention).join(label) : `${text}${text ? ' ' : ''}${label}`;
+  }
+  return text;
+}
+
+export async function postChatMessage(ctx: AppContext, user: SessionLike, sessionId: string, input: { content: string; attachments?: { assetId: string; kind?: 'photo' | 'logo' | 'product'; note?: string }[]; mentions?: ChatMention[] }) {
   const s = await ownedSession(ctx, user, sessionId);
   const state = { ...(s.state as AdState) };
-  const content = input.content.trim();
+  const content = input.mentions?.length ? await resolveMentions(ctx, user, state, input.content.trim(), input.mentions) : input.content.trim();
   if (!content && !input.attachments?.length) throw badRequest('Write a message or attach a photo');
   if (thinking(state)) throw conflict(T.busy[state.lang ?? 'en']);
   state.lang = detectLang(content) ?? state.lang ?? 'en';

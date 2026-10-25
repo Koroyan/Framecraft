@@ -19,6 +19,9 @@ import { generateLogoCard, stillToClip } from '../media/ffmpeg';
  */
 
 // Text sits above heads (title) or in the lower third, clear of the bottom ~20% that social apps cover.
+/** A short brand ending: long static logo cards lose viewers. */
+const END_CARD_SEC = 2.2;
+
 const ROLE_POS = { title: 0.1, lower_third: 0.72, caption: 0.74, price: 0.64, cta: 0.68 } as const;
 
 export async function assembleAd(ctx: AppContext, user: SessionLike, p: { campaignId: string; brief: AdBrief; plan: AdPlan; title: string; aspectRatio?: AdBrief['aspectRatio']; lengthScale?: number }) {
@@ -115,15 +118,15 @@ export async function assembleAd(ctx: AppContext, user: SessionLike, p: { campai
           try {
             const file = await downloadAssetToTemp(ctx, logo as Asset);
             const out = path.join(dir, 'card.mp4');
-            await generateLogoCard(file, out, { width: dims.width, height: dims.height, durationSec: 3, background: brand.colors.secondary });
+            await generateLogoCard(file, out, { width: dims.width, height: dims.height, durationSec: END_CARD_SEC, background: brand.colors.secondary });
             const card = await storeAsset(ctx, { userId: user.id, projectId: project!.id, kind: 'generated', mediaType: 'video', filePath: out, mimeType: 'video/mp4', source: { logoCard: true, aiGenerated: false } });
             await fsp.rm(file, { force: true });
-            const [shot] = await ctx.db.insert(shots).values({ projectId: project!.id, sceneId: scene!.id, index: p.plan.scenes.length, description: 'Brand end card', durationSec: 3, status: 'ready', currentAssetId: card.id }).returning();
+            const [shot] = await ctx.db.insert(shots).values({ projectId: project!.id, sceneId: scene!.id, index: p.plan.scenes.length, description: 'Brand end card', durationSec: Math.round(END_CARD_SEC), status: 'ready', currentAssetId: card.id }).returning();
             const v = await recordShotVersion(ctx.db, { projectId: project!.id, shotId: shot!.id, assetId: card.id, source: 'generated', label: 'Logo end card (from your logo file)', activate: true });
             if (clips.length) clips[clips.length - 1]!.transition ??= { type: 'fade', durationSec: 0.4 };
-            clips.push({ id: 'clip-endcard', assetId: card.id, shotId: shot!.id, versionId: v.id, inSec: 0, outSec: 3, volume: 0, label: 'Brand end card' });
-            if (p.plan.cta) layers.push({ id: 'cta-end', name: 'cta', kind: 'text', track: 2, startSec: Math.round((t + 0.4) * 100) / 100, endSec: Math.round((t + 2.9) * 100) / 100, x: 0.5, y: 0.78, w: 0.8, text: { content: p.plan.cta, font: 'bold', size: 60, color: brand.colors.text ?? '#FFFFFF' }, animIn: { type: 'slide_up', durationSec: 0.5 } });
-            t += 3 - 0.4;
+            clips.push({ id: 'clip-endcard', assetId: card.id, shotId: shot!.id, versionId: v.id, inSec: 0, outSec: END_CARD_SEC, volume: 0, label: 'Brand end card' });
+            if (p.plan.cta) layers.push({ id: 'cta-end', name: 'cta', kind: 'text', track: 2, startSec: Math.round((t + 0.4) * 100) / 100, endSec: Math.round((t + END_CARD_SEC - 0.1) * 100) / 100, x: 0.5, y: 0.78, w: 0.8, text: { content: p.plan.cta, font: 'bold', size: 60, color: brand.colors.text ?? '#FFFFFF' }, animIn: { type: 'slide_up', durationSec: 0.5 } });
+            t += END_CARD_SEC - 0.4;
           } finally {
             await fsp.rm(dir, { recursive: true, force: true });
           }

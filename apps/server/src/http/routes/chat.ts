@@ -44,6 +44,7 @@ export async function chatRoutes(app: FastifyInstance, ctx: AppContext) {
       z.object({
         content: z.string().max(4000).default(''),
         attachments: z.array(z.object({ assetId: z.string().uuid(), kind: z.enum(['photo', 'logo', 'product']).optional(), note: z.string().max(120).optional() })).max(8).default([]),
+        mentions: z.array(z.object({ kind: z.enum(['character', 'location']), id: z.string().uuid() })).max(8).default([]),
       }),
       req.body,
     );

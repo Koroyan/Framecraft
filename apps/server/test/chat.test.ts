@@ -9,7 +9,7 @@ import { storeAsset } from '../src/services/assets';
 import { chatAction, createChatSession, getChatSession, postChatMessage } from '../src/chat/chat';
 import { htmlToText, linksIn, readWebPage } from '../src/chat/web';
 import { buildDefaultTimeline } from '../src/editor/editor';
-import { assets, characters, projects, shots } from '../src/db/schema';
+import { assets, characterReferences, characters, locations, projects, shots } from '../src/db/schema';
 import { createMovie, estimateMovie, regenerateShot } from '../src/movie/movie';
 import type { MoviePlan } from '../src/director/director';
 
@@ -171,6 +171,26 @@ describe('chat mode (scripted AI Director)', () => {
     expect(clip).toMatchObject({ mediaType: 'video', hasAudio: true });
     expect(clip!.source).toMatchObject({ logoCard: true, aiGenerated: false, fromAssetId: logo });
   }, 120_000);
+
+  it('@mentions bring saved characters and locations into the conversation (their photos become references)', async () => {
+    const u = await h.makeUser();
+    const face = await image(u.id, 'nino-face');
+    const [nino] = await h.ctx.db.insert(characters).values({ userId: u.id, name: 'Nino', description: 'young woman, chestnut hair' }).returning();
+    await h.ctx.db.insert(characterReferences).values({ characterId: nino!.id, assetId: face, isPrimary: true });
+    const [yard] = await h.ctx.db.insert(locations).values({ userId: u.id, name: 'Old Tbilisi yard', description: 'wooden balconies at dusk' }).returning();
+    const { session } = await createChatSession(h.ctx, u, 'movie');
+    turns.push({ reply: 'ვწერ სცენარს.', action: 'write_screenplay', brief: { idea: 'Nino (photo1) in an old Tbilisi yard', lengthSec: 15, language: 'ka' }, revision: '', suggestions: [] });
+    await postChatMessage(h.ctx, u, session.id, { content: '@Nino ცეკვავს @Old Tbilisi yard-ში', mentions: [{ kind: 'character', id: nino!.id }, { kind: 'location', id: yard!.id }] });
+    const s = await getChatSession(h.ctx, u, session.id);
+    const sent = s.messages.find((m) => m.role === 'user')!;
+    expect(sent.content).toBe('Nino (photo1) ცეკვავს Old Tbilisi yard (saved location: wooden balconies at dusk)-ში');
+    expect(s.session.references).toEqual([{ token: 'photo1', assetId: face, note: 'saved character Nino: young woman, chestnut hair' }]);
+    // Someone else's character cannot be mentioned.
+    const other = await h.makeUser();
+    await h.drain();
+    const { session: s2 } = await createChatSession(h.ctx, other, 'movie');
+    await expect(postChatMessage(h.ctx, other, s2.id, { content: '@Nino', mentions: [{ kind: 'character', id: nino!.id }] })).rejects.toMatchObject({ status: 404 });
+  });
 
   it("does not open another user's conversation", async () => {
     const a = await h.makeUser();

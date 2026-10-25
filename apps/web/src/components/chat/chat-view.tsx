@@ -4,12 +4,13 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowUp, Clapperboard, ImagePlus, LayoutList, Megaphone, Package, Stamp, X } from 'lucide-react';
+import { ArrowUp, AtSign, Clapperboard, ImagePlus, LayoutList, MapPin, Megaphone, Package, Stamp, UserRound, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, ApiError } from '@/lib/api';
 import { Button, Skeleton, Spinner, buttonVariants } from '@/components/ui';
 import { useUploader } from '@/components/studio/upload';
-import { timeAgo } from '@/lib/utils';
+import { useElements } from '@/components/studio/cast-picker';
+import { cn, timeAgo } from '@/lib/utils';
 import { BudgetCard, ConceptsCard, FilmCard, ScreenplayCard, type AdConcept } from './cards';
 
 type Attachment = { assetId: string; kind: 'photo' | 'logo' | 'product'; token?: string };
@@ -20,6 +21,7 @@ type ChatData = {
   assetUrls: Record<string, string>;
 };
 type Pending = { assetId: string; kind: Attachment['kind']; url: string };
+type Mention = { kind: 'character' | 'location'; id: string; name: string; url?: string; description?: string };
 
 const STARTERS = {
   movie: ['A short love story in old Tbilisi, 45 seconds', 'An epic fantasy trailer, 30 s, vertical for TikTok', 'ნინო და გიორგი ზღვის პირას — რომანტიკული ფილმი, 1 წუთი'],
@@ -42,6 +44,30 @@ export function ChatView({ sessionId }: { sessionId: string }) {
   const bottom = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const uploader = useUploader({ kind: 'reference' });
+  // @mentions of saved characters and locations.
+  const chars = useElements('character');
+  const locs = useElements('location');
+  const [mentions, setMentions] = useState<Mention[]>([]);
+  const [menu, setMenu] = useState<{ query: string; start: number; active: number } | null>(null);
+  const cast: Mention[] = [...(chars.data ?? []).map((c) => ({ kind: 'character' as const, id: c.id, name: c.name, url: c.references[0]?.url, description: c.description })), ...(locs.data ?? []).map((l) => ({ kind: 'location' as const, id: l.id, name: l.name, url: l.references[0]?.url, description: l.description }))];
+  const matches = menu ? cast.filter((m) => m.name.toLowerCase().includes(menu.query.toLowerCase())).slice(0, 8) : [];
+  const trackMention = (value: string, caret: number) => {
+    const m = value.slice(0, caret).match(/(^|\s)@([^@\n]{0,30})$/);
+    setMenu(m ? { query: m[2]!, start: caret - m[2]!.length - 1, active: 0 } : null);
+  };
+  const pickMention = (m: Mention) => {
+    if (!menu) return;
+    const caret = menu.start + 1 + menu.query.length;
+    const next = `${text.slice(0, menu.start)}@${m.name} ${text.slice(caret)}`;
+    setText(next);
+    setMentions((all) => (all.some((x) => x.id === m.id) ? all : [...all, m]));
+    setMenu(null);
+    requestAnimationFrame(() => {
+      const pos = menu.start + m.name.length + 2;
+      input.current?.focus();
+      input.current?.setSelectionRange(pos, pos);
+    });
+  };
 
   const d = q.data;
   const thinking = Boolean(sending || d?.session.thinking);
@@ -63,11 +89,13 @@ export function ChatView({ sessionId }: { sessionId: string }) {
   const apply = (next: ChatData) => qc.setQueryData(key, next);
 
   const send = async (content = text) => {
-    const body = { content: content.trim(), attachments: pending.map((p) => ({ assetId: p.assetId, kind: p.kind })) };
+    const used = mentions.filter((m) => content.includes(`@${m.name}`));
+    const body = { content: content.trim(), attachments: pending.map((p) => ({ assetId: p.assetId, kind: p.kind })), mentions: used.map((m) => ({ kind: m.kind, id: m.id })) };
     if ((!body.content && !body.attachments.length) || thinking) return;
     setSending({ content: body.content, attachments: pending });
     setText('');
     setPending([]);
+    setMentions([]);
     try {
       apply(await api<ChatData>(`/api/chat/sessions/${sessionId}/messages`, { body }));
       void qc.invalidateQueries({ queryKey: ['chat-sessions'] });
@@ -75,6 +103,7 @@ export function ChatView({ sessionId }: { sessionId: string }) {
       toast.error(e instanceof ApiError ? e.message : 'Message not sent');
       setText(body.content);
       setPending(pending);
+      setMentions(used);
     } finally {
       setSending(null);
       input.current?.focus();
@@ -235,22 +264,88 @@ export function ChatView({ sessionId }: { sessionId: string }) {
             ))}
           </div>
         )}
+        {menu && (
+          <div role="listbox" aria-label="Saved characters and locations" className="mb-2 max-h-56 overflow-y-auto rounded-xl border hairline bg-ink-800 p-1">
+            {matches.map((m, i) => (
+              <button
+                key={m.id}
+                type="button"
+                role="option"
+                aria-selected={i === menu.active}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  pickMention(m);
+                }}
+                className={cn('flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm', i === menu.active ? 'bg-iris-500/20 text-white' : 'text-fog-200 hover:bg-white/[0.05]')}
+              >
+                {m.url ? <img src={m.url} alt="" className="size-7 rounded-md object-cover" /> : <span className="grid size-7 place-items-center rounded-md bg-white/[0.06]">{m.kind === 'character' ? <UserRound className="size-3.5" /> : <MapPin className="size-3.5" />}</span>}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{m.name}</span>
+                  {m.description && <span className="block truncate text-[11px] text-fog-500">{m.description}</span>}
+                </span>
+                <span className="text-[10px] text-fog-500">{m.kind}</span>
+              </button>
+            ))}
+            {!matches.length && <p className="px-2 py-1.5 text-xs text-fog-400">{cast.length ? 'No saved character or location with that name.' : 'No saved characters or locations yet — create them in Characters / Locations.'}</p>}
+          </div>
+        )}
         <textarea
           ref={input}
           rows={2}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            trackMention(e.target.value, e.target.selectionStart ?? e.target.value.length);
+          }}
+          onBlur={() => setMenu(null)}
           onKeyDown={(e) => {
+            if (menu && matches.length) {
+              if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                setMenu({ ...menu, active: (menu.active + (e.key === 'ArrowDown' ? 1 : matches.length - 1)) % matches.length });
+                return;
+              }
+              if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault();
+                pickMention(matches[menu.active]!);
+                return;
+              }
+            }
+            if (menu && e.key === 'Escape') {
+              e.preventDefault();
+              setMenu(null);
+              return;
+            }
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               void send();
             }
           }}
-          placeholder={isAd ? 'Tell me about your business, paste links, attach your logo…' : 'Describe your film, or tell me what to change…'}
+          placeholder={isAd ? 'Tell me about your business, paste links, attach your logo… (@ for saved characters and places)' : 'Describe your film, or tell me what to change… Type @ to use a saved character or location'}
           className="max-h-40 w-full resize-none bg-transparent px-2 py-1.5 text-sm text-white placeholder:text-fog-400 focus:outline-none"
         />
         <div className="flex items-center justify-between gap-2">
           <div className="flex gap-1">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              title="Use a saved character or location"
+              onClick={() => {
+                const pos = input.current?.selectionStart ?? text.length;
+                const pre = text.slice(0, pos);
+                const insert = pre && !/\s$/.test(pre) ? ' @' : '@';
+                const next = pre + insert + text.slice(pos);
+                setText(next);
+                setMenu({ query: '', start: pos + insert.length - 1, active: 0 });
+                requestAnimationFrame(() => {
+                  input.current?.focus();
+                  input.current?.setSelectionRange(pos + insert.length, pos + insert.length);
+                });
+              }}
+            >
+              <AtSign /> Cast
+            </Button>
             {isAd ? (
               <>
                 <Button type="button" size="sm" variant="ghost" onClick={() => attach('logo')} title="Attach your logo">

@@ -12,7 +12,7 @@ import { storeAsset } from '../src/services/assets';
 import { guardedFetch, isPublicAddress, validatePublicUrl, type PageFetcher } from '../src/brand/safe-fetch';
 import { analyzeWebsite } from '../src/brand/website';
 import { importBrandImage, saveProduct } from '../src/brand/brand';
-import { applyReviewOption, chooseConcept, createCampaign, getCampaign, saveBrandKit } from '../src/ads/campaigns';
+import { applyReviewOption, chooseConcept, createCampaign, getCampaign, saveBrandKit, setBudget } from '../src/ads/campaigns';
 
 /*
  * Brand intelligence and the creative director: SSRF-safe website reading, a reviewable draft
@@ -228,6 +228,12 @@ describe('creative director with the brand and product catalog', () => {
     const total = adPlanSchema.parse(v3.campaign.plan).scenes.reduce((s, x) => s + x.durationSec, 0);
     expect((v3.campaign.brief as { lengthSec: number }).lengthSec).toBe(shorter.lengthSec);
     expect(Math.abs(total - shorter.lengthSec!)).toBeLessThan(shorter.lengthSec! * 0.35);
+
+    // The budget can be changed on the campaign; the estimate reflects it at once.
+    const b = await setBudget(h.ctx, u, c.id, 300);
+    expect(b.estimate).toMatchObject({ budget: 300, assembleWithinBudget: true, enhanceWithinBudget: true });
+    expect(((await getCampaign(h.ctx, u, c.id)).campaign.brief as { budgetCredits: number }).budgetCredits).toBe(300);
+    expect((await setBudget(h.ctx, u, c.id, null)).estimate).toMatchObject({ budget: null });
   }, 180_000);
 });
 

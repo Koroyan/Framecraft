@@ -13,7 +13,7 @@ import { ProgressBar } from '@/components/studio/progress';
 import { cn, seconds } from '@/lib/utils';
 
 type Segment = { id: string; assetId: string; index: number; startSec: number; endSec: number; frameUrl: string | null; sourceName: string | null; description: string; tags: string[]; scores: Record<string, number>; metrics: Record<string, number>; duplicateOf: string | null };
-type Estimate = { voice: number; music: number; enhance: number; assembleTotal: number; voiceAvailable: boolean; musicAvailable: boolean; note: string; budget?: number | null; withinBudget?: boolean };
+type Estimate = { voice: number; music: number; enhance: number; assembleTotal: number; voiceAvailable: boolean; musicAvailable: boolean; note: string; budget?: number | null; assembleWithinBudget?: boolean; enhanceWithinBudget?: boolean; enhancements?: { sceneId: string; credits: number }[] };
 type Campaign = { id: string; title: string; status: string; phase: string | null; progress: number | null; error: string | null; concepts: AdConcept[] | null; review: { diversity?: DiversityReport } | null; brief: { mode: 'original' | 'enhanced'; language: string; aspectRatio: string; lengthSec: number; conceptKey?: string }; plan: (AdPlan & { estimate?: Estimate; renderJobId?: string; source?: string }) | null; projectId: string | null; variants: { projectId: string; label: string; aspectRatio: string; lengthSec: number; language: string; renderJobId?: string }[] };
 
 const BUSY = ['analyzing', 'planning', 'assembling'];
@@ -193,6 +193,7 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
                           {AI_EDIT_MODES.filter((m) => m.scope === 'range').map((m) => <option key={m.key} value={m.key}>AI {m.label}</option>)}
                         </NativeSelect>
                         {sc.enhance && <Textarea rows={2} className="mt-1" value={sc.enhance.instruction} maxLength={500} onChange={(e) => editScene(i, { enhance: { ...sc.enhance!, instruction: e.target.value } })} />}
+                        {sc.enhance && <div className="mt-1 text-[10px] text-fog-400">AI change for this shot ≈ {est?.enhancements?.find((e) => e.sceneId === sc.id)?.credits ?? '?'} cr · not in the video until you run it</div>}
                       </div>
                     )}
                   </div>
@@ -222,15 +223,24 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
               <label className="block text-fog-200">Music direction <Input value={plan.musicMood} maxLength={200} onChange={(e) => { setPlan({ ...plan, musicMood: e.target.value }); setDirty(true); }} /></label>
             </div>
           </div>
+          {est && c.brief.mode === 'enhanced' && est.enhance > 0 && (
+            <div className="flex items-start gap-2 rounded-xl border border-signal-amber/30 bg-signal-amber/10 p-3 text-xs text-signal-amber">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              <span>
+                The AI changes in this plan (new background, light, motion…) are <b>not</b> in the video yet. Assembling first cuts your footage <b>as it was filmed</b> — same place, same background. After assembly, try the AI change on one shot ({Math.min(...(est.enhancements ?? []).map((e) => e.credits))} cr or more) and check it before running all {(est.enhancements ?? []).length} ({est.enhance} cr).
+              </span>
+            </div>
+          )}
           {est && (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white/[0.03] p-3 text-xs text-fog-300">
               <div>
                 <div className="text-sm text-white">Cost to assemble: {est.assembleTotal} credits</div>
-                <div>Voice-over {est.voice} {est.voiceAvailable ? '' : '(provider not configured)'} · music {est.music} {est.musicAvailable ? '' : '(provider not configured)'}{c.brief.mode === 'enhanced' ? ` · AI enhancements later: ${est.enhance}` : ''}</div>
+                <div>Voice-over {est.voice} {est.voiceAvailable ? '' : '(provider not configured)'} · music {est.music} {est.musicAvailable ? '' : '(provider not configured)'}{c.brief.mode === 'enhanced' ? ` · AI changes (optional, run later per shot): ${est.enhance}` : ''}</div>
+                {c.projectId && <div className="text-fog-500">Re-assembling reuses the same music and voice recordings when they have not changed (no new charge).</div>}
                 <div className="text-fog-400">{est.note}</div>
-                {est.budget != null && <div className={est.withinBudget ? 'text-signal-green' : 'text-signal-red'}>Budget for this ad: {est.budget} credits{est.withinBudget ? '' : ' — this exceeds it; raise the budget or remove voice/music'}</div>}
+                <BudgetEditor campaignId={id} est={est} enhanced={c.brief.mode === 'enhanced'} onSaved={() => q.refetch()} />
               </div>
-              <Button disabled={dirty || BUSY.includes(c.status)} loading={busy === 'assemble'} onClick={() => run('assemble', () => api(`/api/ads/campaigns/${id}/assemble`, { body: { approvedCredits: est.assembleTotal } }), 'Assembling your ad…')}><Wand2 /> {c.projectId ? 'Re-assemble' : 'Assemble the ad'} · {est.assembleTotal} cr</Button>
+              <Button disabled={dirty || BUSY.includes(c.status) || (est.budget != null && est.assembleTotal > est.budget)} loading={busy === 'assemble'} onClick={() => run('assemble', () => api(`/api/ads/campaigns/${id}/assemble`, { body: { approvedCredits: est.assembleTotal } }), 'Assembling your ad…')}><Wand2 /> {c.projectId ? 'Re-assemble' : c.brief.mode === 'enhanced' && est.enhance > 0 ? 'Assemble with my footage as filmed' : 'Assemble the ad'} · {est.assembleTotal} cr</Button>
             </div>
           )}
           {dirty && <p className="text-xs text-signal-amber">Save your changes before assembling.</p>}
@@ -244,10 +254,26 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
           {c.plan?.renderJobId && <RenderResult jobId={c.plan.renderJobId} label="Main" />}
           <div className="flex flex-wrap gap-2">
             <Link href={`/app/editor/${c.projectId}`} className={buttonVariants({ size: 'sm' })}>Edit anything in the editor</Link>
-            {c.brief.mode === 'enhanced' && est && est.enhance > 0 && (
-              <Button size="sm" variant="secondary" loading={busy === 'enhance'} onClick={() => run('enhance', () => api(`/api/ads/campaigns/${id}/enhance`, { body: { approvedCredits: est.enhance } }), 'AI enhancements started — review them in the editor (Review)')}><Sparkles /> Run AI enhancements · {est.enhance} cr</Button>
-            )}
           </div>
+          {c.brief.mode === 'enhanced' && est && est.enhance > 0 && plan && (
+            <div className="space-y-2 rounded-xl border hairline p-3">
+              <div className="text-xs font-medium text-fog-200">AI changes — try one shot first, check it in the editor (Review), then run the rest</div>
+              <div className="space-y-1.5">
+                {plan.scenes.map((sc, i) => {
+                  const cost = est.enhancements?.find((e) => e.sceneId === sc.id)?.credits;
+                  if (!sc.enhance || cost === undefined) return null;
+                  return (
+                    <div key={sc.id} className="flex flex-wrap items-center gap-2 text-xs text-fog-300">
+                      <span className="w-14 shrink-0 text-fog-500">Shot {i + 1}</span>
+                      <span className="min-w-0 flex-1 truncate" title={sc.enhance.instruction}>{sc.enhance.mode}: {sc.enhance.instruction}</span>
+                      <Button size="sm" variant="ghost" loading={busy === `enh-${sc.id}`} onClick={() => run(`enh-${sc.id}`, () => api(`/api/ads/campaigns/${id}/enhance`, { body: { approvedCredits: cost, sceneIds: [sc.id] } }), `AI change started on shot ${i + 1} — review it in the editor`)}><Sparkles /> Try on this shot · {cost} cr</Button>
+                    </div>
+                  );
+                })}
+              </div>
+              <Button size="sm" variant="secondary" loading={busy === 'enhance'} onClick={() => run('enhance', () => api(`/api/ads/campaigns/${id}/enhance`, { body: { approvedCredits: est.enhance } }), 'AI enhancements started — review them in the editor (Review)')}><Sparkles /> Run all {(est.enhancements ?? []).length} · {est.enhance} cr</Button>
+            </div>
+          )}
           <div>
             <div className="mb-2 text-xs font-medium text-fog-200">Variants (same footage and edits; only voice is re-recorded for another language)</div>
             <div className="flex flex-wrap gap-1.5">
@@ -267,6 +293,52 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
             </div>
           </div>
         </Card>
+      )}
+    </div>
+  );
+}
+
+/** The ad's spending cap: editable here; the server refuses any paid step above it. */
+function BudgetEditor({ campaignId, est, enhanced, onSaved }: { campaignId: string; est: Estimate; enhanced: boolean; onSaved: () => unknown }) {
+  const [value, setValue] = useState(est.budget == null ? '' : String(est.budget));
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setValue(est.budget == null ? '' : String(est.budget)), [est.budget]);
+  const parsed = value.trim() === '' ? null : Math.max(0, Math.floor(Number(value)));
+  const changed = parsed !== (est.budget ?? null) && (parsed === null || Number.isFinite(parsed));
+  const save = async (v: number | null) => {
+    setSaving(true);
+    try {
+      await api(`/api/ads/campaigns/${campaignId}/budget`, { method: 'PUT', body: { budgetCredits: v } });
+      toast.success(v === null ? 'Budget limit removed' : `Budget set to ${v} credits`);
+      await onSaved();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Could not save the budget');
+    } finally {
+      setSaving(false);
+    }
+  };
+  const needed = est.assembleTotal + (enhanced ? est.enhance : 0);
+  // From the numbers (older saved estimates have no budget flags).
+  const assembleOk = est.budget == null || est.assembleTotal <= est.budget;
+  const enhanceOk = est.budget == null || needed <= est.budget;
+  return (
+    <div className="mt-2 space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-fog-200">Budget for this ad</span>
+        <Input type="number" min={0} step={10} aria-label="Budget in credits" className="h-8 w-28" value={value} placeholder="No limit" onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && changed && save(parsed)} />
+        <span className="text-fog-400">credits</span>
+        {changed && <Button size="sm" variant="secondary" loading={saving} onClick={() => save(parsed)}>Save budget</Button>}
+        {est.budget != null && !changed && <Button size="sm" variant="ghost" loading={saving} onClick={() => save(null)}>Remove limit</Button>}
+        {enhanced && est.enhance > 0 && !enhanceOk && <Button size="sm" variant="ghost" loading={saving} onClick={() => save(needed)}>Set to {needed} (assembly + AI enhancements)</Button>}
+      </div>
+      {est.budget == null ? (
+        <div className="text-fog-500">No limit set — every paid step still asks for your approval.</div>
+      ) : !assembleOk ? (
+        <div className="text-signal-red">Assembling needs {est.assembleTotal} credits, above the {est.budget}-credit budget. Raise the budget or turn off voice-over / music.</div>
+      ) : enhanced && est.enhance > 0 && !enhanceOk ? (
+        <div className="text-signal-amber">Assembly ({est.assembleTotal} cr) fits the budget. The AI enhancements ({est.enhance} cr) would exceed it — raise the budget before running them, or remove some enhancements from the shots.</div>
+      ) : (
+        <div className="text-signal-green">Within budget ({needed} of {est.budget} credits).</div>
       )}
     </div>
   );
