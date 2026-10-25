@@ -17,15 +17,18 @@ type Estimate = { voice: number; music: number; enhance: number; assembleTotal: 
 type Campaign = { id: string; title: string; status: string; phase: string | null; progress: number | null; error: string | null; concepts: AdConcept[] | null; review: { diversity?: DiversityReport } | null; brief: { mode: 'original' | 'enhanced'; language: string; aspectRatio: string; lengthSec: number; conceptKey?: string }; plan: (AdPlan & { estimate?: Estimate; renderJobId?: string; source?: string }) | null; projectId: string | null; variants: { projectId: string; label: string; aspectRatio: string; lengthSec: number; language: string; renderJobId?: string }[] };
 
 const BUSY = ['analyzing', 'planning', 'assembling'];
+type Enhancement = { operationId: string; shotIndex: number; mode: string; status: string; jobStatus: string | null; phase: string | null; progress: number | null; chargedCredits: number | null; estimatedCredits: number | null; error: string | null };
+const RUNNING = (e?: Enhancement) => Boolean(e && ['queued', 'processing'].includes(e.status));
 
 export default function CampaignPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const q = useQuery({ queryKey: ['campaign', id], queryFn: () => api<{ campaign: Campaign; segments: Segment[] }>(`/api/ads/campaigns/${id}`), refetchInterval: (qq) => (qq.state.data && (BUSY.includes(qq.state.data.campaign.status) || qq.state.data.campaign.status === 'ready') ? 3000 : false) });
+  const q = useQuery({ queryKey: ['campaign', id], queryFn: () => api<{ campaign: Campaign; segments: Segment[]; enhancements: Enhancement[] }>(`/api/ads/campaigns/${id}`), refetchInterval: (qq) => (qq.state.data && (BUSY.includes(qq.state.data.campaign.status) || qq.state.data.campaign.status === 'ready') ? 3000 : false) });
   const [plan, setPlan] = useState<AdPlan | null>(null);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const c = q.data?.campaign;
   const segs = q.data?.segments ?? [];
+  const enh = q.data?.enhancements ?? [];
   useEffect(() => {
     if (c?.plan && !dirty) setPlan(c.plan);
   }, [c?.plan, dirty]);
@@ -262,16 +265,32 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
                 {plan.scenes.map((sc, i) => {
                   const cost = est.enhancements?.find((e) => e.sceneId === sc.id)?.credits;
                   if (!sc.enhance || cost === undefined) return null;
+                  const e = enh.find((x) => x.shotIndex === i);
+                  const running = RUNNING(e);
                   return (
-                    <div key={sc.id} className="flex flex-wrap items-center gap-2 text-xs text-fog-300">
-                      <span className="w-14 shrink-0 text-fog-500">Shot {i + 1}</span>
-                      <span className="min-w-0 flex-1 truncate" title={sc.enhance.instruction}>{sc.enhance.mode}: {sc.enhance.instruction}</span>
-                      <Button size="sm" variant="ghost" loading={busy === `enh-${sc.id}`} onClick={() => run(`enh-${sc.id}`, () => api(`/api/ads/campaigns/${id}/enhance`, { body: { approvedCredits: cost, sceneIds: [sc.id] } }), `AI change started on shot ${i + 1} — review it in the editor`)}><Sparkles /> Try on this shot · {cost} cr</Button>
+                    <div key={sc.id} className="space-y-1.5 rounded-lg bg-white/[0.02] p-2 text-xs text-fog-300">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="w-14 shrink-0 text-fog-500">Shot {i + 1}</span>
+                        <span className="min-w-0 flex-1 truncate" title={sc.enhance.instruction}>{sc.enhance.mode}: {sc.enhance.instruction}</span>
+                        {running ? (
+                          <span className="flex items-center gap-1 text-iris-200"><Sparkles className="size-3.5 animate-pulse" /> Working…</span>
+                        ) : (
+                          <Button size="sm" variant="ghost" loading={busy === `enh-${sc.id}`} onClick={() => run(`enh-${sc.id}`, () => api(`/api/ads/campaigns/${id}/enhance`, { body: { approvedCredits: cost, sceneIds: [sc.id] } }), `AI change started on shot ${i + 1}`)}>
+                            <Sparkles /> {e && e.status !== 'rejected' ? 'Try again' : 'Try on this shot'} · {cost} cr
+                          </Button>
+                        )}
+                      </div>
+                      {e && <EnhancementStatus e={e} projectId={c.projectId!} />}
                     </div>
                   );
                 })}
               </div>
-              <Button size="sm" variant="secondary" loading={busy === 'enhance'} onClick={() => run('enhance', () => api(`/api/ads/campaigns/${id}/enhance`, { body: { approvedCredits: est.enhance } }), 'AI enhancements started — review them in the editor (Review)')}><Sparkles /> Run all {(est.enhancements ?? []).length} · {est.enhance} cr</Button>
+              {enh.some(RUNNING) && (
+                <div className="text-[11px] text-iris-200">
+                  {enh.filter(RUNNING).length} AI change{enh.filter(RUNNING).length > 1 ? 's' : ''} in progress · {enh.filter((x) => x.status === 'ready' || x.status === 'accepted').length} ready
+                </div>
+              )}
+              <Button size="sm" variant="secondary" disabled={enh.some(RUNNING)} loading={busy === 'enhance'} onClick={() => run('enhance', () => api(`/api/ads/campaigns/${id}/enhance`, { body: { approvedCredits: est.enhance } }), 'AI changes started on every planned shot')}><Sparkles /> Run all {(est.enhancements ?? []).length} · {est.enhance} cr</Button>
             </div>
           )}
           <div>
@@ -342,6 +361,21 @@ function BudgetEditor({ campaignId, est, enhanced, onSaved }: { campaignId: stri
       )}
     </div>
   );
+}
+
+/** One shot's AI change: live progress, then the result to review in the editor (or why it failed). */
+function EnhancementStatus({ e, projectId }: { e: Enhancement; projectId: string }) {
+  if (RUNNING(e)) return <ProgressBar progress={e.progress} label={e.phase ?? 'Waiting in queue'} />;
+  if (e.status === 'ready')
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-signal-green">
+        <CheckCircle2 className="size-3.5" /> Ready{e.chargedCredits ? ` · ${e.chargedCredits} cr charged` : ''} — not in the ad until you accept it.
+        <Link href={`/app/editor/${projectId}`} className="text-iris-200 underline hover:text-white">Review and accept in the editor</Link>
+      </div>
+    );
+  if (e.status === 'accepted') return <div className="flex items-center gap-1 text-signal-green"><CheckCircle2 className="size-3.5" /> Accepted — the ad uses the AI version of this shot (re-render in the editor to export it).</div>;
+  if (e.status === 'rejected') return <div className="text-fog-500">Rejected — the shot keeps your original footage.</div>;
+  return <div className="text-signal-red">Failed: {e.error ?? 'the provider could not edit this shot'}{e.chargedCredits ? '' : ' — reserved credits were returned'}</div>;
 }
 
 function RenderResult({ jobId, label }: { jobId: string; label: string }) {

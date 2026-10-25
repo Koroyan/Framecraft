@@ -2,7 +2,7 @@ import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { AD_STYLES, adBriefSchema, adConceptSchema, adPlanSchema, adStyle, clipStartTimes, reviewPlanDiversity, timelineSchema, type AdBrief, type AdConcept, type AdPlan } from '@framecraft/shared';
 import type { AppContext } from '../context';
-import { adCampaigns, assets, brandKits, brandProducts, footageSegments, generationJobs, shots } from '../db/schema';
+import { adCampaigns, assets, brandKits, brandProducts, editOperations, footageSegments, generationJobs, shots } from '../db/schema';
 import { enqueue, type JobResult, type QueueJob } from '../queue/queue';
 import type { SessionLike } from '../generation/service';
 import { assetUrl, getOwnedAsset, prepOf } from '../services/assets';
@@ -111,7 +111,21 @@ export async function getCampaign(ctx: AppContext, user: SessionLike, id: string
   const ids = [...new Set([...segs.flatMap((s) => [s.assetId, s.frameAssetId ?? '']).filter(Boolean)])];
   const rows = ids.length ? await ctx.db.select().from(assets).where(inArray(assets.id, ids)) : [];
   const urls = Object.fromEntries(await Promise.all(rows.map(async (a) => [a.id, await assetUrl(ctx, a)] as const)));
-  return { campaign: c, segments: segs.map((s) => ({ ...s, frameUrl: s.frameAssetId ? (urls[s.frameAssetId] ?? null) : null, sourceUrl: urls[s.assetId] ?? null, sourceName: rows.find((r) => r.id === s.assetId)?.originalName ?? null })) };
+  return { campaign: c, segments: segs.map((s) => ({ ...s, frameUrl: s.frameAssetId ? (urls[s.frameAssetId] ?? null) : null, sourceUrl: urls[s.assetId] ?? null, sourceName: rows.find((r) => r.id === s.assetId)?.originalName ?? null })), enhancements: c.projectId ? await enhancementProgress(ctx, c.projectId) : [] };
+}
+
+/** Live state of the AI changes started for an assembled ad (latest per shot), for progress on the campaign page. */
+async function enhancementProgress(ctx: AppContext, projectId: string) {
+  const ops = await ctx.db
+    .select({ id: editOperations.id, shotIndex: shots.index, mode: editOperations.mode, status: editOperations.status, error: editOperations.error, createdAt: editOperations.createdAt, jobStatus: generationJobs.status, phase: generationJobs.phase, progress: generationJobs.progress, charged: generationJobs.chargedCredits, estimated: generationJobs.estimatedCredits, jobError: generationJobs.error })
+    .from(editOperations)
+    .innerJoin(shots, eq(shots.id, editOperations.shotId))
+    .leftJoin(generationJobs, eq(generationJobs.id, editOperations.generationJobId))
+    .where(eq(editOperations.projectId, projectId))
+    .orderBy(desc(editOperations.createdAt));
+  const latest = new Map<number, (typeof ops)[number]>();
+  for (const o of ops) if (!latest.has(o.shotIndex)) latest.set(o.shotIndex, o);
+  return [...latest.values()].map((o) => ({ operationId: o.id, shotIndex: o.shotIndex, mode: o.mode, status: o.status, jobStatus: o.jobStatus, phase: o.phase, progress: o.progress, chargedCredits: o.charged, estimatedCredits: o.estimated, error: o.error?.message ?? (o.jobError as { message?: string } | null)?.message ?? null }));
 }
 
 export async function listCampaigns(ctx: AppContext, user: SessionLike) {
