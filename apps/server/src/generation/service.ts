@@ -257,8 +257,11 @@ export async function planGeneration(ctx: AppContext, user: SessionLike, input: 
     const settings = await db.query.userSettings.findFirst({ where: (s, { eq: e }) => e(s.userId, user.id) });
     if (settings?.perJobSpendLimit && estimate.credits > settings.perJobSpendLimit)
       throw new AppError('spend_limit', `This costs ${estimate.credits} credits, above your per-video limit of ${settings.perJobSpendLimit}.`, 422);
-    if (settings?.dailySpendLimit && (await creditsSpentToday(db, user.id)) + estimate.credits > settings.dailySpendLimit)
-      throw new AppError('spend_limit', 'This would exceed your daily spending limit.', 422);
+    if (settings?.dailySpendLimit) {
+      const spent = await creditsSpentToday(db, user.id);
+      if (spent + estimate.credits > settings.dailySpendLimit)
+        throw new AppError('spend_limit', `This needs ${estimate.credits} credits, but your daily limit is ${settings.dailySpendLimit} (${spent} spent today). Raise it in Settings → Spending limits.`, 422, { limit: settings.dailySpendLimit, spentToday: spent, required: estimate.credits });
+    }
   }
 
   const chosen = decision.chosen;
