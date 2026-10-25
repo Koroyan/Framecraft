@@ -50,7 +50,12 @@ export async function createTestContext(opts: { env?: Record<string, string>; fe
     await ctx.db.update(users).set({ role }).where(eq(users.id, userId));
   }
 
-  return { ctx, worker, drain, makeUser, setRole, close: () => ctx.dbHandle.close() };
+  // Remove the test's storage so repeated runs do not fill the disk.
+  const close = async () => {
+    await ctx.dbHandle.close();
+    fs.rmSync(storageDir, { recursive: true, force: true });
+  };
+  return { ctx, worker, drain, makeUser, setRole, close };
 }
 
 export type TestHarness = Awaited<ReturnType<typeof createTestContext>>;
