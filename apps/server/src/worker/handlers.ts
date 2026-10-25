@@ -12,6 +12,7 @@ import { runChatTurn } from '../chat/chat';
 import { runEditJob } from '../editing/ai-edit';
 import { runAnalyzeJob, runAssembleJob, runFinishJob, runPlanJob } from '../ads/campaigns';
 import { runPrepareJob, sweepExpiredUploads } from '../services/uploads';
+import { runQualityJob } from '../ads/quality';
 
 export function createHandlers(ctx: AppContext): Record<string, JobHandler> {
   return {
@@ -28,6 +29,7 @@ export function createHandlers(ctx: AppContext): Record<string, JobHandler> {
     'ad.assemble': (job) => runAssembleJob(ctx, job),
     'ad.finish': (job) => runFinishJob(ctx, job),
     'media.prepare': (job) => runPrepareJob(ctx, job),
+    'ad.quality': (job) => runQualityJob(ctx, job),
     'maintenance.sweep': async () => {
       const released = await releaseExpiredReservations(ctx.db);
       const reclaimed = await reclaimStale(ctx.db);

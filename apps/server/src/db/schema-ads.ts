@@ -141,3 +141,22 @@ export const footageSegments = pgTable(
   },
   (t) => [index('footage_segments_campaign_idx').on(t.campaignId, t.index)],
 );
+
+/** Verified quality reports of rendered ads (measured from the file, plus product identity checks). */
+export const qualityReports = pgTable(
+  'quality_reports',
+  {
+    id: id(),
+    projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    renderJobId: uuid('render_job_id'),
+    kind: text('kind').notNull().default('render'),
+    score: integer('score').notNull(),
+    status: text('status').notNull(), // passed | review_suggested | needs_review
+    measurements: jsonb('measurements').$type<Record<string, unknown>>().notNull().default({}),
+    issues: jsonb('issues').$type<Record<string, unknown>[]>().notNull().default([]),
+    identity: jsonb('identity').$type<Record<string, unknown>[]>().notNull().default([]),
+    identitySource: text('identity_source').notNull().default('none'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('quality_reports_project_idx').on(t.projectId, t.createdAt)],
+);

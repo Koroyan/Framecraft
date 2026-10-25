@@ -7,3 +7,4 @@ export * from './edit';
 export * from './grade';
 export * from './layers';
 export * from './ads';
+export * from './ad-modes';

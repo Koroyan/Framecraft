@@ -2,7 +2,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { eq, inArray } from 'drizzle-orm';
-import { adStyle, ASPECT_DIMENSIONS, cameraPreset, clampKeyframe, LOOKS, timelineSchema, type AdBrief, type AdPlan, type ClipCamera, type LayerInput, type TimelineInput } from '@framecraft/shared';
+import { adMode, adStyle, ASPECT_DIMENSIONS, cameraPreset, clampKeyframe, endCardSeconds, LOOKS, timelineSchema, type AdBrief, type AdPlan, type ClipCamera, type LayerInput, type TimelineInput } from '@framecraft/shared';
 import type { AppContext } from '../context';
 import { assets, brandKits, footageSegments, projects, scenes, shots } from '../db/schema';
 import type { SessionLike } from '../generation/service';
@@ -19,8 +19,6 @@ import { generateLogoCard, stillToClip } from '../media/ffmpeg';
  */
 
 // Text sits above heads (title) or in the lower third, clear of the bottom ~20% that social apps cover.
-/** A short brand ending: long static logo cards lose viewers. */
-const END_CARD_SEC = 2.2;
 
 const ROLE_POS = { title: 0.1, lower_third: 0.72, caption: 0.74, price: 0.64, cta: 0.68 } as const;
 
@@ -109,8 +107,14 @@ export async function assembleAd(ctx: AppContext, user: SessionLike, p: { campai
     const dims = ASPECT_DIMENSIONS[aspect]['1080p'];
     if (brand?.logoAssetId) {
       // A title hook keeps the top of the frame to itself; the logo comes in after it.
-    const logoFrom = p.plan.scenes[0]?.overlay?.kind === 'title' && clips.length > 1 ? Math.round((clips[0]!.outSec - clips[0]!.inSec) * 100) / 100 : 0;
-    layers.push({ id: 'logo', name: 'logo', kind: 'image', track: 3, assetId: brand.logoAssetId, startSec: logoFrom, endSec: Math.max(logoFrom + 1, t), x: 0.86, y: 0.08, w: 0.18, opacity: 0.92, ...(logoFrom ? { animIn: { type: 'fade', durationSec: 0.4 } } : {}) });
+    // Subtle branding: a small logo once, after the hook — never a permanent watermark — and the
+    // full brand reveal at the end. Social sales ads keep it a little longer to stay recognisable.
+    const logoFrom = clips.length > 1 ? Math.round((clips[0]!.outSec - clips[0]!.inSec) * 100) / 100 : 0;
+    const logoFor = p.plan.mode === 'social_sales' ? 3 : 2;
+    if (!p.plan.endCard || t - logoFrom > logoFor + 1) layers.push({ id: 'logo', name: 'logo', kind: 'image', track: 3, assetId: brand.logoAssetId, startSec: logoFrom, endSec: Math.round(Math.min(t, logoFrom + logoFor) * 100) / 100, x: 0.86, y: 0.08, w: 0.15, opacity: 0.85, animIn: { type: 'fade', durationSec: 0.4 }, animOut: { type: 'fade', durationSec: 0.4 } });
+    // Brand ending sized to the ad (a share of it, 1.5–3 s).
+    const END_CARD_SEC = p.plan.endCardSec ?? endCardSeconds(t, adMode(p.plan.mode).editing.endCardRatio);
+    const website = brand.website?.replace(/^https?:\/\//, '').replace(/\/$/, '');
       if (p.plan.endCard) {
         const [logo] = await ctx.db.select().from(assets).where(eq(assets.id, brand.logoAssetId));
         if (logo) {
@@ -125,7 +129,9 @@ export async function assembleAd(ctx: AppContext, user: SessionLike, p: { campai
             const v = await recordShotVersion(ctx.db, { projectId: project!.id, shotId: shot!.id, assetId: card.id, source: 'generated', label: 'Logo end card (from your logo file)', activate: true });
             if (clips.length) clips[clips.length - 1]!.transition ??= { type: 'fade', durationSec: 0.4 };
             clips.push({ id: 'clip-endcard', assetId: card.id, shotId: shot!.id, versionId: v.id, inSec: 0, outSec: END_CARD_SEC, volume: 0, label: 'Brand end card' });
-            if (p.plan.cta) layers.push({ id: 'cta-end', name: 'cta', kind: 'text', track: 2, startSec: Math.round((t + 0.4) * 100) / 100, endSec: Math.round((t + END_CARD_SEC - 0.1) * 100) / 100, x: 0.5, y: 0.78, w: 0.8, text: { content: p.plan.cta, font: 'bold', size: 60, color: brand.colors.text ?? '#FFFFFF' }, animIn: { type: 'slide_up', durationSec: 0.5 } });
+            if (p.plan.cta) layers.push({ id: 'cta-end', name: 'cta', kind: 'text', track: 2, startSec: Math.round((t + 0.3) * 100) / 100, endSec: Math.round((t + END_CARD_SEC - 0.1) * 100) / 100, x: 0.5, y: 0.76, w: 0.8, text: { content: p.plan.cta, font: 'bold', size: 60, color: brand.colors.text ?? '#FFFFFF' }, animIn: { type: 'slide_up', durationSec: 0.4 } });
+            // Where to act: the approved website, under the call to action.
+            if (website) layers.push({ id: 'cta-site', name: 'website', kind: 'text', track: 2, startSec: Math.round((t + 0.5) * 100) / 100, endSec: Math.round((t + END_CARD_SEC - 0.1) * 100) / 100, x: 0.5, y: 0.83, w: 0.7, text: { content: website.slice(0, 60), font: 'semibold', size: 40, color: brand.colors.text ?? '#FFFFFF' }, animIn: { type: 'fade', durationSec: 0.4 } });
             t += END_CARD_SEC - 0.4;
           } finally {
             await fsp.rm(dir, { recursive: true, force: true });

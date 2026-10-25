@@ -6,11 +6,12 @@ import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, Crop, Download, Info, RefreshCw, Shuffle, Sparkles, Trash2, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { AI_EDIT_MODES, CAMERA_MOVES, type AdConcept, type AdPlan, type AdScene, type DiversityReport } from '@framecraft/shared';
+import { AD_MODES, AI_EDIT_MODES, CAMERA_MOVES, type AdConcept, type AdPlan, type AdScene, type DiversityReport } from '@framecraft/shared';
 import { api, ApiError } from '@/lib/api';
 import { useJob } from '@/lib/hooks';
 import { Badge, Button, Card, Input, NativeSelect, Skeleton, Textarea, buttonVariants } from '@/components/ui';
 import { ProgressBar } from '@/components/studio/progress';
+import { CampaignRevisions, QualityPanel } from '@/components/studio/ad-quality';
 import { cn, seconds } from '@/lib/utils';
 
 type Segment = { id: string; assetId: string; index: number; startSec: number; endSec: number; frameUrl: string | null; sourceName: string | null; description: string; tags: string[]; scores: Record<string, number>; metrics: Record<string, number>; duplicateOf: string | null };
@@ -18,6 +19,7 @@ type Estimate = { voice: number; music: number; enhance: number; assembleTotal: 
 type Campaign = { id: string; title: string; status: string; analysis: { aiScenes?: { projectId: string; environment: string; createdAt: string }[] } | null; phase: string | null; progress: number | null; error: string | null; concepts: AdConcept[] | null; review: { diversity?: DiversityReport } | null; brief: { mode: 'original' | 'enhanced'; language: string; aspectRatio: string; lengthSec: number; conceptKey?: string }; plan: (AdPlan & { estimate?: Estimate; renderJobId?: string; source?: string }) | null; projectId: string | null; variants: { projectId: string; label: string; aspectRatio: string; lengthSec: number; language: string; renderJobId?: string }[] };
 
 const BUSY = ['analyzing', 'planning', 'assembling'];
+const MODE_LABEL: Record<string, string> = Object.fromEntries(AD_MODES.map((m) => [m.key, m.label]));
 type Enhancement = { operationId: string; shotIndex: number; mode: string; status: string; jobStatus: string | null; phase: string | null; progress: number | null; chargedCredits: number | null; estimatedCredits: number | null; error: string | null };
 const RUNNING = (e?: Enhancement) => Boolean(e && ['queued', 'processing'].includes(e.status));
 
@@ -121,7 +123,7 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
                 <div key={k.key} className={cn('flex flex-col rounded-xl border p-3', chosen ? 'border-iris-400 bg-iris-500/10' : 'hairline')}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-sm font-medium text-white">{k.name}</div>
-                    {k.recommended && <Badge tone="iris">recommended</Badge>}
+                    <span className="flex gap-1">{k.mode && <Badge>{MODE_LABEL[k.mode] ?? k.mode}</Badge>}{k.recommended && <Badge tone="iris">recommended</Badge>}</span>
                   </div>
                   <p className="mt-1 text-xs text-fog-200">{k.logline}</p>
                   <p className="mt-2 line-clamp-4 text-[11px] text-fog-400">{k.treatment}</p>
@@ -258,6 +260,8 @@ export default function CampaignPage({ params }: { params: Promise<{ id: string 
           <div className="text-sm font-medium text-white">Your ad</div>
           <p className="text-xs text-fog-300">{c.phase}</p>
           {c.plan?.renderJobId && <RenderResult jobId={c.plan.renderJobId} label="Main" />}
+          <QualityPanel projectId={c.projectId} />
+          {plan && <CampaignRevisions campaignId={id} shotCount={plan.scenes.length} onDone={() => q.refetch()} />}
           <div className="flex flex-wrap gap-2">
             <Link href={`/app/editor/${c.projectId}`} className={buttonVariants({ size: 'sm' })}>Edit anything in the editor</Link>
           </div>
@@ -383,11 +387,12 @@ function AiScenesCard({ campaignId, existing, lengthSec }: { campaignId: string;
   const router = useRouter();
   const [env, setEnv] = useState(ENVIRONMENTS[0]!);
   const [len, setLen] = useState(Math.max(15, Math.min(60, lengthSec)));
+  const [mode, setMode] = useState<string>('luxury_commercial');
   const [busy, setBusy] = useState(false);
   const start = async () => {
     setBusy(true);
     try {
-      const r = await api<{ projectId: string }>(`/api/ads/campaigns/${campaignId}/ai-scenes`, { body: { environment: env, lengthSec: len } });
+      const r = await api<{ projectId: string }>(`/api/ads/campaigns/${campaignId}/ai-scenes`, { body: { environment: env, lengthSec: len, mode } });
       toast.success('Writing the scenes — review them and the price before anything is generated');
       router.push(`/app/movie/${r.projectId}`);
     } catch (e) {
@@ -408,6 +413,11 @@ function AiScenesCard({ campaignId, existing, lengthSec }: { campaignId: string;
         ))}
       </div>
       <Textarea rows={2} value={env} maxLength={500} onChange={(e) => setEnv(e.target.value)} aria-label="New environment" />
+      <div className="flex flex-wrap items-center gap-2 text-xs text-fog-300">
+        Creative Director mode
+        <NativeSelect className="h-8 w-56" value={mode} onChange={(e) => setMode(e.target.value)} aria-label="Creative Director mode">{AD_MODES.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}</NativeSelect>
+        <span className="text-[11px] text-fog-500">{AD_MODES.find((m) => m.key === mode)?.purpose}</span>
+      </div>
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-xs text-fog-300">Length <Input type="number" min={15} max={60} className="h-8 w-20" value={len} onChange={(e) => setLen(Math.max(15, Math.min(60, Number(e.target.value) || 15)))} /> s</label>
         <Button onClick={start} loading={busy} disabled={env.trim().length < 3}><Sparkles /> Write the new scenes</Button>
@@ -459,8 +469,8 @@ function DiversityPanel({ r, busy, onOption }: { r: DiversityReport; busy: strin
   return (
     <Card className="space-y-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm font-medium text-white">Shot diversity review</div>
-        <div className={cn('text-sm font-semibold', tone)}>{r.score}/100</div>
+        <div className="text-sm font-medium text-white">Plan review <span className="text-xs font-normal text-fog-400">· predicted from the storyboard — the verified score comes from the rendered video</span></div>
+        <div className={cn('text-sm font-semibold', tone)}>{r.score}/100 <span className="text-[10px] font-normal text-fog-500">predicted</span></div>
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-fog-400">
         <span>{r.stats.scenes} shots from {r.stats.uniqueSources} source file{r.stats.uniqueSources === 1 ? '' : 's'}</span>

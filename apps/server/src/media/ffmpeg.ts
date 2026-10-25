@@ -407,17 +407,22 @@ export async function generateFixtureClip(output: string, o: { width: number; he
  * Brand end card from the user's own logo file (no AI model involved): the exact logo centred on
  * a dark backdrop with a slow push-in and fades, plus a silent audio track so it joins cleanly.
  */
+/**
+ * Brand end card from the exact logo file. The logo sits in the upper-middle of the frame so the
+ * call to action and website below it never cover it.
+ */
 export async function generateLogoCard(logo: string, output: string, o: { width: number; height: number; durationSec: number; background?: string }): Promise<void> {
   await withWorkdir(async (dir) => {
     await fsp.copyFile(logo, path.join(dir, 'logo'));
     const fps = 30;
     const frames = Math.max(1, Math.round(o.durationSec * fps));
-    const box = Math.round(Math.min(o.width, o.height) * 0.62);
+    const box = Math.round(Math.min(o.width * 0.6, o.height * 0.42));
+    const centreY = Math.round(o.height * 0.42);
     const fadeOut = Math.max(0, o.durationSec - 0.6).toFixed(2);
     // Compose one still (logo fitted inside a square box, centred), then animate it with zoompan.
     const vf = [
       `[1:v]scale=${box}:${box}:force_original_aspect_ratio=decrease[lg]`,
-      `[0:v][lg]overlay=(W-w)/2:(H-h)/2:format=auto,format=yuv420p,zoompan=z='min(1+0.06*on/${frames},1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${o.width}x${o.height}:fps=${fps},fade=t=in:st=0:d=0.5,fade=t=out:st=${fadeOut}:d=0.6[v]`,
+      `[0:v][lg]overlay=(W-w)/2:${centreY}-h/2:format=auto,format=yuv420p,zoompan=z='min(1+0.06*on/${frames},1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${o.width}x${o.height}:fps=${fps},fade=t=in:st=0:d=0.5,fade=t=out:st=${fadeOut}:d=0.6[v]`,
     ].join(';');
     await ffmpeg(
       [

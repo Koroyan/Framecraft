@@ -239,14 +239,15 @@ describe('product video → ad', () => {
 
   it('only the product in a new place: product angles from the footage become the references of an AI film (nothing generated before approval)', async () => {
     const { u, c, logo } = await setup('original');
-    const r = await createAiScenes(h.ctx, u, c.id, { environment: 'a luxury dark studio with a marble pedestal and warm rim light' });
+    const r = await createAiScenes(h.ctx, u, c.id, { environment: 'a luxury dark studio with a marble pedestal and warm rim light', mode: 'luxury_commercial' });
     expect(r.angles).toBeGreaterThanOrEqual(2);
     const [project] = await h.ctx.db.select().from(projects).where(eq(projects.id, r.projectId));
     expect(project!.kind).toBe('ad');
     const brief = (project!.settings as { brief: { idea: string; references: { token: string; assetId: string; note: string }[]; withDialogue: boolean } }).brief;
     expect(brief.idea).toContain('marble pedestal');
     expect(brief.idea).toMatch(/No people, no hands/);
-    expect(brief.idea).toMatch(/360-degree turntable/);
+    expect(brief.idea).toMatch(/Creative Director mode: Luxury Commercial/);
+    expect(brief.idea).toMatch(/360° orbit/);
     // Angles are full-resolution stills cut from the client's footage; the logo is the exact file.
     const refs = await h.ctx.db.select().from(assets).where(inArray(assets.id, brief.references.map((x) => x.assetId)));
     const angles = brief.references.filter((x) => x.note !== 'brand logo');

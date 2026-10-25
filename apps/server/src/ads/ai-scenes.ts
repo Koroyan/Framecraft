@@ -2,7 +2,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { eq, inArray } from 'drizzle-orm';
-import { adBriefSchema, adPlanSchema, type AdBrief } from '@framecraft/shared';
+import { adBriefSchema, adMode, adPlanSchema, endCardSeconds, type AdBrief, type AdModeKey } from '@framecraft/shared';
 import type { AppContext } from '../context';
 import { adCampaigns, assets, brandKits, footageSegments } from '../db/schema';
 import type { SessionLike } from '../generation/service';
@@ -42,7 +42,7 @@ function pickAngles(segs: Segment[], n: number): Segment[] {
   return picked;
 }
 
-export async function createAiScenes(ctx: AppContext, user: SessionLike, campaignId: string, o: { environment: string; lengthSec?: number }) {
+export async function createAiScenes(ctx: AppContext, user: SessionLike, campaignId: string, o: { environment: string; lengthSec?: number; mode?: AdModeKey }) {
   const [c] = await ctx.db.select().from(adCampaigns).where(eq(adCampaigns.id, campaignId));
   if (!c || (c.userId !== user.id && user.role !== 'admin')) throw notFound('Campaign');
   if (['analyzing', 'planning'].includes(c.status)) throw conflict('Wait until the footage analysis finishes');
@@ -83,18 +83,28 @@ export async function createAiScenes(ctx: AppContext, user: SessionLike, campaig
   const tokens = references.filter((r) => r.note !== 'brand logo').map((r) => r.token);
   const logo = references.find((r) => r.note === 'brand logo')?.token;
   const lengthSec = Math.max(15, Math.min(60, o.lengthSec ?? brief.lengthSec));
+  const planned = plan?.success ? plan.data : null;
+  const mode = adMode(o.mode ?? brief.adMode ?? (planned?.mode || 'luxury_commercial'));
+  const endSec = Math.max(2, Math.round(endCardSeconds(lengthSec, mode.editing.endCardRatio)));
+  // What the ad must say (approved texts only), placed on the shots of the mode's shot list.
+  const say = planned?.messaging;
+  const messages = [
+    { text: say?.what?.text ?? '', shot: 1 },
+    { text: say?.unique?.text ?? '', shot: Math.min(3, mode.aiShots.length - 1) },
+    { text: say?.why?.text ?? '', shot: Math.min(4, mode.aiShots.length - 1) },
+  ].filter((m) => m.text.trim());
   const facts = (brand?.knowledge?.facts ?? []).filter((f) => f.status === 'approved').map((f) => f.text).slice(0, 8);
 
   const idea = [
     `A premium ${lengthSec}-second product commercial${brand ? ` for ${brand.name}` : ''}.`,
     `The ONLY subject is the product shown in ${tokens.join(', ')} (the same object photographed from different sides). No people, no hands, no other products, none of the original surroundings.`,
     `New setting: ${o.environment.trim()}.`,
-    'Shots: an intriguing macro detail as the hook; a slow, smooth 360-degree turntable orbit that shows the front, both sides and the back; close-ups of the finest details; a hero shot with dramatic light; a calm final product shot.',
+    `Creative Director mode: ${mode.label} — ${mode.purpose} Shots, in this order: ${mode.aiShots.map((x, i) => `${i + 1}) ${x}`).join('; ')}. Pacing: ${mode.editing.pacing}. Camera language: ${mode.editing.camera.join(', ')}. Each shot continues the previous one (same light, same set, matching direction of movement).`,
     'Keep the product exactly as in the photos: same shape, proportions, colours, clothing, accessories and every detail. Realistic materials and lighting, shallow depth of field, cinematic camera moves.',
     `The client's request: ${brief.request.slice(0, 600)}`,
     facts.length ? `Facts that may be said: ${facts.join(' | ')}.` : 'Say nothing factual about the business beyond the brand name.',
     brief.voiceover ? `A Narrator speaks a few short ${LANG[brief.language]} lines (third person), ending with the call to action${cta ? ` "${cta}"` : ''}.` : 'No speech.',
-    logo ? `Final shot (3 seconds): "Logo end card" showing the brand logo (${logo}).` : '',
+    logo ? `Final shot (${endSec} seconds): "Logo end card" showing the brand logo (${logo}).` : '',
     'The video model must not draw logos or any on-screen text; titles and the logo end card are made in editing.',
   ]
     .filter(Boolean)
@@ -107,7 +117,7 @@ export async function createAiScenes(ctx: AppContext, user: SessionLike, campaig
     user,
     { idea, lengthSec, aspectRatio: brief.aspectRatio, style: 'commercial', genre: 'commercial', language: brief.language, withDialogue: brief.voiceover, withMusic: brief.music !== 'none', keyframes: true, references },
     key,
-    { kind: 'ad', settings: { ad: { brand: brand?.name ?? '', cta, logoAssetId: brand?.logoAssetId ?? null, website: brand?.website ?? null, concept: 'AI product scenes', campaignId } } },
+    { kind: 'ad', settings: { ad: { brand: brand?.name ?? '', cta, logoAssetId: brand?.logoAssetId ?? null, website: brand?.website ?? null, concept: 'AI product scenes', campaignId, mode: mode.key, messages, references: references.filter((r) => r.note !== 'brand logo').map((r) => r.assetId) } } },
   );
   const prev = ((c.analysis ?? {}) as { aiScenes?: unknown[] }).aiScenes ?? [];
   await ctx.db

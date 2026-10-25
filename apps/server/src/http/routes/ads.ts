@@ -6,6 +6,13 @@ import { parse, requireUser } from '../app';
 import { applyReviewOption, brandKitInputSchema, chooseConcept, setBudget, createCampaign, createVariant, estimateCampaign, getCampaign, listBrandKits, listCampaigns, replan, runEnhancements, saveBrandKit, startAssembly, updatePlan } from '../../ads/campaigns';
 import { analyzeWebsite } from '../../brand/website';
 import { createAiScenes } from '../../ads/ai-scenes';
+import { applySceneRevision, proposeSceneRevision, reviseCampaign, revisionSchema } from '../../ads/revise';
+import { approveIdentity, latestQuality } from '../../ads/quality';
+import { enqueue } from '../../queue/queue';
+import { AD_MODES, type AdModeKey } from '@framecraft/shared';
+import { and, desc, eq } from 'drizzle-orm';
+import { generationJobs, projects } from '../../db/schema';
+import { notFound } from '../../lib/errors';
 import { FetchBlocked } from '../../brand/safe-fetch';
 import { deleteProduct, importBrandImage, listProducts, productInputSchema, saveProduct } from '../../brand/brand';
 import { badRequest } from '../../lib/errors';
@@ -82,9 +89,55 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
   // Only the product, staged in a new AI environment (screenplay + price first, then approval).
   app.post('/api/ads/campaigns/:id/ai-scenes', limit, async (req, reply) => {
     const { id } = parse(idParam, req.params);
-    const body = parse(z.object({ environment: z.string().trim().min(3).max(500), lengthSec: z.number().int().min(15).max(60).optional() }), req.body);
+    const body = parse(z.object({ environment: z.string().trim().min(3).max(500), lengthSec: z.number().int().min(15).max(60).optional(), mode: z.enum(AD_MODES.map((m) => m.key) as [AdModeKey, ...AdModeKey[]]).optional() }), req.body);
     return reply.status(201).send(await createAiScenes(ctx, requireUser(req), id, body));
   });
+  // Revisions after a preview (footage ads: free plan edits, then re-assemble).
+  app.post('/api/ads/campaigns/:id/revise', limit, async (req) => {
+    const { id } = parse(idParam, req.params);
+    return reviseCampaign(ctx, requireUser(req), id, parse(revisionSchema, req.body));
+  });
+  // AI-scene ads: propose (price only the affected shots), then apply with approval.
+  app.post('/api/projects/:id/ad-revise/propose', limit, async (req) => {
+    const { id } = parse(idParam, req.params);
+    return proposeSceneRevision(ctx, requireUser(req), id, parse(revisionSchema, req.body));
+  });
+  app.post('/api/projects/:id/ad-revise/apply', limit, async (req) => {
+    const { id } = parse(idParam, req.params);
+    const body = parse(revisionSchema.extend({ approvedCredits: z.number().int().min(0) }), req.body);
+    return applySceneRevision(ctx, requireUser(req), id, body, body.approvedCredits);
+  });
+
+  // Verified quality report of the latest render (measured from the file + product identity).
+  const ownedProject = async (userId: string, id: string) => {
+    const [p] = await ctx.db.select().from(projects).where(and(eq(projects.id, id), eq(projects.userId, userId)));
+    if (!p) throw notFound('Project');
+    return p;
+  };
+  app.get('/api/projects/:id/quality', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(idParam, req.params);
+    await ownedProject(u.id, id);
+    const [running] = await ctx.db.select({ id: generationJobs.id }).from(generationJobs).where(and(eq(generationJobs.projectId, id), eq(generationJobs.kind, 'render'), eq(generationJobs.status, 'rendering'))).limit(1);
+    return { report: await latestQuality(ctx, id), rendering: Boolean(running) };
+  });
+  app.post('/api/projects/:id/quality', limit, async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(idParam, req.params);
+    await ownedProject(u.id, id);
+    const [render] = await ctx.db.select().from(generationJobs).where(and(eq(generationJobs.projectId, id), eq(generationJobs.kind, 'render'), eq(generationJobs.status, 'completed'))).orderBy(desc(generationJobs.completedAt)).limit(1);
+    if (!render) throw notFound('Finished render');
+    await enqueue(ctx.db, 'ad.quality', { projectId: id, renderJobId: render.id }, { queue: 'media', dedupeKey: `ad-quality:${render.id}:${Date.now()}`, maxAttempts: 1 });
+    return { queued: true };
+  });
+  app.post('/api/projects/:id/quality/:reportId/approve', async (req) => {
+    const u = requireUser(req);
+    const { id, reportId } = parse(z.object({ id: z.string().uuid(), reportId: z.string().uuid() }), req.params);
+    await ownedProject(u.id, id);
+    const { shot } = parse(z.object({ shot: z.number().int().min(0) }), req.body);
+    return { report: await approveIdentity(ctx, id, reportId, shot) };
+  });
+
   app.post('/api/ads/campaigns/:id/concept', limit, async (req) => {
     const { id } = parse(idParam, req.params);
     const { key } = parse(z.object({ key: z.string().min(1).max(40) }), req.body);

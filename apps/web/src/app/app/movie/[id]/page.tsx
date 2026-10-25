@@ -12,6 +12,7 @@ import { Badge, Button, Card, Dialog, Field, Input, NativeSelect, PageHeader, Sk
 import { StatusBadge } from '@/components/studio/job-view';
 import { VideoPlayer } from '@/components/studio/video-player';
 import { ProgressBar } from '@/components/studio/progress';
+import { QualityPanel, SceneRevisions } from '@/components/studio/ad-quality';
 import { cn, formatCredits, formatUsd, newKey, seconds } from '@/lib/utils';
 
 /** Re-record a finished film's dialogue with native-language voices (no video is regenerated). */
@@ -646,6 +647,12 @@ export default function DirectorMode({ params }: { params: Promise<{ id: string 
                   <Link href={`/app/editor/${id}`} className={buttonVariants({ variant: 'secondary' })}>Fine-tune in editor</Link>
                 </div>
                 {allShots.some((s) => s.dialogue.length) && <ReVoice projectId={id} onStarted={refresh} />}
+                {(d.project.kind as string) === 'ad' && (
+                  <div className="mx-auto max-w-4xl space-y-3">
+                    <QualityPanel projectId={id} />
+                    <SceneRevisions projectId={id} shotCount={allShots.length} onDone={refresh} />
+                  </div>
+                )}
               </div>
             ) : (
               <Card className="p-8 text-center text-sm text-fog-300">

@@ -142,14 +142,20 @@ describe('chat mode (scripted AI Director)', () => {
     expect(brief.idea).toContain('შენი ფოტო — ქანდაკებად.');
     expect(brief.idea).toContain('Idea 2');
 
-    // Assembled ad: brand logo in the corner, call to action over the last seconds.
+    // Assembled ad: no permanent watermark — the logo and the call to action form the ending.
     const clipFile = path.join(os.tmpdir(), `fc-chat-clip-${process.pid}.mp4`);
     await generateFixtureClip(clipFile, { width: 720, height: 1280, durationSec: 6, title: 'clip' });
     const clip = await storeAsset(h.ctx, { userId: u.id, projectId: card.projectId, kind: 'generated', mediaType: 'video', filePath: clipFile, mimeType: 'video/mp4' });
     await h.ctx.db.update(shots).set({ currentAssetId: clip.id }).where(eq(shots.projectId, card.projectId));
     const tl = await buildDefaultTimeline(h.ctx, card.projectId, '9:16');
-    expect(tl.logo).toMatchObject({ assetId: logo, position: 'top-right' });
-    expect(tl.texts.find((t) => t.id === 'auto-cta')).toMatchObject({ text: 'შეუკვეთე PIJILO-ზე', position: 'center' });
+    expect(tl.logo).toBeUndefined();
+    const total = tl.clips.reduce((t, c) => t + (c.outSec - c.inSec) - (c.transition && c.transition.type !== 'cut' ? c.transition.durationSec : 0), 0);
+    const logoLayer = tl.layers.find((l) => l.id === 'auto-logo')!;
+    expect(logoLayer).toMatchObject({ assetId: logo, kind: 'image' });
+    expect(logoLayer.endSec - logoLayer.startSec).toBeLessThan(total * 0.4);
+    const cta = tl.layers.find((l) => l.id === 'auto-cta')!;
+    expect(cta.text?.content).toBe('შეუკვეთე PIJILO-ზე');
+    expect(cta.y).toBeGreaterThan(0.6); // below the logo, never on top of it
   }, 120_000);
 
   it('builds logo shots from the logo file itself (no AI model, no charge)', async () => {

@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Check, ChevronDown, Film, Globe, ImageIcon, Music, Package, Shield, Sparkles, X } from 'lucide-react';
 import { toast } from 'sonner';
-import { AD_STYLES } from '@framecraft/shared';
+import { AD_MODES, AD_STYLES } from '@framecraft/shared';
 import { api, ApiError, type Asset } from '@/lib/api';
 import { useBrandKits, useProducts } from '@/lib/brand';
 import { Button, Card, Field, Input, NativeSelect, Segmented, Textarea } from '@/components/ui';
@@ -56,9 +56,10 @@ type Draft = {
   cta: string;
   productNotes: string;
   budget: string;
+  adMode: string;
 };
 
-const INITIAL: Draft = { request: '', brandKitId: '', productId: '', files: [], lengthSec: 30, format: 'tiktok', language: 'ka', narration: 'third_person', voiceGender: 'auto', music: 'generate', musicStyle: '', identity: 'strict', objective: 'sales', audience: '', style: 'auto', intensity: 'balanced', cta: '', productNotes: '', budget: '' };
+const INITIAL: Draft = { request: '', brandKitId: '', productId: '', files: [], lengthSec: 30, format: 'tiktok', language: 'ka', narration: 'third_person', voiceGender: 'auto', music: 'generate', musicStyle: '', identity: 'strict', objective: 'sales', audience: '', style: 'auto', intensity: 'balanced', cta: '', productNotes: '', budget: '', adMode: '' };
 
 function loadDraft(): Draft {
   try {
@@ -147,6 +148,7 @@ function CreateAd() {
           intensity: d.intensity,
           cta: d.cta,
           budgetCredits: d.budget ? Number(d.budget) : null,
+          adMode: d.adMode || null,
         },
       });
       try {
@@ -259,6 +261,17 @@ function CreateAd() {
               {d.music === 'upload' && <Button size="sm" variant="ghost" onClick={async () => { const a = await mus.pick(); if (a) setMusicAsset({ id: a.id, name: a.originalName ?? 'music' }); }}>{musicAsset ? musicAsset.name : 'Choose…'}</Button>}
             </div>
           </Field>
+          <div className="md:col-span-2">
+            <Field label="Creative Director mode" hint="How the ad tells its story and is cut — or let the director propose three">
+              <div className="flex flex-wrap gap-1.5">
+                <button type="button" onClick={() => patch({ adMode: '' })} className={cn('rounded-lg border px-2.5 py-1 text-xs', !d.adMode ? 'border-iris-400 bg-iris-500/15 text-white' : 'hairline text-fog-300')}>Auto (three concepts)</button>
+                {AD_MODES.map((m) => (
+                  <button key={m.key} type="button" title={m.purpose} onClick={() => patch({ adMode: m.key })} className={cn('rounded-lg border px-2.5 py-1 text-xs', d.adMode === m.key ? 'border-iris-400 bg-iris-500/15 text-white' : 'hairline text-fog-300')}>{m.label}</button>
+                ))}
+              </div>
+              {d.adMode && <p className="mt-1 text-[11px] text-fog-400">{AD_MODES.find((m) => m.key === d.adMode)?.purpose}</p>}
+            </Field>
+          </div>
           <Field label="Objective"><NativeSelect value={d.objective} onChange={(e) => patch({ objective: e.target.value as Draft['objective'] })}>{(['sales', 'awareness', 'launch', 'engagement', 'traffic'] as const).map((o) => <option key={o} value={o}>{o}</option>)}</NativeSelect></Field>
         </div>
       </Card>

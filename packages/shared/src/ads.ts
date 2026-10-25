@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import { aiEditModeSchema, CAMERA_MOVES, type CameraMove } from './edit';
+import { AD_MODES, type AdModeKey } from './ad-modes';
+
+const adModeKeySchema = z.enum(AD_MODES.map((m) => m.key) as [AdModeKey, ...AdModeKey[]]);
 import { aspectRatioSchema } from './schemas';
 import type { LayerAnim } from './layers';
 
@@ -77,6 +80,8 @@ export const adBriefSchema = z.object({
   intensity: z.enum(['calm', 'balanced', 'bold']).default('balanced'),
   /** Upper limit of credits this ad may spend (null = ask each time). */
   budgetCredits: z.number().int().min(0).nullable().default(null),
+  /** Creative Director mode chosen by the user (null = the director proposes). */
+  adMode: adModeKeySchema.nullable().default(null),
 });
 export type AdBrief = z.infer<typeof adBriefSchema>;
 
@@ -98,6 +103,8 @@ export const adConceptSchema = z.object({
   cta: z.string().max(120),
   whyItFits: z.string().max(400),
   recommended: z.boolean().default(false),
+  /** Creative Director mode (narrative + editing strategy). */
+  mode: adModeKeySchema.optional(),
 });
 export type AdConcept = z.infer<typeof adConceptSchema>;
 
@@ -123,6 +130,8 @@ export const adSceneSchema = z.object({
 });
 export type AdScene = z.infer<typeof adSceneSchema>;
 
+const messageSchema = z.object({ text: z.string().max(200), scene: z.number().int().min(-1) }).nullable();
+
 export const adPlanSchema = z.object({
   title: z.string().max(120),
   audience: z.string().max(300),
@@ -137,6 +146,17 @@ export const adPlanSchema = z.object({
   endCard: z.boolean().default(true),
   notes: z.array(z.string().max(300)).max(10).default([]),
   conceptKey: z.string().max(40).default(''),
+  mode: z.string().max(40).default(''),
+  /**
+   * What the ad says and where: what the product is, why it matters, its unique value, the CTA.
+   * `scene` is the scene index that carries it (overlay or voice-over), or -1 for the end card.
+   */
+  messaging: z
+    .object({ what: messageSchema, why: messageSchema, unique: messageSchema, cta: messageSchema })
+    .nullable()
+    .default(null),
+  /** Brand ending length (s); null = from the mode and the ad length. */
+  endCardSec: z.number().min(1).max(4).nullable().default(null),
 });
 export type AdPlan = z.infer<typeof adPlanSchema>;
 
@@ -144,11 +164,13 @@ export type AdPlan = z.infer<typeof adPlanSchema>;
 
 export type DiversityIssue = {
   severity: 'error' | 'warning' | 'info';
-  code: 'repeated_interval' | 'near_duplicate' | 'same_framing' | 'static_heavy' | 'few_product' | 'weak_progression' | 'repetitive_transitions' | 'insufficient_footage';
+  code: 'repeated_interval' | 'reused_footage' | 'single_take' | 'near_duplicate' | 'same_framing' | 'static_heavy' | 'few_product' | 'weak_progression' | 'repetitive_transitions' | 'insufficient_footage' | 'missing_message';
   message: string;
   sceneIndexes: number[];
 };
 export type DiversityReport = {
+  /** A prediction from the plan only — never a verified result (see the post-render quality report). */
+  kind: 'predicted';
   score: number;
   issues: DiversityIssue[];
   stats: { scenes: number; uniqueSources: number; uniqueSegments: number; reusedSeconds: number; staticShare: number; productShots: number; avgShotSec: number; usableFootageSec: number; targetSec: number };
@@ -165,7 +187,7 @@ const reframedApart = (a: AdScene['crop'], b: AdScene['crop']) => (!a || !b ? Bo
  * repeated source intervals, near-duplicate frames, identical framing in a row, too many static
  * shots, too few product moments, weak progression and monotonous transitions.
  */
-export function reviewPlanDiversity(plan: Pick<AdPlan, 'scenes'>, segments: DiversitySegment[], targetSec: number): DiversityReport {
+export function reviewPlanDiversity(plan: Pick<AdPlan, 'scenes'> & Partial<Pick<AdPlan, 'messaging' | 'cta' | 'voiceover'>>, segments: DiversitySegment[], targetSec: number): DiversityReport {
   const issues: DiversityIssue[] = [];
   const ranges = plan.scenes.map((sc, i) => {
     const s = segments.find((x) => x.id === sc.segmentId);
@@ -226,10 +248,30 @@ export function reviewPlanDiversity(plan: Pick<AdPlan, 'scenes'>, segments: Dive
     );
   }
 
-  const penalty = issues.reduce((p, x) => p + (x.severity === 'error' ? 25 : x.severity === 'warning' ? 10 : 3), 0);
   const total = plan.scenes.reduce((t, s) => t + s.durationSec, 0);
+  // Re-used footage still costs freshness, even when reframed as a crop.
+  if (reusedSeconds > 0.3 && !issues.some((i) => i.code === 'repeated_interval')) issues.push({ severity: reusedSeconds / Math.max(1, total) > 0.25 ? 'warning' : 'info', code: 'reused_footage', message: `${reusedSeconds.toFixed(1)} s of the ad re-use footage already shown (as detail crops)`, sceneIndexes: [] });
+  const sources = new Set(ranges.map((r) => r.assetId)).size;
+  if (sources === 1 && ranges.length >= 3) issues.push({ severity: 'warning', code: 'single_take', message: 'Every shot comes from one take — the ad will feel like one continuous clip', sceneIndexes: [] });
+
+  // A complete ad says what it is, why it matters, what is unique, and what to do.
+  const m = plan.messaging;
+  const labels = { what: 'what the product is', why: 'why it matters', unique: 'what makes it unique', cta: 'a call to action' } as const;
+  if (m === undefined || m === null) {
+    const hasCta = Boolean(plan.cta?.trim());
+    issues.push({ severity: hasCta ? 'info' : 'warning', code: 'missing_message', message: hasCta ? 'The plan does not state what the product is, why it matters and what is unique — check the texts and narration' : 'No call to action', sceneIndexes: [] });
+  } else
+    for (const k of ['what', 'why', 'unique', 'cta'] as const)
+      if (!m[k]?.text.trim()) issues.push({ severity: k === 'what' || k === 'cta' ? 'warning' : 'info', code: 'missing_message', message: `The ad never says ${labels[k]}`, sceneIndexes: [] });
+
+  const penalty =
+    issues.reduce((p, x) => p + (x.severity === 'error' ? 25 : x.severity === 'warning' ? 10 : 3), 0) +
+    // Proportional cost of re-used seconds (crops included).
+    Math.min(20, Math.round((reusedSeconds / Math.max(1, total)) * 40));
   return {
-    score: Math.max(0, 100 - penalty),
+    kind: 'predicted',
+    // A plan is never "perfect" before it is rendered and checked.
+    score: Math.max(0, Math.min(95, 100 - penalty)),
     issues,
     stats: {
       scenes: plan.scenes.length,

@@ -750,6 +750,16 @@ export async function regenerateShot(ctx: AppContext, user: SessionLike, shotId:
   return res;
 }
 
+/** Price of regenerating one shot as it is now (logo cards are free: built from the logo file). */
+export async function estimateShotRegeneration(ctx: AppContext, user: SessionLike, shotId: string): Promise<number> {
+  const shot = await ownedShot(ctx, user, shotId);
+  if (isLogoShot(shot)) return 0;
+  const [project] = await ctx.db.select().from(projects).where(eq(projects.id, shot.projectId));
+  const brief = movieBriefSchema.parse((project!.settings as { brief: unknown }).brief);
+  const { estimate } = await bestShotSpec(ctx, user, shotSpec(project!, shot, brief, (await sceneLocationRefs(ctx.db, project!.id)).get(shot.sceneId)));
+  return estimate.credits;
+}
+
 export async function storyboardMovie(ctx: AppContext, user: SessionLike, projectId: string, idempotencyKey: string) {
   // The same keyframes the film uses: drawn with the characters', location's and objects' photos.
   const movie = await getMovie(ctx, user, projectId);

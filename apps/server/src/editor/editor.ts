@@ -1,9 +1,10 @@
 import fsp from 'node:fs/promises';
 import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
-import { timelineSchema, timelineDuration, type Timeline, type TimelineInput } from '@framecraft/shared';
+import { adMode, timelineSchema, timelineDuration, type Timeline, type TimelineInput } from '@framecraft/shared';
 import type { AppContext } from '../context';
 import { assets, generationJobs, projects, projectVersions, scenes, shots } from '../db/schema';
 import { renderTimeline } from '../media/render';
+import { queueQualityCheck } from '../ads/quality';
 import { wordsToCues } from '../media/subtitles';
 import { downloadAssetToTemp, storeAsset, tmpFile, type Asset } from '../services/assets';
 import { enqueue, type QueueJob } from '../queue/queue';
@@ -55,6 +56,12 @@ export async function buildDefaultTimeline(
   soundtrack?: { music?: { assetId: string; durationSec: number }; ambience: Map<string, { assetId: string; durationSec: number }> },
 ): Promise<Timeline> {
   const sceneStart = new Map<string, number>();
+  const [project] = await ctx.db.select({ kind: projects.kind, settings: projects.settings }).from(projects).where(eq(projects.id, projectId));
+  type AdSettings = { cta?: string; logoAssetId?: string | null; website?: string | null; mode?: string; messages?: { text: string; shot: number }[] };
+  const ad = project?.kind === 'ad' ? (project.settings as { ad?: AdSettings }).ad : undefined;
+  // Ads follow their Creative Director mode's transitions (cuts for social, dissolves for luxury…).
+  const adTransitions = ad ? adMode(ad.mode).editing.transitions : null;
+  const shotStarts: { shotIndex: number; start: number; dur: number; logoCard: boolean }[] = [];
   const shotRows = await ctx.db
     .select({ shot: shots, sceneIndex: scenes.index })
     .from(shots)
@@ -80,7 +87,12 @@ export async function buildDefaultTimeline(
       // A dubbed shot plays only its current take: the clip's own audio is muted (video models
       // sometimes speak despite being told not to); the scene's ambience bed replaces its room tone.
       const volume = voices.length ? 0 : 1;
-      clips.push({ id: `clip-${r.shot.id.slice(0, 8)}`, assetId: a.id, inSec: 0, outSec: dur, volume, shotId: r.shot.id, label: r.shot.description.slice(0, 60), transition: sceneChange ? { type: 'fade', durationSec: 0.5 } : undefined });
+      const isLogoCard = Boolean((a.source as { logoCard?: boolean }).logoCard);
+      const nextIsLogo = Boolean(next?.shot.currentAssetId && (byId.get(next.shot.currentAssetId)?.source as { logoCard?: boolean } | undefined)?.logoCard);
+      const adT = adTransitions && next ? (nextIsLogo ? 'fade' : adTransitions[i % adTransitions.length]!) : null;
+      const transition = adT ? (adT === 'cut' ? undefined : { type: adT, durationSec: Math.min(0.5, dur / 4) }) : sceneChange ? { type: 'fade' as const, durationSec: 0.5 } : undefined;
+      shotStarts.push({ shotIndex: i, start: t, dur, logoCard: isLogoCard });
+      clips.push({ id: `clip-${r.shot.id.slice(0, 8)}`, assetId: a.id, inSec: 0, outSec: dur, volume, shotId: r.shot.id, label: r.shot.description.slice(0, 60), transition });
       if (voices.length) {
         let at = t + 0.3;
         for (const v of voices) {
@@ -96,7 +108,7 @@ export async function buildDefaultTimeline(
           subtitles.push({ id: `sub-${subtitles.length}`, startSec: t + 0.2, endSec: t + 0.2 + len, text: d.line });
         }
       }
-      t += dur - (sceneChange ? 0.5 : 0);
+      t += dur - (transition?.durationSec ?? 0);
     });
   } else {
     const vids = await ctx.db
@@ -123,20 +135,30 @@ export async function buildDefaultTimeline(
     audio.push({ id: 'auto-music', assetId: soundtrack.music.assetId, kind: 'music', startSec: 0, inSec: 0, outSec: round2(len), volume: hasVoices ? 0.18 : 0.42, fadeInSec: 1.5, fadeOutSec: Math.min(3, len / 4) });
   }
 
-  // Ads: the brand logo in the corner throughout and the call to action over the last seconds.
+  // Ads: what the product is / why / what is unique as readable lower-thirds on their shots, then
+  // the brand ending — the call to action and website under the logo card. No permanent watermark:
+  // when there is no logo card, the logo appears only with the call to action.
   const texts: TimelineInput['texts'] = [];
-  let logo: TimelineInput['logo'];
-  const [project] = await ctx.db.select({ kind: projects.kind, settings: projects.settings }).from(projects).where(eq(projects.id, projectId));
-  const ad = project?.kind === 'ad' ? (project.settings as { ad?: { cta?: string; logoAssetId?: string | null } }).ad : undefined;
+  const layers: TimelineInput['layers'] = [];
+  const logo: TimelineInput['logo'] = undefined;
   if (ad && t > 0) {
-    if (ad.logoAssetId) logo = { assetId: ad.logoAssetId, position: 'top-right', scale: 0.14, opacity: 0.95 };
-    if (ad.cta?.trim()) texts.push({ id: 'auto-cta', text: ad.cta.trim().slice(0, 120), startSec: round2(Math.max(0, t - 3)), endSec: round2(t), position: 'center', fontSize: 64, color: '#FFFFFF', background: true });
+    const card = shotStarts.find((x) => x.logoCard);
+    const ctaFrom = card ? card.start : Math.max(0, t - 2.5);
+    for (const [k, m] of (ad.messages ?? []).entries()) {
+      const at = shotStarts.find((x) => x.shotIndex === m.shot && !x.logoCard);
+      if (!at || !m.text.trim()) continue;
+      layers.push({ id: `msg-${k}`, name: 'message', kind: 'text', track: 2, startSec: round2(at.start + 0.3), endSec: round2(Math.min(ctaFrom, at.start + at.dur - 0.2)), x: 0.5, y: 0.74, w: 0.82, text: { content: m.text.trim().slice(0, 120), font: 'semibold', size: 54, color: '#FFFFFF', shadow: { color: '#000000', opacity: 0.55, offset: 3 }, background: { color: '#000000', opacity: 0.45, padding: 18 } }, animIn: { type: 'fade', durationSec: 0.4 }, animOut: { type: 'fade', durationSec: 0.3 } });
+    }
+    if (!card && ad.logoAssetId) layers.push({ id: 'auto-logo', name: 'logo', kind: 'image', track: 3, assetId: ad.logoAssetId, startSec: round2(ctaFrom), endSec: round2(t), x: 0.5, y: 0.42, w: 0.42, opacity: 1, animIn: { type: 'fade', durationSec: 0.4 } });
+    if (ad.cta?.trim()) layers.push({ id: 'auto-cta', name: 'cta', kind: 'text', track: 2, startSec: round2(ctaFrom + 0.3), endSec: round2(t - 0.05), x: 0.5, y: card ? 0.76 : 0.7, w: 0.84, text: { content: ad.cta.trim().slice(0, 120), font: 'bold', size: 62, color: '#FFFFFF', shadow: { color: '#000000', opacity: 0.5, offset: 3 } }, animIn: { type: 'slide_up', durationSec: 0.4 } });
+    const site = ad.website?.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    if (site && card) layers.push({ id: 'auto-site', name: 'website', kind: 'text', track: 2, startSec: round2(ctaFrom + 0.5), endSec: round2(t - 0.05), x: 0.5, y: 0.83, w: 0.7, text: { content: site.slice(0, 60), font: 'semibold', size: 40, color: '#FFFFFF' }, animIn: { type: 'fade', durationSec: 0.4 } });
   }
 
   // Never show two cues at once: each ends just before the next begins.
   subtitles.sort((a, b) => a.startSec - b.startSec);
   for (let i = 0; i < subtitles.length - 1; i++) subtitles[i]!.endSec = Math.max(subtitles[i]!.startSec + 0.3, Math.min(subtitles[i]!.endSec, round2(subtitles[i + 1]!.startSec - 0.02)));
-  return timelineSchema.parse({ aspectRatio, clips, subtitles, texts, logo, audio: audio.slice(0, 50) });
+  return timelineSchema.parse({ aspectRatio, clips, subtitles, texts, layers, logo, audio: audio.slice(0, 50) });
 }
 
 /**
@@ -150,7 +172,10 @@ export async function keepEditorChanges(ctx: AppContext, projectId: string, next
   const p = prev.data;
   // Auto-generated tracks (voices, score, ambience) come from `next`; the user's own tracks are kept.
   const own = p.audio.filter((a) => a.kind !== 'voice' && !a.id.startsWith('auto-'));
-  return timelineSchema.parse({ ...next, resolution: p.resolution, fps: p.fps, burnSubtitles: p.burnSubtitles, logo: p.logo ?? next.logo, texts: p.texts.length ? p.texts : next.texts, audio: [...next.audio, ...own].slice(0, 50) });
+  // Layers: the user's own layers are kept; auto layers (messages, CTA, website, logo) are refreshed.
+  const auto = (id: string) => id.startsWith('auto-') || id.startsWith('msg-');
+  const layers = [...next.layers.filter((l) => auto(l.id)), ...p.layers.filter((l) => !auto(l.id))];
+  return timelineSchema.parse({ ...next, resolution: p.resolution, fps: p.fps, burnSubtitles: p.burnSubtitles, logo: p.logo ?? next.logo, texts: [...p.texts.filter((x) => !x.id.startsWith('auto-')), ...next.texts], layers, audio: [...next.audio, ...own].slice(0, 50) });
 }
 
 export async function getTimeline(ctx: AppContext, user: SessionLike, projectId: string) {
@@ -258,6 +283,8 @@ export async function runRenderJob(ctx: AppContext, qj: QueueJob) {
     if (job.projectId) await ctx.db.update(projects).set({ thumbnailAssetId: asset.thumbnailAssetId, updatedAt: new Date() }).where(eq(projects.id, job.projectId));
     if (!job.parentJobId) await notify(ctx.db, { userId: job.userId, type: 'render.completed', title: 'Your export is ready', link: `/app/editor/${job.projectId}` });
     else await enqueue(ctx.db, 'movie.check', { movieJobId: job.parentJobId }, { queue: 'generation', dedupeKey: `movie-check:${job.parentJobId}:${job.id}` });
+    // Ads are checked from the rendered file before they are presented as final.
+    if (job.projectId) await queueQualityCheck(ctx, job.projectId, job.id);
   } catch (err) {
     await set({ status: 'failed', phase: 'Render failed', error: { code: 'render_failed', message: (err as Error).message.split('\n')[0]!.slice(0, 300), retryable: true }, completedAt: new Date() });
     if (job.parentJobId) await enqueue(ctx.db, 'movie.check', { movieJobId: job.parentJobId }, { queue: 'generation', dedupeKey: `movie-check:${job.parentJobId}:${job.id}` });
