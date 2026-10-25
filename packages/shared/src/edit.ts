@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { EditMask } from './masks';
 import { clipDuration, clipAdjustSchema, type CameraKeyframe, type ClipAdjust, type ClipCamera, type Timeline, type TimelineClip } from './schemas';
 
 /*
@@ -254,16 +255,7 @@ export const AI_EDIT_MODES = [
 export type AiEditMode = (typeof AI_EDIT_MODES)[number]['key'];
 export const aiEditModeSchema = z.enum(AI_EDIT_MODES.map((m) => m.key) as [AiEditMode, ...AiEditMode[]]);
 
-/** Normalised (0–1) spatial selection. Brush strokes are polylines with a radius. */
-export const editMaskSchema = z.object({
-  rects: z.array(z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), w: z.number().min(0).max(1), h: z.number().min(0).max(1), ellipse: z.boolean().default(false), subtract: z.boolean().default(false) })).max(20).default([]),
-  polygons: z.array(z.object({ points: z.array(z.tuple([z.number().min(0).max(1), z.number().min(0).max(1)])).min(3).max(400), subtract: z.boolean().default(false) })).max(20).default([]),
-  strokes: z.array(z.object({ points: z.array(z.tuple([z.number().min(0).max(1), z.number().min(0).max(1)])).min(1).max(2000), radius: z.number().min(0.002).max(0.3), subtract: z.boolean().default(false) })).max(50).default([]),
-  /** Soft edge as a fraction of the frame width. */
-  feather: z.number().min(0).max(0.1).default(0.015),
-  invert: z.boolean().default(false),
-});
-export type EditMask = z.infer<typeof editMaskSchema>;
+export { editMaskSchema, type EditMask } from './masks';
 export const maskIsEmpty = (m?: EditMask | null) => !m || (!m.rects.length && !m.polygons.length && !m.strokes.length);
 
 /** Rough description of where the mask is, for the model prompt (the provider takes no mask input). */
@@ -294,6 +286,10 @@ export const planOpSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('move'), shot: z.number().int().min(1), afterShot: z.number().int().min(0) }),
   z.object({ op: z.literal('remove'), shot: z.number().int().min(1) }),
   z.object({ op: z.literal('text'), text: z.string().min(1).max(300), startSec: z.number().min(0), endSec: z.number().min(0.1), position: z.enum(['top', 'center', 'bottom']).default('bottom') }),
+  z.object({ op: z.literal('color_all'), adjust: clipAdjustSchema.partial() }),
+  z.object({ op: z.literal('logo'), position: z.enum(['top-left', 'top-right', 'bottom-left', 'bottom-right']).default('bottom-right'), lastSec: z.number().min(0.5).max(600).optional() }),
+  z.object({ op: z.literal('duck_music'), volume: z.number().min(0).max(1).default(0.45) }),
+  z.object({ op: z.literal('animated_captions'), style: z.enum(['words', 'pop', 'typewriter']).default('words') }),
   z.object({ op: z.literal('ai_edit'), shot: z.number().int().min(1), mode: aiEditModeSchema, instruction: z.string().min(3).max(900), startSec: z.number().min(0).optional(), endSec: z.number().min(0).optional() }),
 ]);
 export type PlanOp = z.infer<typeof planOpSchema>;
@@ -309,6 +305,21 @@ export function applyPlanOp<T extends Timeline>(t: T, op: PlanOp, newClipId: () 
     return { ...t, texts: [...t.texts, { id: `txt-${Math.random().toString(36).slice(2, 10)}`, text: op.text, startSec: op.startSec, endSec: Math.max(op.endSec, op.startSec + 0.5), position: op.position, fontSize: 64, color: '#FFFFFF', background: true }] };
   }
   if (op.op === 'ai_edit') return t;
+  if (op.op === 'color_all') return { ...t, clips: t.clips.map((c) => ({ ...c, adjust: clipAdjustSchema.parse({ ...c.adjust, ...op.adjust }) })) };
+  if (op.op === 'duck_music') return { ...t, audio: t.audio.map((a) => (a.kind === 'music' || a.kind === 'sfx' ? { ...a, duck: true, volume: Math.min(a.volume, op.volume + 0.15) } : a)) };
+  if (op.op === 'logo') {
+    if (!t.logo) return t;
+    const total = t.clips.reduce((s, c) => s + clipDuration(c), 0);
+    const start = op.lastSec ? Math.max(0, total - op.lastSec) : 0;
+    const pos = { 'top-left': [0.12, 0.08], 'top-right': [0.88, 0.08], 'bottom-left': [0.12, 0.9], 'bottom-right': [0.88, 0.9] }[op.position];
+    const layer = { id: `ly-logo-${Math.random().toString(36).slice(2, 8)}`, name: 'Logo', kind: 'image' as const, track: 4, assetId: t.logo.assetId, startSec: Math.round(start * 100) / 100, endSec: Math.round(total * 100) / 100, inSec: 0, volume: 0, x: pos![0]!, y: pos![1]!, w: 0.18, rotation: 0, opacity: 0.95, flipH: false, flipV: false, keyframes: [], easing: 'ease' as const, animIn: { type: 'fade' as const, durationSec: 0.4 }, animOut: { type: 'none' as const, durationSec: 0.4 } };
+    return { ...t, layers: [...t.layers, layer] };
+  }
+  if (op.op === 'animated_captions') {
+    // Turn subtitle cues into animated caption layers (word by word, pop or typewriter).
+    const layers = t.subtitles.map((s, i) => ({ id: `ly-cap-${i}-${Math.random().toString(36).slice(2, 6)}`, name: 'Caption', kind: 'text' as const, track: 5, startSec: s.startSec, endSec: Math.max(s.endSec, s.startSec + 0.4), inSec: 0, volume: 0, x: 0.5, y: 0.74, w: 0.84, rotation: 0, opacity: 1, flipH: false, flipV: false, keyframes: [], easing: 'ease' as const, text: { content: s.text, font: 'black' as const, size: 66, color: '#FFFFFF', stroke: { color: '#000000', width: 6 }, align: 'center' as const }, animIn: { type: op.style, durationSec: Math.min(1.2, Math.max(0.3, (s.endSec - s.startSec) * 0.6)) }, animOut: { type: 'fade' as const, durationSec: 0.15 } }));
+    return { ...t, layers: [...t.layers.filter((l) => l.name !== 'Caption'), ...layers], burnSubtitles: false };
+  }
   const seq = sequenceOf(t);
   const node = seq[op.shot - 1];
   if (!node) return t;
@@ -346,4 +357,43 @@ export function applyPlanOp<T extends Timeline>(t: T, op: PlanOp, newClipId: () 
     case 'remove':
       return removeNode(t, node.key);
   }
+}
+
+/** Start time of every clip on the timeline (speed, freeze frames and transition overlaps included). */
+export function clipStartTimes(t: Pick<Timeline, 'clips'>): number[] {
+  const starts: number[] = [];
+  let acc = 0;
+  t.clips.forEach((c, i) => {
+    starts.push(acc);
+    acc += clipDuration(c);
+    const tr = c.transition;
+    if (tr && tr.type !== 'cut' && i < t.clips.length - 1) acc -= tr.durationSec;
+  });
+  return starts;
+}
+
+/** Subject centre (source fractions) of an auto-reframed clip at source time t (linear between points). */
+export function reframeAt(points: { t: number; x: number; y: number }[], t: number) {
+  if (!points.length) return { x: 0.5, y: 0.5 };
+  if (t <= points[0]!.t) return { x: points[0]!.x, y: points[0]!.y };
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i]!;
+    const b = points[i + 1]!;
+    if (t <= b.t) {
+      const u = (t - a.t) / Math.max(1e-6, b.t - a.t);
+      return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+    }
+  }
+  const z = points[points.length - 1]!;
+  return { x: z.x, y: z.y };
+}
+
+/** CSS object-position (%) that crops a cover-scaled source around `centre` — same maths as the export's crop. */
+export function coverPosition(src: { w: number; h: number }, frame: { w: number; h: number }, centre: { x: number; y: number }) {
+  const k = Math.max(frame.w / src.w, frame.h / src.h);
+  const sw = src.w * k;
+  const sh = src.h * k;
+  const px = sw > frame.w ? Math.min(1, Math.max(0, (centre.x * sw - frame.w / 2) / (sw - frame.w))) : 0.5;
+  const py = sh > frame.h ? Math.min(1, Math.max(0, (centre.y * sh - frame.h / 2) / (sh - frame.h))) : 0.5;
+  return { x: px * 100, y: py * 100 };
 }

@@ -29,6 +29,13 @@
       "when": 1792900000000,
       "tag": "0003_editor_studio",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792950000000,
+      "tag": "0004_product_ads",
+      "breakpoints": true
     }
   ]
 }

@@ -33,8 +33,10 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import { clipDuration, LANGUAGES, swapShotVersion, timelineDuration, type Timeline } from '@framecraft/shared';
-import { cameraStyle, GradeFilter, Vignette } from '@/components/editor/look';
+import { clipDuration, coverPosition, LANGUAGES, reframeAt, swapShotVersion, timelineDuration, type Timeline } from '@framecraft/shared';
+import { cameraStyle, Vignette } from '@/components/editor/look';
+import { GradeCanvas, Grain } from '@/components/editor/grade-canvas';
+import { LayersPanel, LayerStage } from '@/components/editor/layers';
 import { api, ApiError, endpoints, type Asset, type Project } from '@/lib/api';
 import { useJob } from '@/lib/hooks';
 import { clipStarts, moveClip, newId, splitClip, useEditor } from '@/lib/editor-store';
@@ -162,8 +164,10 @@ function DraggableLogo({ url, logo, onMove }: { url: string; logo: Logo; onMove:
   );
 }
 
-function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove }: { timeline: Timeline; assets: Map<string, Asset>; playhead: number; setPlayhead: (t: number) => void; onLogoMove: (pos: { x: number; y: number }) => void }) {
+function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, selectedLayer, onSelectLayer, onLayerChange }: { timeline: Timeline; assets: Map<string, Asset>; playhead: number; setPlayhead: (t: number) => void; onLogoMove: (pos: { x: number; y: number }) => void; selectedLayer: string | null; onSelectLayer: (id: string | null) => void; onLayerChange: (id: string, patch: Partial<Timeline['layers'][number]>) => void }) {
   const video = useRef<HTMLVideoElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
+  const [safe, setSafe] = useState<'off' | 'tiktok' | 'reels'>('off');
   const [playing, setPlaying] = useState(false);
   const starts = useMemo(() => clipStarts(timeline), [timeline]);
   const total = timelineDuration(timeline);
@@ -278,14 +282,15 @@ function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove }: { time
 
   return (
     <div className="space-y-3">
-      <div className="relative mx-auto max-h-[56dvh] overflow-hidden rounded-2xl border hairline bg-black" style={{ aspectRatio: `${w}/${h}` }}>
-        {clip && <GradeFilter id={`grade-pv-${clip.id}`} adjust={clip.adjust} />}
+      <div ref={frame} className="relative mx-auto max-h-[56dvh] overflow-hidden rounded-2xl border hairline bg-black" style={{ aspectRatio: `${w}/${h}` }} onPointerDown={() => onSelectLayer(null)}>
         {asset ? (
           <div className="absolute inset-0 overflow-hidden" style={{ opacity: Math.max(0, fade) }}>
             <div className="size-full" style={cameraStyle(clip?.camera, clipT)}>
-              <video ref={video} src={asset.url} playsInline muted={timeline.muteClipAudio || clipVolume === 0} onTimeUpdate={onTime} className="size-full object-cover" preload="auto" style={clip?.adjust ? { filter: `url(#grade-pv-${clip.id})` } : undefined} />
+              <video ref={video} src={asset.url} playsInline muted={timeline.muteClipAudio || clipVolume === 0} onTimeUpdate={onTime} className="size-full object-cover" preload="auto" style={clip?.reframe && video.current?.videoWidth ? (() => { const pos = coverPosition({ w: video.current!.videoWidth, h: video.current!.videoHeight }, { w: w!, h: h! }, reframeAt(clip.reframe!.points, localTime)); return { objectPosition: `${pos.x}% ${pos.y}%` }; })() : undefined} />
+              <GradeCanvas video={video} adjust={clip?.adjust} lutUrl={clip?.adjust?.lut ? (assets.get(clip.adjust.lut.assetId)?.url ?? null) : null} />
             </div>
             <Vignette amount={clip?.adjust?.vignette} />
+            <Grain amount={clip?.adjust?.grain} />
           </div>
         ) : (
           <div className="grid size-full place-items-center text-sm text-fog-400">Add clips to start</div>
@@ -306,6 +311,16 @@ function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove }: { time
         {subs.map((s) => (
           <div key={s.id} className="pointer-events-none absolute inset-x-4 bottom-[14%] text-center text-sm font-semibold text-white [text-shadow:0_0_4px_#000,0_0_2px_#000] md:text-base">{s.text}</div>
         ))}
+        <LayerStage timeline={timeline} t={playhead} playing={playing} assets={assets} selectedId={selectedLayer} onSelect={onSelectLayer} onChange={onLayerChange} frame={frame} frameH={540} />
+        {safe !== 'off' && (
+          // Platform UI that covers the video: keep text out of these areas.
+          <div className="pointer-events-none absolute inset-0">
+            <div className="absolute inset-x-0 bottom-0 h-[20%] bg-signal-red/20" />
+            <div className="absolute bottom-[20%] right-0 top-[38%] w-[16%] bg-signal-red/20" />
+            <div className="absolute inset-x-0 top-0 h-[9%] bg-signal-red/15" />
+            <span className="absolute bottom-1 left-2 text-[9px] text-white/80">{safe === 'tiktok' ? 'TikTok' : 'Reels'} UI area — keep text out</span>
+          </div>
+        )}
         {logo && timeline.logo && <DraggableLogo url={logo.url} logo={timeline.logo} onMove={onLogoMove} />}
         {asset?.isFixture && <span className="absolute left-2 top-2 rounded-full bg-signal-amber px-2 py-0.5 text-[10px] font-semibold text-black">TEST FIXTURE · NOT AI</span>}
       </div>
@@ -317,6 +332,11 @@ function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove }: { time
         <span className="w-24 text-right text-xs tabular-nums text-fog-300">
           {seconds(playhead)} / {seconds(total)}
         </span>
+        <select aria-label="Safe zones" value={safe} onChange={(e) => setSafe(e.target.value as typeof safe)} className="h-8 rounded-lg border hairline bg-ink-900 px-1.5 text-[11px] text-fog-200">
+          <option value="off">Safe zones</option>
+          <option value="tiktok">TikTok</option>
+          <option value="reels">Reels</option>
+        </select>
       </div>
       <p className="text-[11px] text-fog-400">Preview plays clips, voice-over and music in sequence with text and subtitles. Transitions and the final audio mix are rendered exactly in the exported MP4 — export to get one file with everything.</p>
     </div>
@@ -434,13 +454,15 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
   const { timeline, apply, undo, redo, load, selected, select, dirty, markSaved, past, future } = useEditor();
   const [playhead, setPlayhead] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [libraryFor, setLibraryFor] = useState<null | { kind: 'clip' | 'replace' | 'audio' | 'logo' | 'overlay' }>(null);
+  const [libraryFor, setLibraryFor] = useState<null | { kind: 'clip' | 'replace' | 'audio' | 'logo' | 'overlay' | 'layer-image' | 'layer-video' }>(null);
   const [ttsOpen, setTtsOpen] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [workspace, setWorkspace] = useState<Workspace>('story');
   const [shotClip, setShotClip] = useState<string | null>(null);
   const [compareInit, setCompareInit] = useState<string | null>(null);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [selectedLayer, setSelectedLayer] = useState<string | null>(null);
+  const layerPick = useRef<null | { kind: 'image' | 'video'; cb: (a: Asset) => void }>(null);
   const studioQ = useStudio(id);
 
   const tq = useQuery({ queryKey: ['timeline', id], queryFn: () => api<TimelineResponse>(`/api/projects/${id}/timeline`), staleTime: Infinity });
@@ -581,10 +603,13 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       });
     else if (kind === 'audio')
       apply((t) => {
-        t.audio.push({ id: newId('aud'), assetId: a.id, kind: 'music', startSec: 0, inSec: 0, outSec: Math.max(1, (a.durationMs ?? total * 1000) / 1000), volume: 0.6, fadeInSec: 0, fadeOutSec: 1, muted: false });
+        t.audio.push({ id: newId('aud'), assetId: a.id, kind: 'music', startSec: 0, inSec: 0, outSec: Math.max(1, (a.durationMs ?? total * 1000) / 1000), volume: 0.6, fadeInSec: 0, fadeOutSec: 1, muted: false, duck: true, denoise: false });
         return t;
       });
-    else if (kind === 'overlay')
+    else if ((kind === 'layer-image' || kind === 'layer-video') && layerPick.current) {
+      layerPick.current.cb(a);
+      layerPick.current = null;
+    } else if (kind === 'overlay')
       apply((t) => {
         const len = a.mediaType === 'video' ? Math.min(10, (a.durationMs ?? 4000) / 1000) : 3;
         t.overlays.push({ id: newId('ov'), assetId: a.id, startSec: Math.round(playhead * 10) / 10, endSec: Math.round((playhead + len) * 10) / 10, x: 0.6, y: 0.06, w: 0.34, opacity: 1, inSec: 0 });
@@ -599,7 +624,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
   const previewCard = (
     <Card className="p-3 md:p-4">
-            <Preview timeline={timeline} assets={assets} playhead={playhead} setPlayhead={setPlayhead} onLogoMove={(pos) => apply((t) => ({ ...t, logo: t.logo ? { ...t.logo, ...pos } : t.logo }))} />
+            <Preview timeline={timeline} assets={assets} playhead={playhead} setPlayhead={setPlayhead} onLogoMove={(pos) => apply((t) => ({ ...t, logo: t.logo ? { ...t.logo, ...pos } : t.logo }))} selectedLayer={selectedLayer} onSelectLayer={setSelectedLayer} onLayerChange={(lid, patch) => apply((t) => ({ ...t, layers: t.layers.map((x) => (x.id === lid ? { ...x, ...patch } : x)) }))} />
           </Card>
   );
   const timelineCard = <div>
@@ -621,6 +646,9 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                   select(clipId);
                   setPlayhead(at);
                 }}
+                selectedLayer={selectedLayer}
+                onSelectLayer={setSelectedLayer}
+                onLayerTiming={(lid, startSec, endSec) => apply((t) => ({ ...t, layers: t.layers.map((x) => (x.id === lid ? { ...x, startSec, endSec } : x)) }))}
                 onMoveClip={(from, to) =>
                   apply((t) => {
                     const fi = t.clips.findIndex((x) => x.id === from);
@@ -674,6 +702,9 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
           <Button size="icon" variant="ghost" aria-label="Redo" onClick={redo} disabled={!future.length}><Redo2 /></Button>
           <Button size="icon" variant="ghost" aria-label="Versions" onClick={() => setVersionsOpen(true)}><History /></Button>
           <Button size="sm" variant="secondary" onClick={() => save(false, 'Manual save')}><Save /> Save version</Button>
+          {(tq.data!.project.settings as { ad?: { campaignId?: string } } | undefined)?.ad?.campaignId && (
+            <Link href={`/app/ads/footage/${(tq.data!.project.settings as { ad: { campaignId: string } }).ad.campaignId}`} className={buttonVariants({ size: 'sm', variant: 'ghost' })}>Product ad · storyboard &amp; variants</Link>
+          )}
           <Button size="sm" variant={assistantOpen ? 'primary' : 'outline'} onClick={() => setAssistantOpen((o) => !o)}><Bot /> Assistant</Button>
         </div>
       </div>
@@ -743,7 +774,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
               <TabsTrigger value="audio"><AudioLines className="mr-1 inline size-3.5" />Audio</TabsTrigger>
               <TabsTrigger value="text"><Type className="mr-1 inline size-3.5" />Text</TabsTrigger>
               <TabsTrigger value="subs"><Captions className="mr-1 inline size-3.5" />Subs</TabsTrigger>
-              <TabsTrigger value="overlay"><Layers className="mr-1 inline size-3.5" />Overlay</TabsTrigger>
+              <TabsTrigger value="layers"><Layers className="mr-1 inline size-3.5" />Layers</TabsTrigger>
+              <TabsTrigger value="overlay">PiP (V2)</TabsTrigger>
               <TabsTrigger value="export"><Download className="mr-1 inline size-3.5" />Export</TabsTrigger>
             </TabsList>
 
@@ -923,6 +955,10 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
               </div>
             </TabsContent>
 
+            <TabsContent value="layers">
+              <LayersPanel timeline={timeline} apply={apply} playhead={playhead} selectedId={selectedLayer} setSelectedId={setSelectedLayer} logoAssetId={timeline.logo?.assetId} onPickAsset={(kind, cb) => { layerPick.current = { kind, cb }; setLibraryFor({ kind: kind === 'image' ? 'layer-image' : 'layer-video' }); }} />
+            </TabsContent>
+
             <TabsContent value="overlay" className="space-y-3">
               <p className="text-xs text-fog-400">Images or videos above the main picture (track V2): picture-in-picture, stickers, product shots.</p>
               <Button size="sm" variant="secondary" onClick={() => setLibraryFor({ kind: 'overlay' })}><Plus /> Add overlay at playhead</Button>
@@ -957,7 +993,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       <Dialog open={Boolean(libraryFor)} onOpenChange={(o) => !o && setLibraryFor(null)} title={libraryFor?.kind === 'audio' ? 'Choose audio' : libraryFor?.kind === 'logo' ? 'Choose logo' : 'Choose a clip'} wide>
         <div className="grid grid-cols-3 gap-2 md:grid-cols-4">
           {(assetsQ.data?.assets ?? [])
-            .filter((a) => (libraryFor?.kind === 'audio' ? a.mediaType === 'audio' : libraryFor?.kind === 'logo' ? a.mediaType === 'image' : libraryFor?.kind === 'overlay' ? a.mediaType === 'image' || a.mediaType === 'video' : a.mediaType === 'video'))
+            .filter((a) => (libraryFor?.kind === 'audio' ? a.mediaType === 'audio' : libraryFor?.kind === 'logo' ? a.mediaType === 'image' : libraryFor?.kind === 'overlay' ? a.mediaType === 'image' || a.mediaType === 'video' : libraryFor?.kind === 'layer-image' ? a.mediaType === 'image' : a.mediaType === 'video'))
             .map((a) => (
               <button key={a.id} type="button" onClick={() => pickLibrary(a)} className="surface overflow-hidden rounded-xl text-left hover:border-iris-500/50">
                 <div className="aspect-video bg-ink-800">
@@ -970,7 +1006,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         {libraryFor?.kind !== 'audio' && !videos.length && <p className="text-sm text-fog-400">No videos yet.</p>}
       </Dialog>
 
-      <TtsDialog open={ttsOpen} onOpenChange={setTtsOpen} projectId={id} onDone={(assetId, durationSec) => { void assetsQ.refetch(); apply((t) => { t.audio.push({ id: newId('aud'), assetId, kind: 'voice', startSec: Math.round(playhead * 10) / 10, inSec: 0, outSec: durationSec, volume: 1, fadeInSec: 0, fadeOutSec: 0, muted: false }); return t; }); void qc.invalidateQueries({ queryKey: ['me'] }); }} />
+      <TtsDialog open={ttsOpen} onOpenChange={setTtsOpen} projectId={id} onDone={(assetId, durationSec) => { void assetsQ.refetch(); apply((t) => { t.audio.push({ id: newId('aud'), assetId, kind: 'voice', startSec: Math.round(playhead * 10) / 10, inSec: 0, outSec: durationSec, volume: 1, fadeInSec: 0, fadeOutSec: 0, muted: false, duck: false, denoise: false }); return t; }); void qc.invalidateQueries({ queryKey: ['me'] }); }} />
       <VersionsDialog open={versionsOpen} onOpenChange={setVersionsOpen} projectId={id} onRestored={() => tq.refetch()} />
     </div>
   );

@@ -10,6 +10,7 @@ import { runAudioJob } from '../audio/audio';
 import { runImageJob } from '../images/images';
 import { runChatTurn } from '../chat/chat';
 import { runEditJob } from '../editing/ai-edit';
+import { runAnalyzeJob, runAssembleJob, runFinishJob, runPlanJob } from '../ads/campaigns';
 
 export function createHandlers(ctx: AppContext): Record<string, JobHandler> {
   return {
@@ -21,6 +22,10 @@ export function createHandlers(ctx: AppContext): Record<string, JobHandler> {
     'image.run': (job) => runImageJob(ctx, job),
     'chat.turn': (job) => runChatTurn(ctx, job),
     'edit.run': (job) => runEditJob(ctx, job),
+    'ad.analyze': (job) => runAnalyzeJob(ctx, job),
+    'ad.plan': (job) => runPlanJob(ctx, job),
+    'ad.assemble': (job) => runAssembleJob(ctx, job),
+    'ad.finish': (job) => runFinishJob(ctx, job),
     'maintenance.sweep': async () => {
       const released = await releaseExpiredReservations(ctx.db);
       const reclaimed = await reclaimStale(ctx.db);

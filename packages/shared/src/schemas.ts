@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { gradeSchema } from './grade';
+import { layerSchema, trackMetaSchema } from './layers';
 import { ASPECT_RATIOS, QUALITY_MODES, RESOLUTIONS, LANGUAGES } from './constants';
 
 export const emailSchema = z.string().trim().toLowerCase().email().max(254);
@@ -187,21 +189,8 @@ export const transitionSchema = z.object({
   durationSec: z.number().min(0).max(3).default(0.5),
 });
 
-/** Manual colour adjustments; identical maths in the browser preview (SVG filter) and the FFmpeg export. */
-export const clipAdjustSchema = z.object({
-  exposure: z.number().min(-2).max(2).default(0),
-  brightness: z.number().min(-1).max(1).default(0),
-  contrast: z.number().min(-1).max(1).default(0),
-  saturation: z.number().min(-1).max(1).default(0),
-  temperature: z.number().min(-1).max(1).default(0),
-  tint: z.number().min(-1).max(1).default(0),
-  hue: z.number().min(-180).max(180).default(0),
-  highlights: z.number().min(-1).max(1).default(0),
-  shadows: z.number().min(-1).max(1).default(0),
-  blur: z.number().min(0).max(20).default(0),
-  sharpen: z.number().min(0).max(2).default(0),
-  vignette: z.number().min(0).max(1).default(0),
-});
+/** Colour grade of a clip (see grade.ts): one LUT for colour, plus spatial effects. Older projects' fields are a subset. */
+export const clipAdjustSchema = gradeSchema;
 export type ClipAdjust = z.infer<typeof clipAdjustSchema>;
 
 /** 2D camera on existing frames: a framing window (centre x/y, zoom, rotation) keyframed over the clip. */
@@ -245,6 +234,8 @@ export const timelineClipSchema = z.object({
   opacity: z.number().min(0).max(1).default(1),
   adjust: clipAdjustSchema.optional(),
   camera: clipCameraSchema.optional(),
+  /** Auto reframe: the crop follows a subject (centre in source fractions over source seconds) when the source's aspect differs. */
+  reframe: z.object({ points: z.array(z.object({ t: z.number().min(0), x: z.number().min(0).max(1), y: z.number().min(0).max(1) })).min(1).max(2000) }).optional(),
 });
 export type TimelineClip = z.infer<typeof timelineClipSchema>;
 
@@ -259,6 +250,10 @@ export const audioClipSchema = z.object({
   fadeInSec: z.number().min(0).max(10).default(0),
   fadeOutSec: z.number().min(0).max(10).default(0),
   muted: z.boolean().default(false),
+  /** Music/ambience: duck automatically under voice tracks (sidechain compression in the export). */
+  duck: z.boolean().default(false),
+  /** Reduce steady background noise (FFT denoiser). */
+  denoise: z.boolean().default(false),
 });
 export type AudioClip = z.infer<typeof audioClipSchema>;
 
@@ -308,6 +303,11 @@ export const timelineSchema = z.object({
   texts: z.array(textOverlaySchema).max(200).default([]),
   subtitles: z.array(subtitleCueSchema).max(2000).default([]),
   overlays: z.array(overlaySchema).max(50).default([]),
+  /** Layer tracks above V1: picture-in-picture, images, text, shapes, stickers. */
+  layers: z.array(layerSchema).max(200).default([]),
+  tracks: z.array(trackMetaSchema).max(10).default([]),
+  /** Normalise loudness of the final mix (EBU R128, −14 LUFS for social). */
+  loudnorm: z.boolean().default(false),
   burnSubtitles: z.boolean().default(true),
   /** Mute the original clip audio (e.g. when narration replaces it). */
   muteClipAudio: z.boolean().default(false),

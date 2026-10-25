@@ -3,7 +3,9 @@ import path from 'node:path';
 import { ASPECT_DIMENSIONS, timelineDuration, type Timeline } from '@framecraft/shared';
 import { ffmpeg, joinClips, normalizeClip, probe, stageFont, withWorkdir, features } from './ffmpeg';
 import { toSrt } from './subtitles';
-import { cameraFilters, gradeFilters } from './clip-fx';
+import { parseCube, type Lut3d } from '@framecraft/shared';
+import { cameraFilters, lookFilters } from './clip-fx';
+import { layerFilters } from './layers-render';
 
 export type RenderInputs = {
   timeline: Timeline;
@@ -29,6 +31,11 @@ const LOGO_POS = {
 export async function renderTimeline({ timeline, resolve, output, onProgress }: RenderInputs): Promise<{ durationSec: number; width: number; height: number }> {
   if (!timeline.clips.length) throw new Error('Timeline has no clips');
   const dims = ASPECT_DIMENSIONS[timeline.aspectRatio][timeline.resolution];
+  const luts = new Map<string, Lut3d>();
+  const loadLut = async (assetId: string) => {
+    if (!luts.has(assetId)) luts.set(assetId, parseCube(await fsp.readFile(await resolve(assetId), 'utf8')));
+    return luts.get(assetId)!;
+  };
   return withWorkdir(async (dir) => {
     // 1. Normalize every clip to identical size/fps/audio layout.
     const normalized: string[] = [];
@@ -46,12 +53,18 @@ export async function renderTimeline({ timeline, resolve, output, onProgress }: 
         volume: c.volume,
         mute: timeline.muteClipAudio,
         speed: c.speed,
+        reframe: c.reframe?.points,
         reverse: c.reverse,
         freezeSec: c.freezeSec,
         fadeInSec: c.fadeInSec,
         fadeOutSec: c.fadeOutSec,
         opacity: c.opacity,
-        effects: [...cameraFilters(c.camera, dims.width, dims.height, timeline.fps), ...gradeFilters(c.adjust, dims.height)],
+        cwd: dir,
+        // Colour (and masked recolours, in source coordinates) first, then the 2D camera.
+        effects: async (srcInfo) => [
+          ...(await lookFilters(c.adjust, { dir, key: `c${i}`, width: dims.width, height: dims.height, fps: timeline.fps, durationSec: srcInfo.durationSec, srcWidth: srcInfo.width, srcHeight: srcInfo.height, inSec: c.inSec, speed: c.speed || 1, customLut: c.adjust?.lut ? await loadLut(c.adjust.lut.assetId) : null })),
+          ...cameraFilters(c.camera, dims.width, dims.height, timeline.fps),
+        ],
       });
       normalized.push(out);
       await onProgress?.('Preparing clips', (i + 1) / timeline.clips.length / 2);
@@ -67,10 +80,11 @@ export async function renderTimeline({ timeline, resolve, output, onProgress }: 
     const args: string[] = ['-i', 'joined.mp4'];
     const font = await stageFont(dir);
     let inputIndex = 1;
-    const audioLabels: string[] = ['[0:a]'];
     const filters: string[] = [];
 
     const audible = timeline.audio.filter((a) => !a.muted);
+    const voices: string[] = [];
+    const beds: { label: string; duck: boolean }[] = [];
     for (let i = 0; i < audible.length; i++) {
       const a = audible[i]!;
       const src = await resolve(a.assetId);
@@ -86,16 +100,51 @@ export async function renderTimeline({ timeline, resolve, output, onProgress }: 
         `volume=${a.volume}`,
         a.fadeInSec > 0 ? `afade=t=in:st=0:d=${a.fadeInSec}` : '',
         a.fadeOutSec > 0 ? `afade=t=out:st=${Math.max(0, len - a.fadeOutSec)}:d=${a.fadeOutSec}` : '',
+        a.denoise ? 'afftdn=nr=18:nf=-35' : '',
         `adelay=${Math.round(a.startSec * 1000)}|${Math.round(a.startSec * 1000)}`,
       ].filter(Boolean);
       filters.push(`[${inputIndex}:a]${chain.join(',')}[aud${i}]`);
-      audioLabels.push(`[aud${i}]`);
+      if (a.kind === 'voice') voices.push(`[aud${i}]`);
+      else beds.push({ label: `[aud${i}]`, duck: a.duck });
       inputIndex++;
     }
+    // Sound of picture-in-picture video layers (when their volume is up).
+    for (let i = 0; i < timeline.layers.length; i++) {
+      const L = timeline.layers[i]!;
+      if (L.kind !== 'video' || !L.assetId || L.volume <= 0) continue;
+      const src = await resolve(L.assetId);
+      if (!(await probe(src)).hasAudio) continue;
+      const local = `lyaudio${i}${path.extname(src) || '.mp4'}`;
+      await fsp.copyFile(src, path.join(dir, local));
+      args.push('-ss', String(L.inSec), '-t', String(L.endSec - L.startSec), '-i', local);
+      filters.push(`[${inputIndex}:a]asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,volume=${L.volume},adelay=${Math.round(L.startSec * 1000)}|${Math.round(L.startSec * 1000)}[lya${i}]`);
+      beds.push({ label: `[lya${i}]`, duck: false });
+      inputIndex++;
+    }
+    const mix: string[] = ['[0:a]'];
+    const ducked = voices.length ? beds.filter((b) => b.duck) : [];
+    if (voices.length) {
+      let vbus = voices[0]!;
+      if (voices.length > 1) {
+        filters.push(`${voices.join('')}amix=inputs=${voices.length}:duration=longest:dropout_transition=0,volume=${voices.length}[vbus]`);
+        vbus = '[vbus]';
+      }
+      if (ducked.length) {
+        // Music ducks under the narration: the voice bus drives a sidechain compressor.
+        filters.push(`${vbus}asplit=${ducked.length + 1}[vmix]${ducked.map((_, j) => `[vsc${j}]`).join('')}`);
+        ducked.forEach((b, j) => filters.push(`[vsc${j}]apad[vscp${j}];${b.label}[vscp${j}]sidechaincompress=threshold=0.02:ratio=10:attack=15:release=450:makeup=1[duck${j}]`));
+        mix.push('[vmix]', ...ducked.map((_, j) => `[duck${j}]`));
+      } else mix.push(vbus);
+    }
+    mix.push(...beds.filter((b) => !ducked.includes(b)).map((b) => b.label));
     let audioOut = '[0:a]';
-    if (audioLabels.length > 1) {
+    const finish = timeline.loudnorm ? ',loudnorm=I=-14:TP=-1.5:LRA=11' : '';
+    if (mix.length > 1) {
       // amix lowers each input's level; compensate so narration/music keep their set volume.
-      filters.push(`${audioLabels.join('')}amix=inputs=${audioLabels.length}:duration=first:dropout_transition=0,volume=${audioLabels.length}[amixed]`);
+      filters.push(`${mix.join('')}amix=inputs=${mix.length}:duration=first:dropout_transition=0,volume=${mix.length}${finish}[amixed]`);
+      audioOut = '[amixed]';
+    } else if (finish) {
+      filters.push(`[0:a]${finish.slice(1)}[amixed]`);
       audioOut = '[amixed]';
     }
 
@@ -150,6 +199,15 @@ export async function renderTimeline({ timeline, resolve, output, onProgress }: 
       filters.push(`${videoOut}[ov${i}]overlay=x='W*${o.x.toFixed(4)}':y='H*${o.y.toFixed(4)}':enable='between(t,${o.startSec},${o.endSec})':eof_action=pass[vov${i}]`);
       videoOut = `[vov${i}]`;
       inputIndex++;
+    }
+
+    // Layer tracks (PiP, images, text, shapes) above the overlays, below the brand logo.
+    if (timeline.layers.length) {
+      const lr = await layerFilters({ timeline, width: dims.width, height: dims.height, dir, inputIndex, videoIn: videoOut === '[0:v]' ? '[0:v]' : videoOut, resolve });
+      args.push(...lr.args);
+      filters.push(...lr.filters);
+      if (lr.filters.length) videoOut = lr.videoOut;
+      inputIndex = lr.inputIndex;
     }
 
     if (timeline.logo) {

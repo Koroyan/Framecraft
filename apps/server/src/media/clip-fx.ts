@@ -1,4 +1,7 @@
-import { clampKeyframe, gradeOf, isNeutralAdjust, type ClipAdjust, type ClipCamera } from '@framecraft/shared';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+import { applyReplace, buildLut, clampKeyframe, gradeFunction, gradeSchema, isNeutralGrade, lutToCube, maskIsEmpty, needsLut, piecewiseExpr, type ClipCamera, type GradeSettings, type Lut3d } from '@framecraft/shared';
+import { writeMaskPgm } from './mask-raster';
 
 /*
  * FFmpeg filters for per-clip effects. The maths comes from @framecraft/shared (gradeOf, camera
@@ -44,29 +47,60 @@ export function cameraFilters(cam: ClipCamera | undefined, w: number, h: number,
   return out;
 }
 
-/** Colour grade: matrix → linear contrast/brightness → tone curve → blur/sharpen/vignette. */
-export function gradeFilters(adjust: Partial<ClipAdjust> | undefined, outHeight: number): string[] {
-  if (isNeutralAdjust(adjust)) return [];
-  const g = gradeOf(adjust);
-  const m = g.matrix;
+/**
+ * Colour grade as FFmpeg filters: the per-pixel colour transform is baked into a 3D LUT (same
+ * function as the preview), spatial effects follow. Masked colour replacements are composited only
+ * inside their (optionally tracked) mask. Files are written to `dir`; the filters reference them by
+ * relative name, so FFmpeg must run with `cwd = dir`.
+ */
+export async function lookFilters(
+  adjust: Partial<GradeSettings> | undefined,
+  o: { dir: string; key: string; width: number; height: number; fps: number; durationSec: number; srcWidth: number; srcHeight: number; inSec: number; speed: number; customLut?: Lut3d | null },
+): Promise<string[]> {
+  if (isNeutralGrade(adjust)) return [];
+  const g = gradeSchema.parse(adjust ?? {});
   const out: string[] = [];
-  const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1].every((v, i) => Math.abs(v - m[i]!) < 1e-4);
-  if (!identity) out.push(`colorchannelmixer=rr=${n(m[0]!)}:rg=${n(m[1]!)}:rb=${n(m[2]!)}:gr=${n(m[3]!)}:gg=${n(m[4]!)}:gb=${n(m[5]!)}:br=${n(m[6]!)}:bg=${n(m[7]!)}:bb=${n(m[8]!)}`);
-  if (g.slope !== 1 || g.intercept !== 0 || g.curve) {
-    const lin = `clip(val/255*${n(g.slope)}+${n(g.intercept)},0,1)`;
-    let v = lin;
-    if (g.curve) {
-      const c = g.curve;
-      const L = 'L';
-      const piece = (i: number) => `${n(c[i]!)}+(${L}*4-${i})*${n(c[i + 1]! - c[i]!)}`;
-      v = `if(lt(${L},0.25),${piece(0)},if(lt(${L},0.5),${piece(1)},if(lt(${L},0.75),${piece(2)},${piece(3)})))`.replaceAll(L, lin);
-    }
-    const e = `clip(${v}*255,0,255)`;
-    out.push(`lutrgb=r='${e}':g='${e}':b='${e}'`);
+  if (needsLut(g) || (g.lut && o.customLut)) {
+    const file = `${o.key}-grade.cube`;
+    await fsp.writeFile(path.join(o.dir, file), lutToCube(buildLut(gradeFunction(g, o.customLut ?? null), 33)));
+    out.push(`lut3d=file=${file}:interp=trilinear`);
   }
-  if (g.blur > 0) out.push(`gblur=sigma=${n((g.blur * outHeight) / 1080)}`);
+  // Masked colour replacements (e.g. only the jacket), in source-normalised mask coordinates.
+  const masked = (g.replace ?? []).filter((r) => r.mask && !maskIsEmpty(r.mask));
+  for (let i = 0; i < masked.length; i++) {
+    const rep = masked[i]!;
+    const k = Math.max(o.width / o.srcWidth, o.height / o.srcHeight);
+    const sw = Math.round((o.srcWidth * k) / 2) * 2;
+    const sh = Math.round((o.srcHeight * k) / 2) * 2;
+    const offX = Math.round((sw - o.width) / 2);
+    const offY = Math.round((sh - o.height) / 2);
+    const cube = `${o.key}-rep${i}.cube`;
+    await fsp.writeFile(path.join(o.dir, cube), lutToCube(buildLut((px) => applyReplace({ ...rep, mask: undefined }, px), 33)));
+    const mw = Math.min(640, sw);
+    const mh = Math.max(2, Math.round((sh * mw) / sw / 2) * 2);
+    const maskFile = `${o.key}-mask${i}.pgm`;
+    await writeMaskPgm(rep.mask!, mw, mh, path.join(o.dir, maskFile));
+    const pts = rep.mask!.track?.points ?? [];
+    // Mask clock = source seconds: inSec + t·speed for the normalised clip's time t.
+    const src = `(${n(o.inSec)}+t*${n(o.speed)})`;
+    const dx = pts.length ? piecewiseExpr(pts.map((p) => p.t), pts.map((p) => p.dx), 'linear').replaceAll('T', src) : '0';
+    const dy = pts.length ? piecewiseExpr(pts.map((p) => p.t), pts.map((p) => p.dy), 'linear').replaceAll('T', src) : '0';
+    const sigma = Math.max(0.5, (rep.mask!.feather ?? 0.015) * o.width);
+    out.push(
+      `split[rb${i}][rs${i}];` +
+        `[rs${i}]lut3d=file=${cube}:interp=trilinear[rc${i}];` +
+        `color=c=black:s=${sw}x${sh}:r=${o.fps},format=gray,trim=duration=${n(o.durationSec + 0.5)}[rbg${i}];` +
+        `movie=${maskFile},format=gray,scale=${sw}:${sh}[rmk${i}];` +
+        `[rbg${i}][rmk${i}]overlay=x='(${dx})*${sw}':y='(${dy})*${sh}':eof_action=repeat,crop=${o.width}:${o.height}:${offX}:${offY},gblur=sigma=${n(sigma)}[rm${i}];` +
+        `[rc${i}][rm${i}]alphamerge[ra${i}];` +
+        `[rb${i}][ra${i}]overlay=format=auto:shortest=1,format=yuv420p`,
+    );
+  }
+  if (g.blur > 0) out.push(`gblur=sigma=${n((g.blur * o.height) / 1080)}`);
   if (g.sharpen > 0) out.push(`unsharp=5:5:${n(g.sharpen)}:5:5:0`);
+  if (g.glow > 0) out.push(`format=gbrp,split[gl0][gl1];[gl1]gblur=sigma=${n(o.height / 45)}[gl2];[gl0][gl2]blend=all_mode=screen:all_opacity=${n(g.glow * 0.6)},format=yuv420p`);
   if (g.vignette > 0) out.push(`vignette=angle=${n(0.15 + g.vignette * 0.75)}`);
+  if (g.grain > 0) out.push(`noise=alls=${Math.round(g.grain * 40)}:allf=t`);
   return out;
 }
 

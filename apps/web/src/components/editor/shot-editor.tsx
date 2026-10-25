@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Brush, Camera, Check, ChevronLeft, ChevronRight, Circle, Eraser, GitBranch, Image as ImageIcon, Lasso, MapPin, MessageSquare, MousePointer2, Palette, Pause, Play, Send, Sparkles, Square, Upload, X } from 'lucide-react';
 import { toast } from 'sonner';
-import { AI_EDIT_MODES, clipDuration, maskIsEmpty, type AiEditMode, type ClipCamera, type EditMask, type Timeline } from '@framecraft/shared';
+import { AI_EDIT_MODES, clipDuration, gradeSchema, maskIsEmpty, type AiEditMode, type ClipCamera, type EditMask, type Timeline } from '@framecraft/shared';
 import { api, ApiError, type Asset } from '@/lib/api';
 import { useJob } from '@/lib/hooks';
 import { activeVersion, COMMENT_STATUS_LABEL, type EditEstimate, type EditOperation, type ShotComment, type StudioShot } from '@/lib/studio';
@@ -13,8 +13,10 @@ import { ProgressBar } from '@/components/studio/progress';
 import { useUploader } from '@/components/studio/upload';
 import { cn, newKey, seconds } from '@/lib/utils';
 import { EMPTY_MASK, MaskCanvas, type MaskTool } from './mask-canvas';
-import { CameraFrame, CameraPanel, ColorPanel } from './shot-tools';
-import { cameraStyle, GradeFilter, Vignette } from './look';
+import { CameraFrame, CameraPanel } from './shot-tools';
+import { cameraStyle, Vignette } from './look';
+import { ColorPro } from './color-pro';
+import { GradeCanvas, Grain } from './grade-canvas';
 import { Copilot } from './copilot';
 
 type Tab = 'ai' | 'comments' | 'camera' | 'color' | 'versions';
@@ -56,6 +58,41 @@ export function ShotEditor({ projectId, clipId, timeline, apply, shot, assets, o
   const [commentId, setCommentId] = useState<string | null>(null);
   const [guide, setGuide] = useState<Guide | null>(null);
   const [frameDialog, setFrameDialog] = useState(false);
+  const [pickTarget, setPickTarget] = useState<string | null>(null);
+  const [picked, setPicked] = useState<{ target: string; hex: string } | null>(null);
+  const [tracking, setTracking] = useState(false);
+
+  /** Track the drawn selection through this clip (box tracker on the server, free). */
+  const trackMask = async (m: EditMask): Promise<EditMask | null> => {
+    if (!viewing || !clip) return null;
+    let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+    const add = (x: number, y: number) => ((x0 = Math.min(x0, x)), (y0 = Math.min(y0, y)), (x1 = Math.max(x1, x)), (y1 = Math.max(y1, y)));
+    m.rects.filter((r) => !r.subtract).forEach((r) => (add(r.x, r.y), add(r.x + r.w, r.y + r.h)));
+    m.polygons.filter((p) => !p.subtract).forEach((p) => p.points.forEach(([x, y]) => add(x, y)));
+    m.strokes.filter((s) => !s.subtract).forEach((s) => s.points.forEach(([x, y]) => (add(x - s.radius, y - s.radius), add(x + s.radius, y + s.radius))));
+    if (x1 <= x0) return null;
+    try {
+      const r = await api<{ track: NonNullable<EditMask['track']> & { lost: number } }>(`/api/shot-versions/${viewing.id}/track`, { body: { box: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, atSec: t, startSec: clip.inSec, endSec: clip.outSec } });
+      toast.success(r.track.lost ? `Tracked — ${r.track.lost} uncertain frame(s) held in place; check them` : 'Tracked through the clip');
+      return { ...m, track: { points: r.track.points, smoothing: r.track.smoothing } };
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Tracking failed');
+      return null;
+    }
+  };
+  const pickAt = (e: React.MouseEvent<HTMLDivElement>) => {
+    const v = video.current;
+    if (!v || !pickTarget) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const c = document.createElement('canvas');
+    c.width = v.videoWidth || 640;
+    c.height = v.videoHeight || 360;
+    const g = c.getContext('2d')!;
+    g.drawImage(v, 0, 0, c.width, c.height);
+    const px = g.getImageData(Math.floor(((e.clientX - r.left) / r.width) * c.width), Math.floor(((e.clientY - r.top) / r.height) * c.height), 1, 1).data;
+    setPicked({ target: pickTarget, hex: `#${[px[0], px[1], px[2]].map((v2) => v2!.toString(16).padStart(2, '0')).join('')}`.toUpperCase() });
+    setPickTarget(null);
+  };
 
   useEffect(() => {
     if (!initialCompare || !shot || !active) return;
@@ -94,7 +131,7 @@ export function ShotEditor({ projectId, clipId, timeline, apply, shot, assets, o
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const setClipField = (patch: { camera?: ClipCamera | undefined; adjust?: Timeline['clips'][number]['adjust'] }) =>
+  const setClipField = (patch: { camera?: ClipCamera | undefined; adjust?: Timeline['clips'][number]['adjust']; reframe?: Timeline['clips'][number]['reframe'] }) =>
     apply((tl) => ({ ...tl, clips: tl.clips.map((c) => (shotClips.some((s) => s.id === c.id) ? { ...c, ...patch } : c)) }));
 
   const sendToAi = (c: ShotComment) => {
@@ -110,7 +147,6 @@ export function ShotEditor({ projectId, clipId, timeline, apply, shot, assets, o
   const pins = (shot?.comments ?? []).filter((c) => c.x != null && c.y != null && c.status !== 'resolved' && (c.startSec == null || (t >= c.startSec - 0.05 && t <= (c.endSec ?? c.startSec) + 0.05))).map((c) => ({ x: c.x!, y: c.y!, label: c.text }));
   if (pin) pins.push({ ...pin, label: 'New comment' });
   const [vw, vh] = timeline.aspectRatio.split(':').map(Number);
-  const gradeId = `grade-${clipId}`;
   const [camResult, setCamResult] = useState(false);
   // AI / comments work on the raw version; camera and colour show the look as it will be exported.
   const showLook = tab === 'color' ? previewLook : tab === 'camera' ? camResult : false;
@@ -139,19 +175,21 @@ export function ShotEditor({ projectId, clipId, timeline, apply, shot, assets, o
 
         {/* Player */}
         <div className="relative mx-auto max-h-[62dvh] overflow-hidden rounded-2xl border hairline bg-black" style={{ aspectRatio: `${vw}/${vh}` }}>
-          <GradeFilter id={gradeId} adjust={clip.adjust} />
           <div className="absolute inset-0 overflow-hidden">
             <div className="size-full" style={showLook ? cameraStyle(liveCam ? { keyframes: [{ t: 0, ...liveCam }], easing: 'linear' } : clip.camera, clipT) : {}}>
               {url ? (
-                <video ref={video} src={url} className="size-full object-cover" playsInline muted={false} preload="auto" style={showLook && clip.adjust ? { filter: `url(#${gradeId})` } : undefined} onTimeUpdate={(e) => setT(e.currentTarget.currentTime)} onEnded={() => setPlaying(false)} />
+                <video ref={video} src={url} className="size-full object-cover" playsInline muted={false} preload="auto" crossOrigin="anonymous" onTimeUpdate={(e) => setT(e.currentTarget.currentTime)} onEnded={() => setPlaying(false)} />
               ) : (
                 <div className="grid size-full place-items-center text-sm text-fog-400">No media</div>
               )}
+              <GradeCanvas video={video} adjust={showLook ? clip.adjust : undefined} lutUrl={clip.adjust?.lut ? (assets.get(clip.adjust.lut.assetId)?.url ?? null) : null} />
+              {showLook && <Grain amount={clip.adjust?.grain} />}
             </div>
             {showLook && <Vignette amount={clip.adjust?.vignette} />}
           </div>
           {tab === 'camera' && !camResult && <CameraFrame camera={clip.camera} t={clipT} duration={clipDuration(clip)} live={liveCam} onLive={setLiveCam} />}
-          {(tab === 'ai' || tab === 'comments') && <MaskCanvas mask={mask} tool={tool} brush={brush} subtract={subtract} onChange={setMask} onPin={(x, y) => { setPin({ x, y }); setTool('none'); }} pins={pins} />}
+          {(tab === 'ai' || tab === 'comments' || tab === 'color') && <MaskCanvas t={t} mask={mask} tool={tool} brush={brush} subtract={subtract} onChange={setMask} onPin={(x, y) => { setPin({ x, y }); setTool('none'); }} pins={pins} />}
+          {pickTarget && <div className="absolute inset-0 cursor-crosshair" onClick={pickAt} title="Click the colour to pick"><span className="absolute left-2 top-2 rounded-full bg-iris-500 px-2 py-0.5 text-[10px] text-white">Click a colour on the video</span></div>}
           {viewing?.media?.isFixture && <span className="absolute left-2 top-2 rounded-full bg-signal-amber px-2 py-0.5 text-[10px] font-semibold text-black">TEST FIXTURE · NOT AI</span>}
         </div>
 
@@ -175,6 +213,8 @@ export function ShotEditor({ projectId, clipId, timeline, apply, shot, assets, o
               {tool === 'brush' || tool === 'erase' ? <input type="range" aria-label="Brush size" min={0.005} max={0.12} step={0.005} value={brush} onChange={(e) => setBrush(Number(e.target.value))} className="w-20" /> : null}
               <label className="ml-1 flex items-center gap-1"><input type="checkbox" checked={subtract} onChange={(e) => setSubtract(e.target.checked)} /> subtract</label>
               <button type="button" className="rounded-md px-1.5 py-1 hover:bg-white/[0.06]" onClick={() => setMask((m) => ({ ...m, invert: !m.invert }))}>{mask.invert ? 'Inverted' : 'Invert'}</button>
+              {!maskIsEmpty(mask) && !mask.track && <button type="button" disabled={tracking} className="rounded-md px-1.5 py-1 text-iris-200 hover:bg-white/[0.06]" onClick={async () => { setTracking(true); const m = await trackMask(mask); if (m) setMask(m); setTracking(false); }}>{tracking ? 'Tracking…' : 'Track'}</button>}
+              {mask.track && <button type="button" className="rounded-md px-1.5 py-1 text-iris-200 hover:bg-white/[0.06]" title="The selection follows the tracked object" onClick={() => setMask({ ...mask, track: undefined })}>Tracked ✕</button>}
               {!maskIsEmpty(mask) && <button type="button" className="rounded-md px-1.5 py-1 text-signal-red hover:bg-white/[0.06]" onClick={() => setMask(EMPTY_MASK)}>Clear</button>}
             </span>
           )}
@@ -239,8 +279,50 @@ export function ShotEditor({ projectId, clipId, timeline, apply, shot, assets, o
             }}
           />
         )}
+        {tab === 'camera' && (
+          <div className="space-y-2 rounded-xl border hairline p-2.5 text-[11px] text-fog-300">
+            <b className="text-white">Auto reframe</b> — when this shot is wider or taller than the movie, the crop follows a subject instead of staying centred.
+            {clip.reframe ? (
+              <div className="flex items-center gap-2"><span className="text-iris-200">Following the subject ({clip.reframe.points.length} points)</span><Button size="sm" variant="ghost" onClick={() => setClipField({ reframe: undefined } as never)}>Centre crop</Button></div>
+            ) : (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={maskIsEmpty(mask) || tracking}
+                loading={tracking}
+                title={maskIsEmpty(mask) ? 'Draw the subject with the selection tools (AI edit or Color tab) first' : undefined}
+                onClick={async () => {
+                  setTracking(true);
+                  const m = await trackMask(mask);
+                  setTracking(false);
+                  if (!m?.track) return;
+                  let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+                  m.rects.forEach((r) => ((x0 = Math.min(x0, r.x)), (y0 = Math.min(y0, r.y)), (x1 = Math.max(x1, r.x + r.w)), (y1 = Math.max(y1, r.y + r.h))));
+                  m.polygons.forEach((p) => p.points.forEach(([x, y]) => ((x0 = Math.min(x0, x)), (y0 = Math.min(y0, y)), (x1 = Math.max(x1, x)), (y1 = Math.max(y1, y)))));
+                  m.strokes.forEach((s) => s.points.forEach(([x, y]) => ((x0 = Math.min(x0, x)), (y0 = Math.min(y0, y)), (x1 = Math.max(x1, x)), (y1 = Math.max(y1, y)))));
+                  const cx = (x0 + x1) / 2;
+                  const cy = (y0 + y1) / 2;
+                  setClipField({ reframe: { points: m.track.points.map((p) => ({ t: p.t, x: Math.min(1, Math.max(0, cx + p.dx)), y: Math.min(1, Math.max(0, cy + p.dy)) })) } });
+                  toast.success('The crop now follows the subject (preview and export)');
+                }}
+              >
+                Follow the selected subject
+              </Button>
+            )}
+          </div>
+        )}
         {tab === 'color' && (
-          <ColorPanel adjust={clip.adjust} onChange={(a) => setClipField({ adjust: a })} onCopyToAll={() => { apply((tl) => ({ ...tl, clips: tl.clips.map((c) => ({ ...c, adjust: clip.adjust ? { ...clip.adjust } : undefined })) })); toast.success('Colour applied to every clip'); }} />
+          <ColorPro
+            adjust={clip.adjust}
+            onChange={(a) => setClipField({ adjust: a })}
+            onCopyToAll={() => { apply((tl) => ({ ...tl, clips: tl.clips.map((c) => ({ ...c, adjust: clip.adjust ? { ...clip.adjust, replace: undefined } : undefined })) })); toast.success('Colour applied to every clip'); }}
+            mask={maskIsEmpty(mask) ? null : mask}
+            onPick={(target) => setPickTarget(target)}
+            picked={picked}
+            onTrackMask={trackMask}
+            otherShots={timeline.clips.filter((c) => c.id !== clip.id && c.adjust).map((c, i) => ({ label: c.label ?? `Clip ${i + 1}`, adjust: c.adjust }))}
+            onMatchFrom={(a) => setClipField({ adjust: a ? gradeSchema.parse({ ...a, replace: clip.adjust?.replace }) : undefined })}
+          />
         )}
         {tab === 'versions' && shot && <Versions shot={shot} onView={(id) => setViewId(id)} onCompare={(b) => active && setCompare({ a: active.id, b })} refresh={refresh} apply={apply} />}
 

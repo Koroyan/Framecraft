@@ -31,7 +31,10 @@ export const copilotRequestSchema = z.object({
 
 // Flat shape for the model (every field optional); each op is validated against planOpSchema after.
 const modelOpSchema = z.object({
-  op: z.enum(['trim', 'speed', 'transition', 'color', 'match_color', 'camera', 'fade', 'move', 'remove', 'text', 'ai_edit']),
+  op: z.enum(['trim', 'speed', 'transition', 'color', 'color_all', 'match_color', 'camera', 'fade', 'move', 'remove', 'text', 'logo', 'duck_music', 'animated_captions', 'ai_edit']),
+  lastSec: z.number().optional(),
+  volume: z.number().optional(),
+  style: z.string().optional(),
   shot: z.number().int().optional(),
   durationSec: z.number().optional(),
   speed: z.number().optional(),
@@ -56,7 +59,7 @@ const replySchema = z.object({ reply: z.string(), operations: z.array(modelOpSch
 const SYSTEM = `You are the editing assistant inside Framecraft's video editor. Turn the user's request into a short explicit plan of operations.
 Prefer free, exact operations (trim, speed, transition, color, match_color, camera, fade, move, remove, text) and use ai_edit (a paid generative edit of one shot's footage) only when the pixels themselves must change (fix an artifact, replace/remove/add an object, relight, restyle, background, motion).
 Shots are numbered by their order in the movie (1-based). Never touch shots outside the scope given in Context. Times are seconds; for ai_edit, startSec/endSec are relative to the shot's start.
-Operations: trim{shot,durationSec|inSec,outSec}; speed{shot,speed 0.25–4}; transition{shot,type: cut|fade|dissolve|wipeleft|wiperight|slideup|circleopen|fadeblack,durationSec} (into the next shot); color{shot,adjust:{exposure -2..2, brightness, contrast, saturation, temperature, tint, highlights, shadows -1..1, hue -180..180, blur 0..20, sharpen 0..2, vignette 0..1}}; match_color{shot,fromShot}; camera{shot,preset: ${CAMERA_MOVES.map((c) => c.key).join('|')},intensity 0..1}; fade{shot,inSec,outSec}; move{shot,afterShot (0 = first)}; remove{shot}; text{text,startSec,endSec,position top|center|bottom}; ai_edit{shot,mode: ${AI_EDIT_MODES.map((m) => m.key).join('|')},instruction (English, precise, say what to keep),startSec,endSec}.
+Operations: trim{shot,durationSec|inSec,outSec}; speed{shot,speed 0.25–4}; transition{shot,type: cut|fade|dissolve|wipeleft|wiperight|slideup|circleopen|fadeblack,durationSec} (into the next shot); color{shot,adjust:{exposure -2..2, brightness, contrast, saturation, temperature, tint, highlights, shadows -1..1, hue -180..180, blur 0..20, sharpen 0..2, vignette 0..1}}; match_color{shot,fromShot}; camera{shot,preset: ${CAMERA_MOVES.map((c) => c.key).join('|')},intensity 0..1}; fade{shot,inSec,outSec}; move{shot,afterShot (0 = first)}; remove{shot}; text{text,startSec,endSec,position top|center|bottom}; color_all{adjust} (every shot); logo{position top-left|top-right|bottom-left|bottom-right,lastSec} (the project's logo); duck_music{volume} (music quieter under voice-over); animated_captions{style words|pop|typewriter} (from the subtitles); ai_edit{shot,mode: ${AI_EDIT_MODES.map((m) => m.key).join('|')},instruction (English, precise, say what to keep),startSec,endSec}.
 Reply in the user's language in 1–3 sentences saying what the plan does. If the request is unclear, ask one question and return no operations.`;
 
 export async function copilotPlan(ctx: AppContext, user: SessionLike, projectId: string, input: z.infer<typeof copilotRequestSchema>) {
@@ -117,8 +120,16 @@ export async function copilotPlan(ctx: AppContext, user: SessionLike, projectId:
     if (!parsed.success) continue;
     const op = parsed.data;
     const target = 'shot' in op ? op.shot : null;
+    if (op.op === 'logo' && !timeline.logo) {
+      plan.push({ op, generative: false, why: raw.why, blocked: 'Add your logo first (Clip tab → Brand logo).' });
+      continue;
+    }
+    if (op.op === 'animated_captions' && !timeline.subtitles.length) {
+      plan.push({ op, generative: false, why: raw.why, blocked: 'Create subtitles first (Subs tab → Auto-subtitles from speech, or type them).' });
+      continue;
+    }
     const outOfScope = scopeShot && target !== null && target !== scopeNumber;
-    if (outOfScope || (scopeShot && (op.op === 'move' || op.op === 'remove' || op.op === 'text'))) {
+    if (outOfScope || (scopeShot && ['move', 'remove', 'text', 'color_all', 'logo', 'duck_music', 'animated_captions'].includes(op.op))) {
       plan.push({ op, generative: op.op === 'ai_edit', why: raw.why, blocked: 'Outside the selected shot — switch the assistant to the whole project to allow it.' });
       continue;
     }

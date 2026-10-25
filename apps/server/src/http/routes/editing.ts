@@ -11,6 +11,8 @@ import { addComment, commentInputSchema, COMMENT_STATUSES, deleteComment, grabFr
 import { copilotPlan, copilotRequestSchema } from '../../editing/copilot';
 import { assetUrl } from '../../services/assets';
 import { notFound } from '../../lib/errors';
+import { filmstrip, importLut, rasterLayer, trackInAsset, waveform } from '../../editing/media-tools';
+import { shotVersions } from '../../db/schema';
 
 const idParam = z.object({ id: z.string().uuid() });
 
@@ -110,6 +112,47 @@ export async function editingRoutes(app: FastifyInstance, ctx: AppContext) {
     const { id } = parse(idParam, req.params);
     await rejectAiEdit(ctx, u, id);
     return { ok: true };
+  });
+
+  // ---------------------------------------------------------------- media tools (free, local FFmpeg)
+
+  app.get('/api/assets/:id/waveform', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(idParam, req.params);
+    return waveform(ctx, u, id);
+  });
+
+  app.get('/api/assets/:id/filmstrip', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(idParam, req.params);
+    return filmstrip(ctx, u, id);
+  });
+
+  app.post('/api/layers/raster', async (req) => {
+    const u = requireUser(req);
+    const body = parse(z.object({ layer: z.record(z.string(), z.unknown()), frameHeight: z.number().min(240).max(2160) }), req.body);
+    return rasterLayer(ctx, u, body.layer as never, body.frameHeight);
+  });
+
+  const trackBody = z.object({ box: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), w: z.number().min(0.005).max(1), h: z.number().min(0.005).max(1) }), atSec: z.number().min(0), startSec: z.number().min(0), endSec: z.number().min(0.05), smoothing: z.number().min(0).max(1).optional() });
+  app.post('/api/assets/:id/track', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(idParam, req.params);
+    return { track: await trackInAsset(ctx, u, id, parse(trackBody, req.body)) };
+  });
+  app.post('/api/shot-versions/:id/track', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(idParam, req.params);
+    const [v] = await ctx.db.select().from(shotVersions).where(eq(shotVersions.id, id));
+    if (!v) throw notFound('Version');
+    await ownedShot(ctx, u, v.shotId);
+    return { track: await trackInAsset(ctx, u, v.assetId, parse(trackBody, req.body)) };
+  });
+
+  app.post('/api/luts', { bodyLimit: 13 * 1024 * 1024 }, async (req) => {
+    const u = requireUser(req);
+    const body = parse(z.object({ name: z.string().min(1).max(120), cube: z.string().min(20).max(12 * 1024 * 1024) }), req.body);
+    return { lut: await importLut(ctx, u, body.name, body.cube) };
   });
 
   // ---------------------------------------------------------------- assistant

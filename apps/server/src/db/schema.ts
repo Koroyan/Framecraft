@@ -823,3 +823,4 @@ export const shotComments = pgTable(
   },
   (t) => [index('shot_comments_shot_idx').on(t.shotId, t.createdAt)],
 );
+export * from './schema-ads';

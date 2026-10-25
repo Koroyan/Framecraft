@@ -108,6 +108,15 @@ describe('AI assistant plan operations', () => {
     const graded = applyPlanOp(applyPlanOp(t, { op: 'color', shot: 1, adjust: { contrast: 0.2 } }, id), { op: 'match_color', shot: 3, fromShot: 1 }, id);
     expect(graded.clips.find((c) => c.id === 'c3')!.adjust?.contrast).toBe(0.2);
     expect(applyPlanOp(t, { op: 'ai_edit', shot: 1, mode: 'fix', instruction: 'fix the hand' }, id)).toBe(t);
+    const warm = applyPlanOp(t, { op: 'color_all', adjust: { temperature: 0.4 } }, id);
+    expect(warm.clips.every((c) => c.adjust?.temperature === 0.4)).toBe(true);
+    const withLogo = applyPlanOp({ ...t, logo: { assetId: A, position: 'top-right', scale: 0.12, opacity: 0.9 } }, { op: 'logo', position: 'bottom-right', lastSec: 4 }, id);
+    expect(withLogo.layers.at(-1)).toMatchObject({ kind: 'image', assetId: A, x: 0.88, y: 0.9 });
+    expect(withLogo.layers.at(-1)!.endSec - withLogo.layers.at(-1)!.startSec).toBeCloseTo(4);
+    const ducked = applyPlanOp({ ...t, audio: [{ id: 'm', assetId: B, kind: 'music', startSec: 0, inSec: 0, outSec: 5, volume: 0.9, fadeInSec: 0, fadeOutSec: 0, muted: false, duck: false, denoise: false }] }, { op: 'duck_music', volume: 0.4 }, id);
+    expect(ducked.audio[0]).toMatchObject({ duck: true, volume: 0.55 });
+    const caps = applyPlanOp({ ...t, subtitles: [{ id: 's', startSec: 1, endSec: 2.5, text: 'გამარჯობა' }] }, { op: 'animated_captions', style: 'words' }, id);
+    expect(caps.layers.find((l) => l.name === 'Caption')).toMatchObject({ kind: 'text', startSec: 1, animIn: { type: 'words' } });
   });
 });
 

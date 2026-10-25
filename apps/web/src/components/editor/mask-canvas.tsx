@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import type { EditMask } from '@framecraft/shared';
+import { motionAt, type EditMask } from '@framecraft/shared';
 
 export type MaskTool = 'none' | 'rect' | 'ellipse' | 'brush' | 'erase' | 'lasso' | 'pin';
 export const EMPTY_MASK: EditMask = { rects: [], polygons: [], strokes: [], feather: 0.015, invert: false };
@@ -11,7 +11,7 @@ export const EMPTY_MASK: EditMask = { rects: [], polygons: [], strokes: [], feat
  * Coordinates are fractions of the frame; drawn in the same order the server rasterises them
  * (rectangles, polygons, strokes), so what you see is what gets edited.
  */
-export function MaskCanvas({ mask, tool, brush, subtract, onChange, onPin, pins }: { mask: EditMask; tool: MaskTool; brush: number; subtract: boolean; onChange: (m: EditMask) => void; onPin?: (x: number, y: number) => void; pins?: { x: number; y: number; label: string }[] }) {
+export function MaskCanvas({ mask, tool, brush, subtract, onChange, onPin, pins, t = 0 }: { mask: EditMask; tool: MaskTool; brush: number; subtract: boolean; onChange: (m: EditMask) => void; onPin?: (x: number, y: number) => void; pins?: { x: number; y: number; label: string }[]; t?: number }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const draft = useRef<{ kind: MaskTool; start: [number, number]; points: [number, number][] } | null>(null);
 
@@ -39,6 +39,9 @@ export function MaskCanvas({ mask, tool, brush, subtract, onChange, onPin, pins 
     l.strokeStyle = '#fff';
     l.lineCap = 'round';
     l.lineJoin = 'round';
+    // A tracked selection moves with its object.
+    const off = motionAt(mask.track, t);
+    l.translate(off.dx * W, off.dy * H);
     for (const rc of mask.rects) {
       mode(rc.subtract);
       l.beginPath();

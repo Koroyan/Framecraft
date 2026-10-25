@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
+import { piecewiseExpr } from '@framecraft/shared';
 import { atempoChain } from './clip-fx';
 
 const require = createRequire(import.meta.url);
@@ -156,8 +157,12 @@ export type NormalizeOptions = {
   fadeOutSec?: number;
   /** Fade towards black (1 = untouched). */
   opacity?: number;
-  /** Extra video filters applied at output size (camera, colour grade). */
-  effects?: string[];
+  /** Extra video filters applied at output size (camera, colour grade); a function receives the source size. */
+  effects?: string[] | ((src: { width: number; height: number; durationSec: number }) => Promise<string[]>);
+  /** Working directory for filter side files (LUTs, masks) referenced by relative name. */
+  cwd?: string;
+  /** Auto reframe: crop around a moving subject centre (source fractions over source seconds). */
+  reframe?: { t: number; x: number; y: number }[];
 };
 
 /**
@@ -178,10 +183,20 @@ export async function normalizeClip(input: string, output: string, o: NormalizeO
     ? `scale=${o.width}:${o.height}:force_original_aspect_ratio=increase,crop=${o.width}:${o.height}`
     : `scale=${o.width}:${o.height}:force_original_aspect_ratio=decrease,pad=${o.width}:${o.height}:(ow-iw)/2:(oh-ih)/2:color=black`;
   const v: string[] = [];
+  let fitFilter = scale;
+  if (o.reframe?.length && o.fill) {
+    // Cover-scale, then crop around the subject: x(t) = clamp(cx(t)·iw − W/2, 0, iw − W), in source time.
+    const pts = o.reframe.length > 60 ? o.reframe.filter((_, i) => i % Math.ceil(o.reframe!.length / 60) === 0) : o.reframe;
+    const src = `(${start}+t*${speed})`;
+    const cx = piecewiseExpr(pts.map((p) => p.t), pts.map((p) => p.x), 'linear').replaceAll('T', src);
+    const cy = piecewiseExpr(pts.map((p) => p.t), pts.map((p) => p.y), 'linear').replaceAll('T', src);
+    fitFilter = `scale=${o.width}:${o.height}:force_original_aspect_ratio=increase,crop=${o.width}:${o.height}:x='clip((${cx})*iw-${o.width}/2,0,iw-${o.width})':y='clip((${cy})*ih-${o.height}/2,0,ih-${o.height})'`;
+  }
   if (o.freezeSec) v.push(`loop=loop=${Math.ceil(o.freezeSec * fps) + 1}:size=1:start=0`, `setpts=N/${fps}/TB`);
   if (o.reverse && !o.freezeSec) v.push('reverse');
   if (speed !== 1) v.push(`setpts=(PTS-STARTPTS)/${speed}`);
-  v.push(scale, 'setsar=1', `fps=${fps}`, ...(o.effects ?? []));
+  const effects = typeof o.effects === 'function' ? await o.effects({ width: p.width ?? o.width, height: p.height ?? o.height, durationSec: dur }) : (o.effects ?? []);
+  v.push(fitFilter, 'setsar=1', `fps=${fps}`, ...effects);
   if (o.opacity !== undefined && o.opacity < 1) v.push(`colorchannelmixer=rr=${o.opacity}:gg=${o.opacity}:bb=${o.opacity}`);
   if (o.fadeInSec) v.push(`fade=t=in:st=0:d=${o.fadeInSec}`);
   if (o.fadeOutSec) v.push(`fade=t=out:st=${Math.max(0, dur - o.fadeOutSec)}:d=${o.fadeOutSec}`);
@@ -205,7 +220,7 @@ export async function normalizeClip(input: string, output: string, o: NormalizeO
   }
   args.push('-af', af.join(','));
   args.push('-t', String(dur), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', output);
-  await ffmpeg(args, { timeoutMs: 20 * 60_000 });
+  await ffmpeg(args, { timeoutMs: 20 * 60_000, cwd: o.cwd });
 }
 
 export type JoinTransition = { type: string; durationSec: number } | undefined;

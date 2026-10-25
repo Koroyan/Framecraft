@@ -18,13 +18,17 @@ const describe = (op: PlanOp): string => {
     case 'trim': return `Trim shot ${op.shot}${op.durationSec ? ` to ${op.durationSec} s` : ''}`;
     case 'speed': return `Shot ${op.shot} at ${op.speed}× speed`;
     case 'transition': return `${op.type} from shot ${op.shot} into the next (${op.durationSec} s)`;
-    case 'color': return `Colour of shot ${op.shot}: ${Object.entries(op.adjust).map(([k, v]) => `${k} ${v! > 0 ? '+' : ''}${v}`).join(', ')}`;
+    case 'color': return `Colour of shot ${op.shot}: ${Object.entries(op.adjust).filter(([, v]) => typeof v === 'number').map(([k, v]) => `${k} ${(v as number) > 0 ? '+' : ''}${v}`).join(', ')}`;
     case 'match_color': return `Match shot ${op.shot}’s colour to shot ${op.fromShot}`;
     case 'camera': return `Camera on shot ${op.shot}: ${op.preset.replaceAll('_', ' ')}`;
     case 'fade': return `Fade shot ${op.shot} (in ${op.inSec} s, out ${op.outSec} s)`;
     case 'move': return `Move shot ${op.shot} ${op.afterShot ? `after shot ${op.afterShot}` : 'to the start'}`;
     case 'remove': return `Take shot ${op.shot} out of the movie`;
     case 'text': return `Title “${op.text}” at ${seconds(op.startSec)}`;
+    case 'color_all': return `Colour of every shot: ${Object.entries(op.adjust).filter(([, v]) => typeof v === 'number').map(([k, v]) => `${k} ${(v as number) > 0 ? '+' : ''}${v}`).join(', ')}`;
+    case 'logo': return `Logo ${op.position.replace('-', ' ')}${op.lastSec ? ` for the last ${op.lastSec} s` : ''}`;
+    case 'duck_music': return 'Music ducks under the voice-over';
+    case 'animated_captions': return `Animated captions (${op.style})`;
     case 'ai_edit': return `AI ${op.mode.replaceAll('_', ' ')} on shot ${op.shot}${op.startSec != null ? ` (${seconds(op.startSec)}–${seconds(op.endSec ?? op.startSec)})` : ''}: ${op.instruction}`;
   }
 };

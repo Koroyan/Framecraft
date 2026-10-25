@@ -2,7 +2,7 @@
 
 import { useRef, useState } from 'react';
 import { Plus, RotateCcw, Trash2, Wand2 } from 'lucide-react';
-import { CAMERA_MOVES, cameraAt, cameraPreset, clampKeyframe, clipAdjustSchema, type CameraMove, type ClipAdjust, type ClipCamera } from '@framecraft/shared';
+import { CAMERA_MOVES, cameraAt, cameraPreset, clampKeyframe, type CameraMove, type ClipCamera } from '@framecraft/shared';
 import { Button, Field, NativeSelect, Segmented } from '@/components/ui';
 import { cn, seconds } from '@/lib/utils';
 
@@ -149,45 +149,6 @@ export function CameraPanel({ camera, t, duration, live, setLive, onChange, onRe
         <b className="text-white">Generative camera remix</b> asks an AI model for a different viewpoint (low angle, orbit, other side). It re-renders the whole shot and can change faces or geometry — you review it as a new version before it’s used.
         <Button size="sm" variant="outline" className="mt-2 w-full" onClick={onRemix}>Set up a camera remix…</Button>
       </div>
-    </div>
-  );
-}
-
-const ADJUST_FIELDS: { key: keyof ClipAdjust; label: string; min: number; max: number; step: number }[] = [
-  { key: 'exposure', label: 'Exposure', min: -2, max: 2, step: 0.05 },
-  { key: 'brightness', label: 'Brightness', min: -1, max: 1, step: 0.02 },
-  { key: 'contrast', label: 'Contrast', min: -1, max: 1, step: 0.02 },
-  { key: 'highlights', label: 'Highlights', min: -1, max: 1, step: 0.02 },
-  { key: 'shadows', label: 'Shadows', min: -1, max: 1, step: 0.02 },
-  { key: 'saturation', label: 'Saturation', min: -1, max: 1, step: 0.02 },
-  { key: 'temperature', label: 'Temperature', min: -1, max: 1, step: 0.02 },
-  { key: 'tint', label: 'Tint', min: -1, max: 1, step: 0.02 },
-  { key: 'hue', label: 'Hue', min: -180, max: 180, step: 1 },
-  { key: 'blur', label: 'Blur', min: 0, max: 20, step: 0.5 },
-  { key: 'sharpen', label: 'Sharpen', min: 0, max: 2, step: 0.05 },
-  { key: 'vignette', label: 'Vignette', min: 0, max: 1, step: 0.02 },
-];
-
-export function ColorPanel({ adjust, onChange, onCopyToAll }: { adjust?: Partial<ClipAdjust>; onChange: (a: ClipAdjust | undefined) => void; onCopyToAll?: () => void }) {
-  const a = clipAdjustSchema.parse(adjust ?? {});
-  return (
-    <div className="space-y-3">
-      {ADJUST_FIELDS.map((f) => (
-        <label key={f.key} className="block">
-          <span className="flex justify-between text-xs text-fog-300">
-            {f.label}
-            <button type="button" className={cn('tabular-nums', a[f.key] ? 'text-iris-200 hover:text-white' : 'text-fog-500')} onClick={() => onChange({ ...a, [f.key]: 0 })} title="Reset">
-              {a[f.key] > 0 && f.min < 0 ? '+' : ''}{f.step < 1 ? a[f.key].toFixed(2) : a[f.key]}
-            </button>
-          </span>
-          <input type="range" className="w-full" min={f.min} max={f.max} step={f.step} value={a[f.key]} onChange={(e) => onChange({ ...a, [f.key]: Number(e.target.value) })} />
-        </label>
-      ))}
-      <div className="flex gap-2">
-        <Button size="sm" variant="ghost" onClick={() => onChange(undefined)}><RotateCcw /> Reset</Button>
-        {onCopyToAll && <Button size="sm" variant="secondary" onClick={onCopyToAll}>Use on every shot</Button>}
-      </div>
-      <p className="text-[11px] text-fog-400">The preview uses the same colour maths as the export; blur, sharpen and vignette are close approximations.</p>
     </div>
   );
 }
