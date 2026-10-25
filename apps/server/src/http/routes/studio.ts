@@ -37,6 +37,9 @@ const uuid = z.object({ id: z.string().uuid() });
 export async function studioRoutes(app: FastifyInstance, ctx: AppContext) {
   // ------------------------------------------------------------ system & catalog
   app.get('/api/system/status', async () => ({
+    signupMode: ctx.env.SIGNUP_MODE,
+    turnstileSiteKey: ctx.env.TURNSTILE_SECRET_KEY ? (ctx.env.TURNSTILE_SITE_KEY ?? null) : null,
+    signupBonusCredits: ctx.env.SIGNUP_BONUS_CREDITS,
     mode: ctx.env.isProduction ? 'production' : 'development',
     liveGenerationEnabled: ctx.liveEnabled,
     configuredProviders: [...ctx.configured],

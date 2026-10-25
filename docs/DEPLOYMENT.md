@@ -19,6 +19,20 @@ The browser only talks to the web origin; Next.js proxies `/api/*` to the API. P
 
 Then add provider keys and set `LIVE_GENERATION_ENABLED=true` once the smoke test passes (see API_CONFIGURATION.md).
 
+### Who can use it and who pays (production defaults)
+
+| Setting | Production default | Meaning |
+|---|---|---|
+| `SIGNUP_MODE` | `invite` | `invite` = only `SIGNUP_ALLOWLIST` (emails and/or `@domain`s); `open` = anyone (**requires** `TURNSTILE_SECRET_KEY`); `closed` = no new accounts |
+| `SIGNUP_BONUS_CREDITS` | `0` | No free credits — nothing is generated without a paid credit pack (admins can grant credits) |
+| `REQUIRE_EMAIL_VERIFICATION` | `true` | Buying credits needs a confirmed email; **requires** `EMAIL_PROVIDER=resend` + `RESEND_API_KEY` + `EMAIL_FROM` on your domain |
+| `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | unset | Cloudflare Turnstile on sign-up and sign-in when the secret is set |
+| `DEFAULT_DAILY_SPEND_LIMIT` | `1000` credits | Daily cap given to every new account (users can change theirs in Settings) |
+| `GLOBAL_DAILY_PROVIDER_BUDGET_USD` | `50` | Hard stop for all provider spend per day, across all users |
+| `PAYMENT_PROVIDER` | — | `stripe` (needs `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`); the simulated `sandbox` checkout is always disabled in production |
+
+The API refuses to start when open sign-ups have no Turnstile secret, when email verification is on but email is console-only, or when Stripe keys are missing. Also set a monthly spend limit in each provider's own dashboard (Runway, ElevenLabs, Anthropic) as the last line of defence.
+
 ## Local production-like stack
 
 ```bash

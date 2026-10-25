@@ -54,6 +54,21 @@ export const users = pgTable(
   (t) => [uniqueIndex('users_email_uq').on(t.email), index('users_created_idx').on(t.createdAt)],
 );
 
+/** One-time email links (verification). Only the hash is stored. */
+export const emailTokens = pgTable(
+  'email_tokens',
+  {
+    id: id(),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    purpose: text('purpose').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('email_tokens_hash_uq').on(t.tokenHash), index('email_tokens_user_idx').on(t.userId)],
+);
+
 export const sessions = pgTable(
   'sessions',
   {

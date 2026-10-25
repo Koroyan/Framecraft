@@ -10,11 +10,13 @@
 - [ ] `LIVE_GENERATION_ENABLED=true`; set `GLOBAL_DAILY_PROVIDER_BUDGET_USD` to a cautious value.
 - [ ] Choose and integrate a payment processor that supports your merchant country (see BILLING.md); test webhooks end to end in its test mode.
 - [ ] Legal review of Terms, Privacy and AI content policy (the current texts are starter templates), VAT/sales tax, refund policy wording.
-- [ ] Set up an email provider (verification, receipts, job notifications); currently console-only.
+- [ ] Email: Resend account + verified sending domain (`EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, `EMAIL_FROM`). Verification emails are built; receipts and job notifications are not sent by email yet.
+- [ ] Access: keep `SIGNUP_MODE=invite` with `SIGNUP_ALLOWLIST` for the beta; before `open`, add Cloudflare Turnstile keys.
+- [ ] Spend caps: provider dashboards (monthly), `GLOBAL_DAILY_PROVIDER_BUDGET_USD`, `DEFAULT_DAILY_SPEND_LIMIT`.
 - [ ] Error monitoring (e.g. Sentry) and uptime checks on `/api/health`.
 
 ## Should do soon after
-- [ ] Email verification and password reset flow (schema supports it; UI and email sending not built).
+- [ ] Password reset flow (email sending exists now; the reset flow itself is not built).
 - [ ] Google OAuth sign-in (accounts table ready; flow not enabled).
 - [ ] Provider-side subscription cancellation for Stripe.
 - [ ] Continuity QA with vision (compare consecutive shots / character references) — planned; not implemented.

@@ -9,6 +9,8 @@ import { api, ApiError } from '@/lib/api';
 import { Button, Input, Label } from '@/components/ui';
 import { Logo } from '@/components/logo';
 import { FilmFrame } from '@/components/marketing/frames';
+import { Turnstile } from '@/components/turnstile';
+import { useSystemStatus } from '@/lib/hooks';
 
 export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
   const router = useRouter();
@@ -20,6 +22,11 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
   const [accept, setAccept] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const status = useSystemStatus();
+  const siteKey = status.data?.turnstileSiteKey ?? null;
+  const bonus = status.data?.signupBonusCredits ?? 0;
+  const [human, setHuman] = useState<string | null>(null);
+  const [resetKey, setResetKey] = useState(0);
 
   const next = () => {
     const prompt = params.get('prompt');
@@ -36,13 +43,17 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
     setBusy(true);
     setError(null);
     try {
-      if (mode === 'register') await api('/api/auth/register', { body: { email, password, name, acceptTerms: accept } });
-      else await api('/api/auth/login', { body: { email, password } });
+      const turnstileToken = human ?? undefined;
+      if (mode === 'register') await api('/api/auth/register', { body: { email, password, name, acceptTerms: accept, turnstileToken } });
+      else await api('/api/auth/login', { body: { email, password, turnstileToken } });
       await qc.invalidateQueries({ queryKey: ['me'] });
-      if (mode === 'register') toast.success('Welcome! Your free trial credits are ready.');
+      if (mode === 'register') toast.success(bonus > 0 ? 'Welcome! Your free trial credits are ready.' : 'Welcome! Check your inbox to confirm your email.');
       router.push(next());
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong');
+      // A Turnstile token is single-use.
+      setHuman(null);
+      setResetKey((k) => k + 1);
     } finally {
       setBusy(false);
     }
@@ -56,7 +67,7 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
         </Link>
         <div className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center py-12">
           <h1 className="text-3xl font-semibold tracking-tight text-white">{mode === 'login' ? 'Welcome back' : 'Create your studio'}</h1>
-          <p className="mt-2 text-fog-300">{mode === 'login' ? 'Sign in to continue creating.' : 'Free trial credits included. No card required.'}</p>
+          <p className="mt-2 text-fog-300">{mode === 'login' ? 'Sign in to continue creating.' : bonus > 0 ? 'Free trial credits included. No card required.' : status.data?.signupMode === 'invite' ? 'Private beta — sign up with the email address you were invited with.' : 'Create your account, confirm your email, then choose a credit pack.'}</p>
           <form onSubmit={submit} className="mt-8 space-y-4">
             {mode === 'register' && (
               <div>
@@ -83,8 +94,9 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
                 </span>
               </label>
             )}
+            {siteKey && <Turnstile siteKey={siteKey} onToken={setHuman} resetKey={resetKey} />}
             {error && <div role="alert" className="rounded-xl bg-signal-red/10 px-3 py-2.5 text-sm text-signal-red">{error}</div>}
-            <Button type="submit" size="lg" className="w-full" loading={busy}>
+            <Button type="submit" size="lg" className="w-full" loading={busy} disabled={Boolean(siteKey) && !human}>
               {mode === 'login' ? 'Sign in' : 'Create account'}
             </Button>
           </form>

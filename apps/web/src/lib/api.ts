@@ -31,12 +31,16 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
 // ------------------------------------------------------------------ shared response types
 
 export type Me = {
-  user: { id: string; email: string; name: string; role: 'user' | 'admin'; locale: string } | null;
+  user: { id: string; email: string; name: string; role: 'user' | 'admin'; locale: string; emailVerified?: boolean } | null;
+  verificationRequired?: boolean;
   wallet?: { balance: number; reserved: number; available: number };
   plan?: { key: string; name: string; limits: { maxConcurrentJobs: number; maxClipSeconds: number; maxMovieSeconds: number; maxResolution: string; qualityModes: string[]; watermark: boolean; commercialUse: boolean } };
 };
 
 export type SystemStatus = {
+  signupMode?: 'open' | 'invite' | 'closed';
+  turnstileSiteKey?: string | null;
+  signupBonusCredits?: number;
   mode: 'development' | 'production';
   liveGenerationEnabled: boolean;
   configuredProviders: string[];

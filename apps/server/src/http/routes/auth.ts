@@ -10,6 +10,7 @@ import { getWallet } from '../../billing/wallet';
 import { audit, getUserPlan } from '../../services/common';
 import { unauthorized } from '../../lib/errors';
 import { deleteAccount } from '../../services/account';
+import { assertSignupAllowed, confirmEmail, isEmailVerified, sendVerificationEmail, verifyHuman } from '../../auth/protection';
 
 export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
   const setCookie = (reply: FastifyReply, token: string, expiresAt: Date) =>
@@ -18,9 +19,17 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
   // Strict brute-force protection in production; relaxed locally so E2E suites can create accounts.
   const authLimit = { config: { rateLimit: { max: ctx.env.isProduction ? 10 : 200, timeWindow: '1 minute' } } };
 
+  const human = (req: { body: unknown }) => (req.body as { turnstileToken?: unknown } | null)?.turnstileToken;
+
   app.post('/api/auth/register', authLimit, async (req, reply) => {
     const body = parse(registerSchema, req.body);
-    const user = await registerUser(ctx.db, { ...body, ip: req.ip, signupBonus: ctx.env.SIGNUP_BONUS_CREDITS });
+    await verifyHuman(ctx, typeof human(req) === 'string' ? (human(req) as string) : undefined, req.ip);
+    assertSignupAllowed(ctx, body.email);
+    const user = await registerUser(ctx.db, { ...body, ip: req.ip, signupBonus: ctx.env.SIGNUP_BONUS_CREDITS, dailySpendLimit: ctx.env.DEFAULT_DAILY_SPEND_LIMIT });
+    if (ctx.env.REQUIRE_EMAIL_VERIFICATION) {
+      // A failed send must not lose the account: the user can ask for a new link.
+      await sendVerificationEmail(ctx, user).catch((err) => ctx.log.error('verification email failed', (err as Error).message));
+    }
     const s = await createSession(ctx.db, user.id, ctx.env.SESSION_TTL_DAYS, { ip: req.ip, userAgent: req.headers['user-agent'] });
     setCookie(reply, s.token, s.expiresAt);
     await audit(ctx.db, { actorUserId: user.id, action: 'user.registered', ip: req.ip });
@@ -29,6 +38,7 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.post('/api/auth/login', authLimit, async (req, reply) => {
     const body = parse(loginSchema, req.body);
+    await verifyHuman(ctx, typeof human(req) === 'string' ? (human(req) as string) : undefined, req.ip);
     const user = await authenticate(ctx.db, body.email, body.password);
     const s = await createSession(ctx.db, user.id, ctx.env.SESSION_TTL_DAYS, { ip: req.ip, userAgent: req.headers['user-agent'] });
     setCookie(reply, s.token, s.expiresAt);
@@ -44,7 +54,22 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/api/auth/me', async (req) => {
     if (!req.user) return { user: null };
     const [wallet, plan] = await Promise.all([getWallet(ctx.db, req.user.id), getUserPlan(ctx.db, req.user.id)]);
-    return { user: req.user, wallet, plan: { key: plan.key, name: plan.name, limits: plan.limits } };
+    const emailVerified = await isEmailVerified(ctx, req.user.id);
+    return { user: { ...req.user, emailVerified }, verificationRequired: ctx.env.REQUIRE_EMAIL_VERIFICATION && !emailVerified, wallet, plan: { key: plan.key, name: plan.name, limits: plan.limits } };
+  });
+
+  app.post('/api/auth/verify-email', authLimit, async (req) => {
+    const { token } = parse(z.object({ token: z.string().min(20).max(200) }), req.body);
+    const r = await confirmEmail(ctx, token);
+    await audit(ctx.db, { actorUserId: r.userId, action: 'user.email_verified', ip: req.ip });
+    return { ok: true };
+  });
+
+  app.post('/api/auth/resend-verification', { config: { rateLimit: { max: ctx.env.isTest ? 1000 : 3, timeWindow: '10 minutes' } } }, async (req) => {
+    const u = requireUser(req);
+    if (await isEmailVerified(ctx, u.id)) return { ok: true, alreadyVerified: true };
+    await sendVerificationEmail(ctx, u);
+    return { ok: true };
   });
 
   app.post('/api/auth/password', authLimit, async (req) => {

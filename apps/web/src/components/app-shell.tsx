@@ -25,7 +25,8 @@ import {
   Users,
   Wand2,
 } from 'lucide-react';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
+import { toast } from 'sonner';
 import { useMe, useSystemStatus } from '@/lib/hooks';
 import { cn, formatCredits, timeAgo } from '@/lib/utils';
 import { Logo } from '@/components/logo';
@@ -205,7 +206,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Notifications />
           </div>
         </header>
-        <main className="flex-1 px-4 pb-28 pt-6 md:px-8 md:pt-8 lg:pb-12">{children}</main>
+        <main className="flex-1 px-4 pb-28 pt-6 md:px-8 md:pt-8 lg:pb-12">
+          {data?.verificationRequired && <VerifyBanner email={data.user?.email ?? ''} />}
+          {children}
+        </main>
       </div>
 
       {/* Mobile bottom navigation */}
@@ -245,5 +249,34 @@ function MobileTab({ href, icon: Icon, label, exact }: { href: string; icon: typ
       <Icon className={cn('size-5', active && 'text-iris-300')} />
       {label}
     </Link>
+  );
+}
+
+/** Unconfirmed email: buying credits (and so generating) waits for the confirmation link. */
+function VerifyBanner({ email }: { email: string }) {
+  const [sent, setSent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  return (
+    <div role="status" className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-signal-amber/30 bg-signal-amber/10 px-4 py-3 text-sm text-signal-amber">
+      <span>Confirm your email to buy credits and start creating — we sent a link to <b>{email}</b>.</span>
+      <button
+        type="button"
+        disabled={busy || sent}
+        className="rounded-lg border border-signal-amber/40 px-3 py-1 text-xs hover:bg-signal-amber/10 disabled:opacity-60"
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await api('/api/auth/resend-verification', { body: {} });
+            setSent(true);
+          } catch (e) {
+            toast.error(e instanceof ApiError ? e.message : 'Could not send the email');
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {sent ? 'Sent — check your inbox' : 'Send the link again'}
+      </button>
+    </div>
   );
 }

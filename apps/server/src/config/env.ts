@@ -90,10 +90,29 @@ const envSchema = z.object({
   /** Allows clearly-labelled fixture output in development. Never enabled in production. */
   DEV_FIXTURES_ENABLED: bool.optional(),
   GLOBAL_DAILY_PROVIDER_BUDGET_USD: z.coerce.number().min(0).default(50),
-  SIGNUP_BONUS_CREDITS: z.coerce.number().int().min(0).default(300),
+  /** Free credits for a new account. Production default 0: nothing is generated without paying. */
+  SIGNUP_BONUS_CREDITS: z.coerce.number().int().min(0).optional(),
+
+  // Access control (production defaults are strict; see loadEnv)
+  /** open = anyone; invite = only SIGNUP_ALLOWLIST; closed = no new accounts. */
+  SIGNUP_MODE: z.enum(['open', 'invite', 'closed']).optional(),
+  /** Comma-separated emails and/or @domains allowed to register in invite mode. */
+  SIGNUP_ALLOWLIST: z.string().default(''),
+  /** Buying credits needs a verified email address. */
+  REQUIRE_EMAIL_VERIFICATION: bool.optional(),
+  /** Cloudflare Turnstile (bot protection on sign-up and sign-in). */
+  TURNSTILE_SITE_KEY: optionalSecret,
+  TURNSTILE_SECRET_KEY: optionalSecret,
+  /** Daily credit cap given to every new account (they can lower it; raising it is their choice). */
+  DEFAULT_DAILY_SPEND_LIMIT: z.coerce.number().int().min(0).optional(),
 });
 
-export type Env = z.infer<typeof envSchema> & {
+export type Env = Omit<z.infer<typeof envSchema>, 'SIGNUP_BONUS_CREDITS' | 'SIGNUP_MODE' | 'REQUIRE_EMAIL_VERIFICATION' | 'DEFAULT_DAILY_SPEND_LIMIT'> & {
+  SIGNUP_BONUS_CREDITS: number;
+  SIGNUP_MODE: 'open' | 'invite' | 'closed';
+  REQUIRE_EMAIL_VERIFICATION: boolean;
+  DEFAULT_DAILY_SPEND_LIMIT: number | null;
+  signupAllowlist: string[];
   isProduction: boolean;
   isTest: boolean;
   sessionSecret: string;
@@ -124,6 +143,11 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     if (e.DATABASE_URL.startsWith('pglite:')) missing.push('DATABASE_URL (PostgreSQL required in production)');
     if (e.STORAGE_DRIVER === 's3' && (!e.S3_BUCKET || !e.S3_ACCESS_KEY_ID || !e.S3_SECRET_ACCESS_KEY)) missing.push('S3_BUCKET/S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY');
     if (e.DEV_FIXTURES_ENABLED) missing.push('DEV_FIXTURES_ENABLED must be false in production');
+    // Public sign-ups without bot protection would let anyone farm accounts.
+    if ((e.SIGNUP_MODE ?? 'invite') === 'open' && !e.TURNSTILE_SECRET_KEY) missing.push('TURNSTILE_SECRET_KEY (required when SIGNUP_MODE=open)');
+    if ((e.REQUIRE_EMAIL_VERIFICATION ?? true) && e.EMAIL_PROVIDER === 'console') missing.push('EMAIL_PROVIDER=resend + RESEND_API_KEY (email verification is on)');
+    if (e.EMAIL_PROVIDER === 'resend' && !e.RESEND_API_KEY) missing.push('RESEND_API_KEY');
+    if (e.PAYMENT_PROVIDER === 'stripe' && (!e.STRIPE_SECRET_KEY || !e.STRIPE_WEBHOOK_SECRET)) missing.push('STRIPE_SECRET_KEY/STRIPE_WEBHOOK_SECRET');
     if (missing.length) throw new Error(`Production configuration incomplete:\n${missing.map((m) => `  - ${m}`).join('\n')}`);
   }
 
@@ -137,6 +161,11 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     embeddedWorker: e.EMBEDDED_WORKER ?? e.DATABASE_URL.startsWith('pglite:'),
     devFixturesEnabled: isProduction ? false : (e.DEV_FIXTURES_ENABLED ?? true),
     cookieSecure: e.COOKIE_SECURE ?? isProduction,
+    SIGNUP_BONUS_CREDITS: e.SIGNUP_BONUS_CREDITS ?? (isProduction ? 0 : 300),
+    SIGNUP_MODE: e.SIGNUP_MODE ?? (isProduction ? 'invite' : 'open'),
+    REQUIRE_EMAIL_VERIFICATION: e.REQUIRE_EMAIL_VERIFICATION ?? isProduction,
+    DEFAULT_DAILY_SPEND_LIMIT: e.DEFAULT_DAILY_SPEND_LIMIT ?? (isProduction ? 1000 : null),
+    signupAllowlist: e.SIGNUP_ALLOWLIST.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean),
   };
 }
 

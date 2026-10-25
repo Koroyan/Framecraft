@@ -32,7 +32,7 @@ export type SessionUser = { id: string; email: string; name: string; role: 'user
 
 export async function registerUser(
   db: Db,
-  p: { email: string; password: string; name: string; ip?: string; signupBonus: number; role?: 'user' | 'admin' },
+  p: { email: string; password: string; name: string; ip?: string; signupBonus: number; role?: 'user' | 'admin'; dailySpendLimit?: number | null },
 ): Promise<SessionUser> {
   const existing = await db.select({ id: users.id }).from(users).where(eq(users.email, p.email));
   if (existing.length) throw conflict('An account with this email already exists');
@@ -40,7 +40,7 @@ export async function registerUser(
   const user = await db.transaction(async (tx) => {
     const t = tx as unknown as Db;
     const [u] = await t.insert(users).values({ email: p.email, name: p.name, passwordHash, role: p.role ?? 'user' }).returning();
-    await t.insert(userSettings).values({ userId: u!.id });
+    await t.insert(userSettings).values({ userId: u!.id, ...(p.dailySpendLimit ? { dailySpendLimit: p.dailySpendLimit } : {}) });
     await t.insert(consents).values([
       { userId: u!.id, kind: 'terms', version: TERMS_VERSION, ip: p.ip },
       { userId: u!.id, kind: 'ai_content', version: TERMS_VERSION, ip: p.ip },

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { and, desc, eq } from 'drizzle-orm';
+import { assertVerified } from '../../auth/protection';
 import type { AppContext } from '../../context';
 import { parse, requireUser } from '../app';
 import { creditPacks, creditTransactions, payments, plans, subscriptions } from '../../db/schema';
@@ -34,6 +35,7 @@ export async function billingRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.post('/api/billing/checkout', { config: { rateLimit: { max: ctx.env.isTest ? 10_000 : 10, timeWindow: '1 minute' } } }, async (req) => {
     const u = requireUser(req);
+    await assertVerified(ctx, u.id);
     const body = parse(z.object({ kind: z.enum(['credits', 'subscription']), productKey: z.string().max(60), idempotencyKey: z.string().min(8).max(100) }), req.body);
     const p = await startCheckout(ctx, u, body);
     return { paymentId: p.id, checkoutUrl: p.checkoutUrl };

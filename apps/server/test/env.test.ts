@@ -22,7 +22,9 @@ describe('environment safety', () => {
     expect(() => loadEnv({ NODE_ENV: 'production' })).toThrow(/SESSION_SECRET/);
     expect(() => loadEnv({ NODE_ENV: 'production', SESSION_SECRET: SECRET, STORAGE_SIGNING_SECRET: SECRET })).toThrow(/PostgreSQL/);
     expect(() => loadEnv({ NODE_ENV: 'production', SESSION_SECRET: SECRET, STORAGE_SIGNING_SECRET: SECRET, DATABASE_URL: 'postgres://u:p@db/x', DEV_FIXTURES_ENABLED: 'true' })).toThrow(/DEV_FIXTURES_ENABLED/);
-    const ok = loadEnv({ NODE_ENV: 'production', SESSION_SECRET: SECRET, STORAGE_SIGNING_SECRET: SECRET, DATABASE_URL: 'postgres://u:p@db/x' });
+    // Email verification is on in production, so a real email provider is required too.
+    expect(() => loadEnv({ NODE_ENV: 'production', SESSION_SECRET: SECRET, STORAGE_SIGNING_SECRET: SECRET, DATABASE_URL: 'postgres://u:p@db/x' })).toThrow(/EMAIL_PROVIDER=resend/);
+    const ok = loadEnv({ NODE_ENV: 'production', SESSION_SECRET: SECRET, STORAGE_SIGNING_SECRET: SECRET, DATABASE_URL: 'postgres://u:p@db/x', EMAIL_PROVIDER: 'resend', RESEND_API_KEY: 're_test' });
     expect(ok.devFixturesEnabled).toBe(false);
     expect(ok.cookieSecure).toBe(true);
   });
