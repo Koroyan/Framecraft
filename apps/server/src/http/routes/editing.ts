@@ -5,7 +5,7 @@ import type { AppContext } from '../../context';
 import { parse, requireUser } from '../app';
 import { editOperations } from '../../db/schema';
 import { getOwnedJob, toPublicJob } from '../../generation/service';
-import { activateShotVersion, ownedShot, projectShots, renameShotVersion, saveGraphLayout } from '../../editing/versions';
+import { activateShotVersion, ensureClipShot, ownedShot, projectShots, renameShotVersion, saveGraphLayout } from '../../editing/versions';
 import { acceptAiEdit, aiEditRequestSchema, createAiEdit, estimateAiEdit, rejectAiEdit } from '../../editing/ai-edit';
 import { addComment, commentInputSchema, COMMENT_STATUSES, deleteComment, grabFrame, updateComment } from '../../editing/comments';
 import { copilotPlan, copilotRequestSchema } from '../../editing/copilot';
@@ -132,6 +132,13 @@ export async function editingRoutes(app: FastifyInstance, ctx: AppContext) {
     const u = requireUser(req);
     const body = parse(z.object({ layer: z.record(z.string(), z.unknown()), frameHeight: z.number().min(240).max(2160) }), req.body);
     return rasterLayer(ctx, u, body.layer as never, body.frameHeight);
+  });
+
+  // Your own footage → a shot (so AI edits, comments and versions work on it).
+  app.post('/api/projects/:id/shots/from-clip', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(idParam, req.params);
+    return ensureClipShot(ctx, u, id, parse(z.object({ assetId: z.string().uuid(), label: z.string().max(200).optional() }), req.body));
   });
 
   const trackBody = z.object({ box: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), w: z.number().min(0.005).max(1), h: z.number().min(0.005).max(1) }), atSec: z.number().min(0), startSec: z.number().min(0), endSec: z.number().min(0.05), smoothing: z.number().min(0).max(1).optional() });

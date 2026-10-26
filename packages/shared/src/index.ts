@@ -9,3 +9,7 @@ export * from './layers';
 export * from './ads';
 export * from './ad-modes';
 export * from './beats';
+export * from './objects';
+export * from './segment';
+export * from './quick';
+export * from './intent';

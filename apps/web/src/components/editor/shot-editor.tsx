@@ -17,7 +17,9 @@ import { CameraFrame, CameraPanel } from './shot-tools';
 import { cameraStyle, Vignette } from './look';
 import { ColorPro } from './color-pro';
 import { GradeCanvas, Grain } from './grade-canvas';
-import { Copilot } from './copilot';
+import { useShotContext } from '@/lib/shot-context';
+import { useEditorUi } from '@/lib/editor-ui';
+import { Bot } from 'lucide-react';
 
 type Tab = 'ai' | 'comments' | 'camera' | 'color' | 'versions';
 type Guide = { assetId: string; url: string; atSec: number };
@@ -61,6 +63,11 @@ export function ShotEditor({ projectId, clipId, timeline, apply, shot, assets, o
   const [pickTarget, setPickTarget] = useState<string | null>(null);
   const [picked, setPicked] = useState<{ target: string; hex: string } | null>(null);
   const [tracking, setTracking] = useState(false);
+  // The shared assistant reads what is selected here.
+  useEffect(() => {
+    useShotContext.getState().set({ shot: shot ? { id: shot.id, number: shot.number, versionId: viewing?.id } : null, range, mask: maskIsEmpty(mask) ? null : mask });
+  }, [shot, viewing?.id, range, mask]);
+  useEffect(() => () => useShotContext.getState().set({ shot: null, range: null, mask: null }), []);
 
   /** Track the drawn selection through this clip (box tracker on the server, free). */
   const trackMask = async (m: EditMask): Promise<EditMask | null> => {
@@ -327,9 +334,10 @@ export function ShotEditor({ projectId, clipId, timeline, apply, shot, assets, o
         {tab === 'versions' && shot && <Versions shot={shot} onView={(id) => setViewId(id)} onCompare={(b) => active && setCompare({ a: active.id, b })} refresh={refresh} apply={apply} />}
 
         {shot && (
-          <div className="h-[340px] rounded-2xl border hairline bg-white/[0.02] p-3">
-            <Copilot projectId={projectId} timeline={timeline} apply={apply} shot={{ id: shot.id, number: shot.number, versionId: viewing?.id }} range={range} mask={maskIsEmpty(mask) ? null : mask} onEditStarted={refresh} />
-          </div>
+          <button type="button" onClick={() => useEditorUi.getState().set({ assistantOpen: true })} className="flex w-full items-center gap-2.5 rounded-2xl border hairline bg-white/[0.02] p-3 text-left text-xs text-fog-300 hover:border-white/25">
+            <Bot className="size-4 shrink-0 text-iris-300" />
+            <span>Ask the assistant (Ctrl+J) — it works on <b className="text-white">shot {shot.number}</b>{range ? <>, <b className="text-white">{seconds(range.start)}–{seconds(range.end)}</b></> : null}{!maskIsEmpty(mask) ? ' and the area you drew' : ''}.</span>
+          </button>
         )}
       </div>
 

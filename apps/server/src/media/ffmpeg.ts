@@ -236,7 +236,8 @@ export async function normalizeClip(input: string, output: string, o: NormalizeO
   if (o.reframe?.length && o.fill) {
     // Cover-scale, then crop around the subject: x(t) = clamp(cx(t)·iw − W/2, 0, iw − W), in source time.
     const pts = o.reframe.length > 60 ? o.reframe.filter((_, i) => i % Math.ceil(o.reframe!.length / 60) === 0) : o.reframe;
-    const src = `(${start}+t*${speed})`;
+    // Source second at output time t (a reversed clip runs from its out point backwards).
+    const src = o.reverse && !o.freezeSec ? `(${end}-t*${speed})` : `(${start}+t*${speed})`;
     const cx = piecewiseExpr(pts.map((p) => p.t), pts.map((p) => p.x), 'linear').replaceAll('T', src);
     const cy = piecewiseExpr(pts.map((p) => p.t), pts.map((p) => p.y), 'linear').replaceAll('T', src);
     fitFilter = `scale=${o.width}:${o.height}:force_original_aspect_ratio=increase,crop=${o.width}:${o.height}:x='clip((${cx})*iw-${o.width}/2,0,iw-${o.width})':y='clip((${cy})*ih-${o.height}/2,0,ih-${o.height})'`;

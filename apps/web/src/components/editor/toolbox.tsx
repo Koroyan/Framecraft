@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { AudioLines, Captions, Film, Image as ImageIcon, Mic, Music, Palette, Plus, Shapes, Sparkles, Type, Wand2 } from 'lucide-react';
+import { AudioLines, Bot, Captions, ChevronsLeft, ChevronsRight, Crosshair, Film, Image as ImageIcon, Mic, MousePointerClick, Music, Palette, Plus, Shapes, Sparkles, Type, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { LOOKS, layerSchema, snapClipsToBeats, type LayerInput, type Timeline } from '@framecraft/shared';
 import { api, ApiError, type Asset } from '@/lib/api';
@@ -18,7 +18,7 @@ import { cn, seconds } from '@/lib/utils';
  */
 
 type Apply = (fn: (t: Timeline) => Timeline) => void;
-type Tab = 'media' | 'audio' | 'text' | 'stickers' | 'captions' | 'filters' | 'transitions';
+type Tab = 'media' | 'audio' | 'text' | 'stickers' | 'captions' | 'filters' | 'transitions' | 'ai';
 
 const TABS: { key: Tab; label: string; icon: typeof Film }[] = [
   { key: 'media', label: 'Media', icon: Film },
@@ -28,6 +28,7 @@ const TABS: { key: Tab; label: string; icon: typeof Film }[] = [
   { key: 'captions', label: 'Captions', icon: Captions },
   { key: 'filters', label: 'Filters', icon: Palette },
   { key: 'transitions', label: 'Transitions', icon: Sparkles },
+  { key: 'ai', label: 'AI tools', icon: Wand2 },
 ];
 
 /** TikTok-style text looks (rendered by the server exactly like the preview). */
@@ -60,8 +61,21 @@ export function EditorToolbox(p: {
   onUploaded: () => void;
   onSelectLayer: (id: string) => void;
   transcribe: React.ReactNode;
+  /** Tool panel next to the rail (collapsible); the rail always stays. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  panelWidth?: number;
+  onSelectObject?: () => void;
+  onOpenAssistant?: () => void;
+  onOpenShot?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>('media');
+  const open = p.open ?? true;
+  const pick = (k: Tab) => {
+    if (open && tab === k && p.onOpenChange) return p.onOpenChange(false);
+    setTab(k);
+    if (!open) p.onOpenChange?.(true);
+  };
   const { timeline, apply, playhead } = p;
   const at = Math.round(playhead * 10) / 10;
   const list = [...p.assets.values()].filter((a) => a.kind !== 'thumbnail' && a.kind !== 'frame');
@@ -73,15 +87,20 @@ export function EditorToolbox(p: {
 
   return (
     <div className="flex h-full overflow-hidden rounded-2xl border hairline bg-ink-900/70">
-      <nav aria-label="Editor tools" className="flex w-16 shrink-0 flex-col gap-0.5 overflow-y-auto border-r hairline p-1.5">
+      <nav aria-label="Editor tools" className={cn('flex w-16 shrink-0 flex-col gap-0.5 overflow-y-auto p-1.5', open && 'border-r hairline')}>
         {TABS.map((t) => (
-          <button key={t.key} type="button" onClick={() => setTab(t.key)} aria-pressed={tab === t.key} className={cn('flex flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 text-[10px] transition', tab === t.key ? 'bg-iris-500/20 text-white' : 'text-fog-400 hover:bg-white/[0.05] hover:text-fog-100')}>
+          <button key={t.key} type="button" onClick={() => pick(t.key)} aria-pressed={open && tab === t.key} title={t.label} className={cn('flex flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 text-[10px] transition', open && tab === t.key ? 'bg-iris-500/20 text-white' : 'text-fog-400 hover:bg-white/[0.05] hover:text-fog-100')}>
             <t.icon className="size-4" />
             {t.label}
           </button>
         ))}
+        {p.onOpenChange && (
+          <button type="button" onClick={() => p.onOpenChange!(!open)} title={open ? 'Hide the tool panel' : 'Show the tool panel'} aria-label={open ? 'Hide the tool panel' : 'Show the tool panel'} className="mt-auto grid h-8 place-items-center rounded-xl text-fog-500 hover:bg-white/[0.05] hover:text-white">
+            {open ? <ChevronsLeft className="size-4" /> : <ChevronsRight className="size-4" />}
+          </button>
+        )}
       </nav>
-      <div className="min-w-0 flex-1 space-y-3 overflow-y-auto p-3">
+      {open && <div className="min-w-0 flex-1 space-y-3 overflow-y-auto p-3" style={p.panelWidth ? { width: p.panelWidth } : undefined}>
         {tab === 'media' && (
           <>
             <MediaDropzone compact label="Import videos or photos" onAsset={() => p.onUploaded()} />
@@ -141,9 +160,32 @@ export function EditorToolbox(p: {
         {tab === 'filters' && <FiltersTab timeline={timeline} apply={apply} selectedClipId={p.selectedClipId} />}
 
         {tab === 'transitions' && <TransitionsTab timeline={timeline} apply={apply} selectedClipId={p.selectedClipId} />}
-      </div>
+
+        {tab === 'ai' && (
+          <div className="space-y-2 text-xs">
+            <AiTool icon={MousePointerClick} title="Select an object" text="Click anything in the picture to recolour, brighten or blur only it — it can follow the object." badge="Free" onClick={p.onSelectObject} />
+            <AiTool icon={Bot} title="Ask the assistant" text="“Make the music quieter”, “cut this part”, “make it cinematic”. Everyday edits are instant." badge="Free" onClick={p.onOpenAssistant} />
+            <AiTool icon={Crosshair} title="Fix part of a shot with AI" text="Choose the seconds and the area; AI changes only that. Price shown first, you compare before using it." badge="Paid" onClick={p.onOpenShot} />
+            <AiTool icon={Sparkles} title="Generate a new clip" text="Make a shot from a description or an image, then add it here." badge="Paid" href="/app/create" />
+          </div>
+        )}
+      </div>}
     </div>
   );
+}
+
+function AiTool({ icon: Icon, title, text, badge, onClick, href }: { icon: typeof Film; title: string; text: string; badge: 'Free' | 'Paid'; onClick?: () => void; href?: string }) {
+  const body = (
+    <>
+      <span className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 font-medium text-white"><Icon className="size-3.5 text-iris-300" /> {title}</span>
+        <span className={cn('rounded px-1.5 py-0.5 text-[10px]', badge === 'Free' ? 'bg-signal-green/15 text-signal-green' : 'bg-iris-500/15 text-iris-200')}>{badge}</span>
+      </span>
+      <span className="mt-1 block text-fog-400">{text}</span>
+    </>
+  );
+  const cls = 'block w-full rounded-xl border hairline p-2.5 text-left transition hover:border-white/25';
+  return href ? <a href={href} className={cls}>{body}</a> : <button type="button" onClick={onClick} className={cls}>{body}</button>;
 }
 
 function AudioTab(p: Parameters<typeof EditorToolbox>[0] & { list: Asset[] }) {

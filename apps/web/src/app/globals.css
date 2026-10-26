@@ -38,6 +38,7 @@
   --animate-shimmer: shimmer 2.2s linear infinite;
   --animate-float: float 8s ease-in-out infinite;
   --animate-fade-up: fade-up 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-ants: fc-ants 0.9s linear infinite;
 
   @keyframes shimmer {
     0% { background-position: -200% 0; }
@@ -50,6 +51,9 @@
   @keyframes indeterminate {
     0% { left: -35%; }
     100% { left: 100%; }
+  }
+  @keyframes fc-ants {
+    to { stroke-dashoffset: -20; }
   }
   @keyframes fade-up {
     from { opacity: 0; transform: translateY(8px); }

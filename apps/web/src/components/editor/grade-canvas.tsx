@@ -1,32 +1,55 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { applyReplace, buildLut, gradeFunction, gradeSchema, maskIsEmpty, motionAt, needsLut, parseCube, type EditMask, type GradeSettings, type Lut3d } from '@framecraft/shared';
+import { applyReplace, buildLut, gradeFunction, gradeSchema, maskIsEmpty, maskTransformAt, needsLut, objectActiveAt, objectColorFunction, parseCube, spatialEffect, type EditMask, type GradeSettings, type Lut3d, type ObjectEdit } from '@framecraft/shared';
 
 /*
  * Live colour preview: draws the playing <video> through the same 3D LUT the export uses
- * (WebGL2 3D texture, trilinear) — plus masked colour replacements, each with its own LUT and a
- * mask that follows its tracked object. Blur / vignette / grain / glow are close CSS approximations.
+ * (WebGL2 3D texture, trilinear), cropped exactly like the export (cover + re-frame position) — plus
+ * masked colour replacements and object edits (colour / adjust / blur / pixelate inside a mask that
+ * follows its tracked object). Blur, pixelate and feathering are close approximations of FFmpeg's.
  */
 
+const REPS = 2;
+const OBJS = 4;
 const VS = `#version 300 es
 in vec2 p; out vec2 uv;
 void main(){ uv = vec2((p.x+1.0)*0.5, 1.0-(p.y+1.0)*0.5); gl_Position = vec4(p,0.0,1.0); }`;
-const FS = `#version 300 es
+
+function fragmentShader() {
+  const decl: string[] = [];
+  const body: string[] = [];
+  for (let i = 0; i < REPS; i++) {
+    decl.push(`uniform sampler3D uRep${i}; uniform sampler2D uMask${i}; uniform float uRep${i}On;`);
+    body.push(`if (uRep${i}On > 0.5) c = mix(c, L(uRep${i}, c), texture(uMask${i}, s).r);`);
+  }
+  for (let i = 0; i < OBJS; i++) {
+    decl.push(`uniform sampler3D uOL${i}; uniform sampler2D uOM${i}; uniform float uOOn${i}; uniform float uOLut${i}; uniform float uOSp${i}; uniform vec2 uOPar${i};`);
+    body.push(`if (uOOn${i} > 0.5) { float m = texture(uOM${i}, s).r; if (m > 0.002) {
+      vec3 e = c;
+      if (uOSp${i} > 0.5 && uOSp${i} < 1.5) e = G(blurAt(s, uOPar${i}));
+      else if (uOSp${i} > 1.5) { vec2 q = (floor(uv / uOPar${i}) + 0.5) * uOPar${i}; e = G(texture(uVideo, uCrop.xy + q * uCrop.zw).rgb); }
+      if (uOLut${i} > 0.5) e = L(uOL${i}, e);
+      c = mix(c, e, m); } }`);
+  }
+  return `#version 300 es
 precision highp float; precision highp sampler3D;
-uniform sampler2D uVideo; uniform sampler3D uLut; uniform float uLutOn;
-uniform sampler3D uRep0; uniform sampler2D uMask0; uniform float uRep0On;
-uniform sampler3D uRep1; uniform sampler2D uMask1; uniform float uRep1On;
-uniform float uSize;
+uniform sampler2D uVideo; uniform sampler3D uLut; uniform float uLutOn; uniform float uSize; uniform vec4 uCrop;
+${decl.join('\n')}
 in vec2 uv; out vec4 o;
-vec3 L(sampler3D s, vec3 c){ return texture(s, c*(uSize-1.0)/uSize + 0.5/uSize).rgb; }
+vec3 L(sampler3D t, vec3 c){ return texture(t, c*(uSize-1.0)/uSize + 0.5/uSize).rgb; }
+vec3 G(vec3 c){ return uLutOn > 0.5 ? L(uLut, c) : c; }
+const vec2 TAPS[12] = vec2[12](vec2(1.0,0.0),vec2(0.5,0.866),vec2(-0.5,0.866),vec2(-1.0,0.0),vec2(-0.5,-0.866),vec2(0.5,-0.866),vec2(0.433,0.25),vec2(0.0,0.5),vec2(-0.433,0.25),vec2(-0.433,-0.25),vec2(0.0,-0.5),vec2(0.433,-0.25));
+vec3 blurAt(vec2 s, vec2 r){ vec3 acc = texture(uVideo, s).rgb * 0.16; float w = 0.16;
+  for (int k = 0; k < 12; k++) { float wk = k < 6 ? 0.05 : 0.09; vec2 d = TAPS[k] * r * 2.0; acc += (texture(uVideo, s + d).rgb + texture(uVideo, s + d * 0.5).rgb) * wk; w += 2.0 * wk; }
+  return acc / w; }
 void main(){
-  vec3 c = texture(uVideo, uv).rgb;
-  if (uLutOn > 0.5) c = L(uLut, c);
-  if (uRep0On > 0.5) c = mix(c, L(uRep0, c), texture(uMask0, uv).r);
-  if (uRep1On > 0.5) c = mix(c, L(uRep1, c), texture(uMask1, uv).r);
+  vec2 s = uCrop.xy + uv * uCrop.zw;
+  vec3 c = G(texture(uVideo, s).rgb);
+  ${body.join('\n  ')}
   o = vec4(c, 1.0);
 }`;
+}
 
 const cubeCache = new Map<string, Promise<Lut3d>>();
 export function loadCube(url: string): Promise<Lut3d> {
@@ -51,19 +74,22 @@ function lutTexture(gl: WebGL2RenderingContext, lut: Lut3d, tex: WebGLTexture | 
   return t;
 }
 
-/** Draw a mask (normalised, source coordinates) at the video's current time, feathered. */
+/** Draw a mask (normalised, source coordinates) where its track puts it at source time t, feathered. */
 export function drawMask(c: HTMLCanvasElement, mask: EditMask, t: number) {
   const g = c.getContext('2d')!;
   const W = c.width;
   const H = c.height;
-  const off = motionAt(mask.track, t);
+  const tr = maskTransformAt(mask, t);
   g.setTransform(1, 0, 0, 1, 0, 0);
   g.globalCompositeOperation = 'source-over';
   g.filter = 'none';
   g.fillStyle = '#000';
   g.fillRect(0, 0, W, H);
   g.filter = mask.feather ? `blur(${Math.max(0.5, mask.feather * W)}px)` : 'none';
-  g.translate(off.dx * W, off.dy * H);
+  // p → c + (p − c)·s + d
+  g.translate((tr.cx + tr.dx) * W, (tr.cy + tr.dy) * H);
+  g.scale(tr.s, tr.s);
+  g.translate(-tr.cx * W, -tr.cy * H);
   g.lineCap = 'round';
   g.lineJoin = 'round';
   const paint = (sub: boolean) => (g.fillStyle = g.strokeStyle = sub ? '#000' : '#fff');
@@ -96,21 +122,46 @@ export function drawMask(c: HTMLCanvasElement, mask: EditMask, t: number) {
   }
 }
 
-export function GradeCanvas({ video, adjust, lutUrl, srcTime }: { video: React.RefObject<HTMLVideoElement | null>; adjust?: Partial<GradeSettings>; lutUrl?: string | null; srcTime?: () => number }) {
+/** Source-uv crop (offset xy, size zw) that shows the source like CSS object-fit: cover + object-position. */
+export function coverCrop(vw: number, vh: number, cw: number, ch: number, objectPosition?: string): [number, number, number, number] {
+  if (!vw || !vh || !cw || !ch) return [0, 0, 1, 1];
+  const k = Math.max(cw / vw, ch / vh);
+  const sw = vw * k;
+  const sh = vh * k;
+  const [px, py] = (objectPosition ?? '50% 50%').split(' ').map((v) => parseFloat(v) / 100) as [number, number];
+  return [((sw - cw) * (Number.isFinite(px) ? px : 0.5)) / sw, ((sh - ch) * (Number.isFinite(py) ? py : 0.5)) / sh, cw / sw, ch / sh];
+}
+
+type Slot = { lut: WebGLTexture | null; mask: WebGLTexture; canvas: HTMLCanvasElement };
+
+const UNITS: Record<string, number> = { uVideo: 0, uLut: 1 };
+for (let i = 0; i < REPS; i++) {
+  UNITS[`uRep${i}`] = 2 + i * 2;
+  UNITS[`uMask${i}`] = 3 + i * 2;
+}
+for (let i = 0; i < OBJS; i++) {
+  UNITS[`uOL${i}`] = 2 + REPS * 2 + i * 2;
+  UNITS[`uOM${i}`] = 3 + REPS * 2 + i * 2;
+}
+
+export function GradeCanvas({ video, adjust, lutUrl, srcTime, objectPosition, objects }: { video: React.RefObject<HTMLVideoElement | null>; adjust?: Partial<GradeSettings>; lutUrl?: string | null; srcTime?: () => number; objectPosition?: string; objects?: ObjectEdit[] }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [supported, setSupported] = useState(true);
   const [custom, setCustom] = useState<Lut3d | null>(null);
-  const state = useRef<{ gl: WebGL2RenderingContext; prog: WebGLProgram; vtex: WebGLTexture; lut: WebGLTexture | null; reps: (WebGLTexture | null)[]; masks: WebGLTexture[]; maskCanvases: HTMLCanvasElement[]; repMasks: EditMask[] } | null>(null);
+  const state = useRef<{ gl: WebGL2RenderingContext; prog: WebGLProgram; vtex: WebGLTexture; lut: WebGLTexture | null; reps: Slot[]; objs: Slot[]; repMasks: EditMask[]; objList: ObjectEdit[]; dummy3d: WebGLTexture; dummy2d: WebGLTexture } | null>(null);
   const g = gradeSchema.parse(adjust ?? {});
-  const masked = (g.replace ?? []).filter((r) => r.mask && !maskIsEmpty(r.mask)).slice(0, 2);
-  const active = needsLut(g) || masked.length > 0 || Boolean(g.lut && custom);
+  const masked = (g.replace ?? []).filter((r) => r.mask && !maskIsEmpty(r.mask)).slice(0, REPS);
+  const objList = (objects ?? []).filter((o) => o.enabled && o.effects.length && !maskIsEmpty(o.mask)).slice(0, OBJS);
+  const active = needsLut(g) || masked.length > 0 || objList.length > 0 || Boolean(g.lut && custom);
+  // Latest values for the draw loop without restarting it.
+  const live = useRef({ srcTime, objectPosition });
+  live.current = { srcTime, objectPosition };
 
   useEffect(() => {
     if (!lutUrl) return setCustom(null);
     void loadCube(lutUrl).then(setCustom).catch(() => setCustom(null));
   }, [lutUrl]);
 
-  // GL setup once.
   useEffect(() => {
     const c = canvas.current;
     if (!c) return;
@@ -124,7 +175,7 @@ export function GradeCanvas({ video, adjust, lutUrl, srcTime }: { video: React.R
     };
     const prog = gl.createProgram()!;
     gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS));
-    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
+    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fragmentShader()));
     gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return setSupported(false);
     gl.useProgram(prog);
@@ -143,11 +194,19 @@ export function GradeCanvas({ video, adjust, lutUrl, srcTime }: { video: React.R
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       return t;
     };
-    state.current = { gl, prog, vtex: tex2d(), lut: null, reps: [null, null], masks: [tex2d(), tex2d()], maskCanvases: [document.createElement('canvas'), document.createElement('canvas')], repMasks: [] };
+    const slot = (): Slot => ({ lut: null, mask: tex2d(), canvas: document.createElement('canvas') });
+    // Every sampler gets its own fixed unit (a 2D and a 3D sampler may never share one).
+    for (const [name, unit] of Object.entries(UNITS)) gl.uniform1i(gl.getUniformLocation(prog, name), unit);
+    const dummy3d = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_3D, dummy3d);
+    gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA8, 1, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+    const dummy2d = tex2d();
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+    state.current = { gl, prog, vtex: tex2d(), lut: null, reps: Array.from({ length: REPS }, slot), objs: Array.from({ length: OBJS }, slot), repMasks: [], objList: [], dummy3d, dummy2d };
   }, []);
 
-  // (Re)bake LUTs when the grade changes (debounced so slider drags stay smooth).
-  const key = JSON.stringify(adjust ?? {}) + (custom ? 'L' : '');
+  // (Re)bake LUTs when the grade or the objects change (debounced so slider drags stay smooth).
+  const key = JSON.stringify(adjust ?? {}) + (custom ? 'L' : '') + JSON.stringify(objList.map((o) => o.effects));
   useEffect(() => {
     const s = state.current;
     if (!s) return;
@@ -155,14 +214,23 @@ export function GradeCanvas({ video, adjust, lutUrl, srcTime }: { video: React.R
       const { gl } = s;
       gl.useProgram(s.prog);
       if (needsLut(g) || (g.lut && custom)) s.lut = lutTexture(gl, buildLut(gradeFunction(g, custom), 25), s.lut);
-      masked.forEach((rep, i) => (s.reps[i] = lutTexture(gl, buildLut((px) => applyReplace({ ...rep, mask: undefined }, px), 25), s.reps[i] ?? null)));
+      masked.forEach((rep, i) => (s.reps[i]!.lut = lutTexture(gl, buildLut((px) => applyReplace({ ...rep, mask: undefined }, px), 25), s.reps[i]!.lut)));
       s.repMasks = masked.map((r) => r.mask!);
+      objList.forEach((o, i) => {
+        const fn = objectColorFunction(o.effects);
+        if (fn) s.objs[i]!.lut = lutTexture(gl, buildLut(fn, 25), s.objs[i]!.lut);
+      });
+      s.objList = objList;
     }, 60);
     return () => clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
+  // Masks and ranges (geometry) update immediately.
+  useEffect(() => {
+    if (state.current) state.current.objList = objList;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(objList.map((o) => [o.mask, o.startSec, o.endSec, o.enabled]))]);
 
-  // Draw loop.
   useEffect(() => {
     if (!active) return;
     let raf = 0;
@@ -180,35 +248,68 @@ export function GradeCanvas({ video, adjust, lutUrl, srcTime }: { video: React.R
         c.width = w;
         c.height = h;
       }
+      const crop = coverCrop(v.videoWidth, v.videoHeight, rect.width, rect.height, live.current.objectPosition);
       gl.viewport(0, 0, w, h);
       gl.useProgram(s.prog);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, s.vtex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v);
-      gl.uniform1i(gl.getUniformLocation(s.prog, 'uVideo'), 0);
-      gl.uniform1f(gl.getUniformLocation(s.prog, 'uSize'), 25);
-      gl.uniform1f(gl.getUniformLocation(s.prog, 'uLutOn'), s.lut && (needsLut(g) || (g.lut && custom)) ? 1 : 0);
-      if (s.lut) {
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_3D, s.lut);
-        gl.uniform1i(gl.getUniformLocation(s.prog, 'uLut'), 1);
+      const U = (n: string) => gl.getUniformLocation(s.prog, n);
+      const bind = (unit: number, target: number, tex: WebGLTexture) => {
+        gl.activeTexture(gl.TEXTURE0 + unit);
+        gl.bindTexture(target, tex);
+      };
+      bind(0, gl.TEXTURE_2D, s.vtex);
+      try {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v);
+      } catch {
+        return; // cross-origin video without CORS: the plain <video> underneath stays visible
       }
-      const t = srcTime ? srcTime() : v.currentTime;
-      for (let i = 0; i < 2; i++) {
-        const on = Boolean(s.reps[i] && s.repMasks[i]);
-        gl.uniform1f(gl.getUniformLocation(s.prog, `uRep${i}On`), on ? 1 : 0);
-        if (!on) continue;
-        const mc = s.maskCanvases[i]!;
-        mc.width = Math.min(480, w);
-        mc.height = Math.max(2, Math.round((mc.width * h) / w));
-        drawMask(mc, s.repMasks[i]!, t);
-        gl.activeTexture(gl.TEXTURE2 + i * 2);
-        gl.bindTexture(gl.TEXTURE_3D, s.reps[i]!);
-        gl.uniform1i(gl.getUniformLocation(s.prog, `uRep${i}`), 2 + i * 2);
-        gl.activeTexture(gl.TEXTURE3 + i * 2);
-        gl.bindTexture(gl.TEXTURE_2D, s.masks[i]!);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, mc);
-        gl.uniform1i(gl.getUniformLocation(s.prog, `uMask${i}`), 3 + i * 2);
+      gl.uniform1f(U('uSize'), 25);
+      gl.uniform4f(U('uCrop'), crop[0], crop[1], crop[2], crop[3]);
+      const lutOn = Boolean(s.lut && (needsLut(g) || (g.lut && custom)));
+      gl.uniform1f(U('uLutOn'), lutOn ? 1 : 0);
+      bind(UNITS.uLut, gl.TEXTURE_3D, lutOn ? s.lut! : s.dummy3d);
+      const t = live.current.srcTime ? live.current.srcTime() : v.currentTime;
+      const maskSize = (cv: HTMLCanvasElement) => {
+        cv.width = 480;
+        cv.height = Math.max(2, Math.round((480 * (v.videoHeight || 9)) / (v.videoWidth || 16)));
+      };
+      const bindSlot = (slot: Slot, lutUnit: number, maskUnit: number, on: boolean) => {
+        bind(lutUnit, gl.TEXTURE_3D, on && slot.lut ? slot.lut : s.dummy3d);
+        bind(maskUnit, gl.TEXTURE_2D, on ? slot.mask : s.dummy2d);
+        if (on) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, slot.canvas);
+      };
+      for (let i = 0; i < REPS; i++) {
+        const slot = s.reps[i]!;
+        const on = Boolean(slot.lut && s.repMasks[i]);
+        gl.uniform1f(U(`uRep${i}On`), on ? 1 : 0);
+        if (on) {
+          maskSize(slot.canvas);
+          drawMask(slot.canvas, s.repMasks[i]!, t);
+        }
+        bindSlot(slot, UNITS[`uRep${i}`]!, UNITS[`uMask${i}`]!, on);
+      }
+      for (let i = 0; i < OBJS; i++) {
+        const o = s.objList[i];
+        const slot = s.objs[i]!;
+        const on = Boolean(o && objectActiveAt(o, t));
+        gl.uniform1f(U(`uOOn${i}`), on ? 1 : 0);
+        if (on && o) {
+          const colour = Boolean(objectColorFunction(o.effects) && slot.lut);
+          gl.uniform1f(U(`uOLut${i}`), colour ? 1 : 0);
+          const sp = spatialEffect(o.effects);
+          // Blur sigma / pixel block in the export are relative to the output height (1080 lines).
+          if (sp?.type === 'blur') {
+            const sigmaPx = (sp.amount / 1080) * rect.height;
+            gl.uniform1f(U(`uOSp${i}`), 1);
+            gl.uniform2f(U(`uOPar${i}`), (sigmaPx / rect.width) * crop[2], (sigmaPx / rect.height) * crop[3]);
+          } else if (sp?.type === 'pixelate') {
+            const block = (sp.size / 1080) * rect.height;
+            gl.uniform1f(U(`uOSp${i}`), 2);
+            gl.uniform2f(U(`uOPar${i}`), block / rect.width, block / rect.height);
+          } else gl.uniform1f(U(`uOSp${i}`), 0);
+          maskSize(slot.canvas);
+          drawMask(slot.canvas, o.mask, t);
+        }
+        bindSlot(slot, UNITS[`uOL${i}`]!, UNITS[`uOM${i}`]!, on);
       }
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     };
@@ -222,6 +323,7 @@ export function GradeCanvas({ video, adjust, lutUrl, srcTime }: { video: React.R
     <canvas
       ref={canvas}
       aria-hidden
+      data-testid="grade-canvas"
       className="pointer-events-none absolute inset-0 size-full"
       style={{ filter: [g.blur ? `blur(${(g.blur * 0.5).toFixed(1)}px)` : '', g.glow ? `brightness(${1 + g.glow * 0.12}) saturate(${1 + g.glow * 0.1})` : ''].filter(Boolean).join(' ') || undefined }}
     />

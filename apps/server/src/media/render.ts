@@ -5,6 +5,7 @@ import { ffmpeg, joinClips, normalizeClip, probe, stageFont, withWorkdir, featur
 import { toSrt } from './subtitles';
 import { parseCube, type Lut3d } from '@framecraft/shared';
 import { cameraFilters, lookFilters } from './clip-fx';
+import { objectFilters } from './object-fx';
 import { layerFilters } from './layers-render';
 
 export type RenderInputs = {
@@ -63,6 +64,8 @@ export async function renderTimeline({ timeline, resolve, output, onProgress }: 
         // Colour (and masked recolours, in source coordinates) first, then the 2D camera.
         effects: async (srcInfo) => [
           ...(await lookFilters(c.adjust, { dir, key: `c${i}`, width: dims.width, height: dims.height, fps: timeline.fps, durationSec: srcInfo.durationSec, srcWidth: srcInfo.width, srcHeight: srcInfo.height, inSec: c.inSec, speed: c.speed || 1, customLut: c.adjust?.lut ? await loadLut(c.adjust.lut.assetId) : null })),
+          // Selected objects (recolour / adjust / blur / pixelate inside a tracked mask), same maths as the preview.
+          ...(await objectFilters(c.objects, { dir, key: `c${i}`, width: dims.width, height: dims.height, fps: timeline.fps, durationSec: srcInfo.durationSec, srcWidth: srcInfo.width, srcHeight: srcInfo.height, inSec: c.inSec, outSec: c.outSec, speed: c.freezeSec ? 1 : c.speed || 1, reverse: c.reverse, freeze: Boolean(c.freezeSec), reframe: c.reframe?.points })),
           ...cameraFilters(c.camera, dims.width, dims.height, timeline.fps),
         ],
       });

@@ -3,7 +3,7 @@ import { swapShotVersion, timelineSchema } from '@framecraft/shared';
 import type { AppContext } from '../context';
 import type { Db } from '../db/client';
 import { assets, editOperations, projectVersions, projects, scenes, shotComments, shotVersions, shots } from '../db/schema';
-import { assetUrl } from '../services/assets';
+import { assetUrl, getOwnedAsset } from '../services/assets';
 import { badRequest, notFound } from '../lib/errors';
 import type { SessionLike } from '../generation/service';
 
@@ -144,4 +144,30 @@ export async function renameShotVersion(ctx: AppContext, user: SessionLike, vers
 export async function saveGraphLayout(ctx: AppContext, user: SessionLike, projectId: string, layout: { positions: Record<string, { x: number; y: number }>; collapsed: string[] }) {
   const p = await ownedProject(ctx, user, projectId);
   await ctx.db.update(projects).set({ settings: { ...(p.settings as Record<string, unknown>), graph: layout } }).where(and(eq(projects.id, projectId)));
+}
+
+/**
+ * Make a timeline clip of the user's own footage into a shot (scene "Your footage", version V1 =
+ * the original file), so AI edits, comments, compare and versions work on it like on generated
+ * shots. Idempotent per asset: the same file reuses its shot.
+ */
+export async function ensureClipShot(ctx: AppContext, user: SessionLike, projectId: string, input: { assetId: string; label?: string }) {
+  const project = await ownedProject(ctx, user, projectId);
+  const asset = await getOwnedAsset(ctx, project.userId, input.assetId);
+  if (asset.mediaType !== 'video') throw badRequest('Only video clips can become shots');
+  const existing = await ctx.db.select().from(shots).where(and(eq(shots.projectId, projectId), eq(shots.currentAssetId, asset.id)));
+  for (const s of existing) {
+    const [v] = await ctx.db.select().from(shotVersions).where(and(eq(shotVersions.shotId, s.id), eq(shotVersions.assetId, asset.id)));
+    if (v) return { shotId: s.id, versionId: v.id, created: false };
+  }
+  const sceneRows = await ctx.db.select().from(scenes).where(eq(scenes.projectId, projectId));
+  let scene = sceneRows.find((s) => s.title === 'Your footage');
+  if (!scene) [scene] = await ctx.db.insert(scenes).values({ projectId, index: sceneRows.length, title: 'Your footage', synopsis: 'Clips uploaded to the editor' }).returning();
+  const count = (await ctx.db.select({ id: shots.id }).from(shots).where(eq(shots.projectId, projectId))).length;
+  const [shot] = await ctx.db
+    .insert(shots)
+    .values({ projectId, sceneId: scene!.id, index: count, description: (input.label ?? asset.originalName ?? 'Your footage').slice(0, 200), durationSec: Math.max(1, Math.round((asset.durationMs ?? 5000) / 1000)), status: 'ready', currentAssetId: asset.id })
+    .returning();
+  const v = await recordShotVersion(ctx.db, { projectId, shotId: shot!.id, assetId: asset.id, source: 'upload', label: 'Original', activate: true });
+  return { shotId: shot!.id, versionId: v.id, created: true };
 }

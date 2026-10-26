@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { EditMask } from './masks';
+import { LOOKS } from './grade';
 import { clipDuration, clipAdjustSchema, type CameraKeyframe, type ClipAdjust, type ClipCamera, type Timeline, type TimelineClip } from './schemas';
 
 /*
@@ -291,6 +292,20 @@ export const planOpSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('duck_music'), volume: z.number().min(0).max(1).default(0.45) }),
   z.object({ op: z.literal('animated_captions'), style: z.enum(['words', 'pop', 'typewriter']).default('words') }),
   z.object({ op: z.literal('ai_edit'), shot: z.number().int().min(1), mode: aiEditModeSchema, instruction: z.string().min(3).max(900), startSec: z.number().min(0).optional(), endSec: z.number().min(0).optional() }),
+  // Selection-aware operations (clip ids / object ids from the editor; empty clipIds = every clip).
+  z.object({ op: z.literal('volume'), target: z.enum(['music', 'voice', 'sfx', 'clips', 'all']), factor: z.number().min(0).max(4) }),
+  z.object({ op: z.literal('look'), clipIds: z.array(z.string().max(64)).max(500).default([]), key: z.string().min(1).max(40) }),
+  z.object({ op: z.literal('clip_adjust'), clipIds: z.array(z.string().max(64)).max(500).default([]), delta: z.record(z.string(), z.number()) }),
+  z.object({ op: z.literal('clip_speed'), clipIds: z.array(z.string().max(64)).max(500).default([]), factor: z.number().min(0.25).max(4) }),
+  z.object({ op: z.literal('object_adjust'), clipId: z.string().max(64), objectId: z.string().max(40), delta: z.record(z.string(), z.number()) }),
+  z.object({ op: z.literal('object_recolor'), clipId: z.string().max(64), objectId: z.string().max(40), to: z.string().regex(/^#[0-9a-fA-F]{6}$/) }),
+  z.object({ op: z.literal('object_blur'), clipId: z.string().max(64), objectId: z.string().max(40), amount: z.number().min(1).max(60).default(16) }),
+  z.object({ op: z.literal('cut_range'), startSec: z.number().min(0), endSec: z.number().min(0) }),
+  z.object({ op: z.literal('transitions_all'), clipIds: z.array(z.string().max(64)).max(500).default([]), type: z.enum(['fade', 'dissolve', 'wipeleft', 'wiperight', 'slideup', 'circleopen', 'fadeblack']), durationSec: z.number().min(0.1).max(3).default(0.5) }),
+  z.object({ op: z.literal('edge_fade'), inSec: z.number().min(0).max(5).optional(), outSec: z.number().min(0).max(5).optional() }),
+  z.object({ op: z.literal('title'), text: z.string().min(1).max(200), startSec: z.number().min(0), endSec: z.number().min(0.2), position: z.enum(['top', 'center', 'bottom']).default('top') }),
+  z.object({ op: z.literal('mute_original'), muted: z.boolean() }),
+  z.object({ op: z.literal('remove_clip'), clipId: z.string().max(64) }),
 ]);
 export type PlanOp = z.infer<typeof planOpSchema>;
 export const isGenerativeOp = (op: PlanOp) => op.op === 'ai_edit';
@@ -300,7 +315,8 @@ export const isGenerativeOp = (op: PlanOp) => op.op === 'ai_edit';
  * movie (1-based). Returns the timeline unchanged for generative ops (those go through AI edit jobs).
  */
 export function applyPlanOp<T extends Timeline>(t: T, op: PlanOp, newClipId: () => string): T {
-  void newClipId;
+  const sel = applySelectionOp(t, op, newClipId);
+  if (sel) return sel;
   if (op.op === 'text') {
     return { ...t, texts: [...t.texts, { id: `txt-${Math.random().toString(36).slice(2, 10)}`, text: op.text, startSec: op.startSec, endSec: Math.max(op.endSec, op.startSec + 0.5), position: op.position, fontSize: 64, color: '#FFFFFF', background: true }] };
   }
@@ -320,6 +336,7 @@ export function applyPlanOp<T extends Timeline>(t: T, op: PlanOp, newClipId: () 
     const layers = t.subtitles.map((s, i) => ({ id: `ly-cap-${i}-${Math.random().toString(36).slice(2, 6)}`, name: 'Caption', kind: 'text' as const, track: 5, startSec: s.startSec, endSec: Math.max(s.endSec, s.startSec + 0.4), inSec: 0, volume: 0, x: 0.5, y: 0.74, w: 0.84, rotation: 0, opacity: 1, flipH: false, flipV: false, keyframes: [], easing: 'ease' as const, text: { content: s.text, font: 'black' as const, size: 66, color: '#FFFFFF', stroke: { color: '#000000', width: 6 }, align: 'center' as const }, animIn: { type: op.style, durationSec: Math.min(1.2, Math.max(0.3, (s.endSec - s.startSec) * 0.6)) }, animOut: { type: 'fade' as const, durationSec: 0.15 } }));
     return { ...t, layers: [...t.layers.filter((l) => l.name !== 'Caption'), ...layers], burnSubtitles: false };
   }
+  if (!('shot' in op)) return t;
   const seq = sequenceOf(t);
   const node = seq[op.shot - 1];
   if (!node) return t;
@@ -357,6 +374,7 @@ export function applyPlanOp<T extends Timeline>(t: T, op: PlanOp, newClipId: () 
     case 'remove':
       return removeNode(t, node.key);
   }
+  return t;
 }
 
 /** Start time of every clip on the timeline (speed, freeze frames and transition overlaps included). */
@@ -396,4 +414,161 @@ export function coverPosition(src: { w: number; h: number }, frame: { w: number;
   const px = sw > frame.w ? Math.min(1, Math.max(0, (centre.x * sw - frame.w / 2) / (sw - frame.w))) : 0.5;
   const py = sh > frame.h ? Math.min(1, Math.max(0, (centre.y * sh - frame.h / 2) / (sh - frame.h))) : 0.5;
   return { x: px * 100, y: py * 100 };
+}
+
+// ------------------------------------------------------------------ selection-aware operations
+
+const ADJUST_RANGE: Record<string, [number, number]> = { exposure: [-2, 2], brightness: [-1, 1], contrast: [-1, 1], saturation: [-1, 1], vibrance: [-1, 1], temperature: [-1, 1], tint: [-1, 1], highlights: [-1, 1], shadows: [-1, 1], hue: [-180, 180] };
+const addDelta = (base: Record<string, unknown> | undefined, delta: Record<string, number>) => {
+  const out: Record<string, unknown> = { ...(base ?? {}) };
+  for (const [k, d] of Object.entries(delta)) {
+    const r = ADJUST_RANGE[k];
+    if (!r) continue;
+    out[k] = Math.round(Math.min(r[1], Math.max(r[0], ((out[k] as number | undefined) ?? 0) + d)) * 1000) / 1000;
+  }
+  return out;
+};
+
+/**
+ * Remove a stretch of the movie (timeline seconds) and close the gap: clips are trimmed or split,
+ * and layers, overlays, texts, subtitles and audio after the cut move left (ripple delete).
+ */
+export function rippleDelete<T extends Timeline>(t: T, a: number, b: number, newClipId: () => string): T {
+  const start = Math.max(0, Math.min(a, b));
+  const end = Math.max(a, b);
+  const gap = end - start;
+  if (gap < 0.05) return t;
+  const starts = clipStartTimes(t);
+  const clips: TimelineClip[] = [];
+  t.clips.forEach((c, i) => {
+    const s = starts[i]!;
+    const len = clipDuration(c);
+    const e = s + len;
+    if (e <= start + 1e-3 || s >= end - 1e-3) return void clips.push(c);
+    if (s >= start - 1e-3 && e <= end + 1e-3) return; // fully inside the cut
+    if (c.freezeSec) {
+      const left = Math.max(0, len - (Math.min(e, end) - Math.max(s, start)));
+      if (left >= 0.2) clips.push({ ...c, freezeSec: Math.round(left * 1000) / 1000 });
+      return;
+    }
+    const sp = c.speed || 1;
+    // Source second at a timeline second inside this clip (reversed clips run backwards).
+    const src = (x: number) => (c.reverse ? c.outSec - (x - s) * sp : c.inSec + (x - s) * sp);
+    if (s < start && e > end) {
+      // The cut is inside the clip: keep both sides.
+      const [p, q] = [src(start), src(end)].sort((m, n) => m - n) as [number, number];
+      const first = c.reverse ? { ...c, inSec: q, transition: undefined } : { ...c, outSec: p, transition: undefined };
+      const second = c.reverse ? { ...c, id: newClipId(), outSec: p } : { ...c, id: newClipId(), inSec: q };
+      if (first.outSec - first.inSec >= 0.1) clips.push(first);
+      if (second.outSec - second.inSec >= 0.1) clips.push(second);
+      return;
+    }
+    if (s < start) {
+      // The cut removes the clip's tail.
+      const p = src(start);
+      clips.push(c.reverse ? { ...c, inSec: Math.min(p, c.outSec - 0.1) } : { ...c, outSec: Math.max(p, c.inSec + 0.1) });
+      return;
+    }
+    // The cut removes the clip's head.
+    const q = src(end);
+    clips.push(c.reverse ? { ...c, outSec: Math.max(q, c.inSec + 0.1) } : { ...c, inSec: Math.min(q, c.outSec - 0.1) });
+  });
+  /** Shift/trim a timed item [s, e] for the removed stretch; null when it falls entirely inside. */
+  const shift = (s: number, e: number): [number, number] | null => {
+    if (e <= start) return [s, e];
+    if (s >= end) return [s - gap, e - gap];
+    if (s >= start && e <= end) return null;
+    const ns = s < start ? s : start;
+    const ne = e > end ? e - gap : start;
+    return ne - ns >= 0.1 ? [ns, ne] : null;
+  };
+  const timed = <X extends { startSec: number; endSec: number }>(items: X[]): X[] =>
+    items.flatMap((x) => {
+      const r = shift(x.startSec, x.endSec);
+      return r ? [{ ...x, startSec: r[0], endSec: r[1] }] : [];
+    });
+  const audio = t.audio.flatMap((x) => {
+    const len = x.outSec - x.inSec;
+    const s = x.startSec;
+    const e = s + len;
+    if (e <= start) return [x];
+    if (s >= end) return [{ ...x, startSec: s - gap }];
+    if (s >= start && e <= end) return [];
+    if (s >= start) return [{ ...x, startSec: start, inSec: x.inSec + (end - s) }]; // head cut
+    if (e <= end) return [{ ...x, outSec: x.inSec + (start - s) }]; // tail cut
+    return [{ ...x, outSec: x.inSec + (start - s) }, { ...x, id: `${x.id}-b`, startSec: start, inSec: x.inSec + (end - s) }];
+  });
+  return { ...t, clips, layers: timed(t.layers), overlays: timed(t.overlays), texts: timed(t.texts), subtitles: timed(t.subtitles), audio };
+}
+
+
+function applySelectionOp<T extends Timeline>(t: T, op: PlanOp, newClipId: () => string): T | null {
+  const pick = (ids: string[]) => (c: TimelineClip) => !ids.length || ids.includes(c.id);
+  switch (op.op) {
+    case 'volume': {
+      const vol = (v: number) => Math.round(Math.min(2, Math.max(0, v * op.factor)) * 100) / 100;
+      const audio = t.audio.map((a) => (op.target === 'all' || op.target === a.kind ? { ...a, volume: vol(a.volume) } : a));
+      const clips = op.target === 'clips' || op.target === 'all' ? t.clips.map((c) => ({ ...c, volume: vol(c.volume) })) : t.clips;
+      return { ...t, audio, clips };
+    }
+    case 'look': {
+      const g = LOOKS.find((l) => l.key === op.key)?.grade;
+      if (!g) return t;
+      const on = pick(op.clipIds);
+      return { ...t, clips: t.clips.map((c) => (on(c) ? { ...c, adjust: clipAdjustSchema.parse({ ...g, replace: c.adjust?.replace, lut: c.adjust?.lut }) } : c)) };
+    }
+    case 'clip_adjust': {
+      const on = pick(op.clipIds);
+      return { ...t, clips: t.clips.map((c) => (on(c) ? { ...c, adjust: clipAdjustSchema.parse(addDelta(c.adjust, op.delta)) } : c)) };
+    }
+    case 'clip_speed': {
+      const on = pick(op.clipIds);
+      return { ...t, clips: t.clips.map((c) => (on(c) && !c.freezeSec ? { ...c, speed: Math.round(Math.min(4, Math.max(0.25, (c.speed || 1) * op.factor)) * 100) / 100 } : c)) };
+    }
+    case 'object_adjust':
+    case 'object_recolor':
+    case 'object_blur':
+      return {
+        ...t,
+        clips: t.clips.map((c) => {
+          if (c.id !== op.clipId || !c.objects) return c;
+          return {
+            ...c,
+            objects: c.objects.map((o) => {
+              if (o.id !== op.objectId) return o;
+              const rest = o.effects.filter((e) => (op.op === 'object_adjust' ? e.type !== 'adjust' : op.op === 'object_recolor' ? e.type !== 'recolor' : e.type !== 'blur' && e.type !== 'pixelate'));
+              if (op.op === 'object_recolor') return { ...o, effects: [{ type: 'recolor' as const, from: o.color ?? '#808080', to: op.to.toUpperCase(), range: 0.25, softness: 0.5, strength: 1, keepLightness: true }, ...rest] };
+              if (op.op === 'object_blur') return { ...o, effects: [...rest, { type: 'blur' as const, amount: op.amount }] };
+              const prev = o.effects.find((e) => e.type === 'adjust');
+              const merged = addDelta(prev as Record<string, unknown> | undefined, op.delta);
+              return { ...o, effects: [...rest, { type: 'adjust' as const, exposure: 0, brightness: 0, contrast: 0, saturation: 0, temperature: 0, tint: 0, hue: 0, ...merged }] };
+            }),
+          };
+        }),
+      };
+    case 'cut_range':
+      return rippleDelete(t, op.startSec, op.endSec, newClipId);
+    case 'transitions_all':
+      return { ...t, clips: t.clips.map((c, i) => (i < t.clips.length - 1 && pick(op.clipIds)(c) ? { ...c, transition: { type: op.type, durationSec: Math.min(op.durationSec, clipDuration(c) / 3) } } : c)) };
+    case 'edge_fade':
+      return {
+        ...t,
+        clips: t.clips.map((c, i) => ({
+          ...c,
+          fadeInSec: i === 0 && op.inSec !== undefined ? op.inSec : c.fadeInSec,
+          fadeOutSec: i === t.clips.length - 1 && op.outSec !== undefined ? op.outSec : c.fadeOutSec,
+        })),
+      };
+    case 'title': {
+      const y = { top: 0.16, center: 0.5, bottom: 0.78 }[op.position];
+      const layer = { id: `ly-title-${Math.random().toString(36).slice(2, 8)}`, name: 'Title', kind: 'text' as const, track: 5, startSec: op.startSec, endSec: Math.max(op.endSec, op.startSec + 0.5), inSec: 0, volume: 0, x: 0.5, y, w: 0.8, rotation: 0, opacity: 1, flipH: false, flipV: false, keyframes: [], easing: 'ease' as const, text: { content: op.text, font: 'black' as const, size: 72, color: '#FFFFFF', stroke: { color: '#000000', width: 5 }, align: 'center' as const }, animIn: { type: 'pop' as const, durationSec: 0.4 }, animOut: { type: 'fade' as const, durationSec: 0.3 } };
+      return { ...t, layers: [...t.layers, layer as unknown as T['layers'][number]] };
+    }
+    case 'mute_original':
+      return { ...t, muteClipAudio: op.muted };
+    case 'remove_clip':
+      return t.clips.length > 1 ? { ...t, clips: t.clips.filter((c) => c.id !== op.clipId) } : t;
+    default:
+      return null;
+  }
 }

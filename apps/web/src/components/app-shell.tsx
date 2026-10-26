@@ -39,7 +39,7 @@ import { Dialog, Spinner } from '@/components/ui';
 const NAV = [
   { href: '/app', label: 'Home', icon: Home, exact: true },
   { divider: 'Create' },
-  { href: '/app/create', label: 'Quick video', icon: Wand2, hint: 'AI video from a sentence' },
+  { href: '/app/create', label: 'Create with AI', icon: Wand2, hint: 'AI video from a sentence or an image' },
   { href: '/app/edit', label: 'Video Editor', icon: Scissors, hint: 'Edit your own clips' },
   { href: '/app/social', label: 'Social Studio', icon: Smartphone, hint: 'TikTok, Reels, Shorts' },
   { href: '/app/ads', label: 'Ad Studio', icon: Megaphone, hint: 'Product ads' },
@@ -59,7 +59,8 @@ const NAV = [
 
 const PALETTE: PaletteItem[] = [
   ...NAV.filter((n): n is Extract<(typeof NAV)[number], { href: string }> => 'href' in n).map((n) => ({ label: n.label, hint: 'hint' in n ? n.hint : 'Go to', href: n.href, icon: n.icon })),
-  { label: 'New AI video', hint: 'Action', href: '/app/create', icon: Plus, keywords: 'generate create' },
+  { label: 'New video', hint: 'Action', href: '/app/new', icon: Plus, keywords: 'generate create start' },
+  { label: 'Animate an image', hint: 'Action', href: '/app/create?mode=animate', icon: Wand2, keywords: 'photo image to video' },
   { label: 'New edit project', hint: 'Action', href: '/app/edit', icon: Scissors, keywords: 'capcut timeline editor' },
   { label: 'Create an ad for my brand', hint: 'Action', href: '/app/ads/create', icon: Megaphone, keywords: 'advert commercial' },
   { label: 'Chat with the AI Director', hint: 'Action', href: '/app/movie/chat', icon: Clapperboard, keywords: 'film story' },
@@ -207,7 +208,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Notifications />
           </div>
         </header>
-        <main className="flex-1 px-3 pb-6 pt-3">{children}</main>
+        <main className="flex-1 px-3 py-2">{children}</main>
       </div>
     );
 
@@ -218,7 +219,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <Link href="/app" className="mb-6 px-3">
           <Logo />
         </Link>
-        <Link href="/app/create" className="mb-4 flex items-center justify-center gap-2 rounded-xl bg-iris-500 px-3 py-2.5 text-sm font-medium text-white shadow-[0_8px_30px_-12px_rgb(124_108_255/0.9)] transition hover:bg-iris-400">
+        <Link href="/app/new" className="mb-4 flex items-center justify-center gap-2 rounded-xl bg-iris-500 px-3 py-2.5 text-sm font-medium text-white shadow-[0_8px_30px_-12px_rgb(124_108_255/0.9)] transition hover:bg-iris-400">
           <Plus className="size-4" /> New video
         </Link>
         <div className="flex-1 overflow-y-auto">
@@ -265,7 +266,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           ].map((n) => (
             <MobileTab key={n.href} {...n} />
           ))}
-          <Link href="/app/create" aria-label="Create" className="mx-auto -mt-5 mb-1 grid size-14 place-items-center rounded-2xl bg-iris-500 text-white shadow-[0_10px_30px_-8px_rgb(124_108_255/0.9)]">
+          <Link href="/app/new" aria-label="Create" className="mx-auto -mt-5 mb-1 grid size-14 place-items-center rounded-2xl bg-iris-500 text-white shadow-[0_10px_30px_-8px_rgb(124_108_255/0.9)]">
             <Plus className="size-6" />
           </Link>
           <MobileTab href="/app/edit" icon={Scissors} label="Editor" />

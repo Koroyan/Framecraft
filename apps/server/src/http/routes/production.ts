@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { movieBriefSchema, renderRequestSchema, timelineSchema } from '@framecraft/shared';
 import type { AppContext } from '../../context';
 import { parse, requireUser } from '../app';
-import { addShot, createMovie, deleteShot, estimateMovie, chooseVoiceTake, generateMovie, getMovie, redubMovie, regenerateShot, reorderScenes, reorderShots, storyboardMovie, updateShot } from '../../movie/movie';
+import { addShot, createMovie, deleteShot, estimateMovie, chooseVoiceTake, generateMovie, getMovie, redubMovie, estimateShotRegeneration, regenerateShot, reorderScenes, reorderShots, storyboardMovie, updateShot } from '../../movie/movie';
 import { createRenderJob, getTimeline, listVersions, restoreVersion, saveTimeline } from '../../editor/editor';
 import { createAudioJob, estimateAudio, type AudioJobInput } from '../../audio/audio';
 import { DEFAULT_VOICES } from '../../providers/audio/elevenlabs';
@@ -172,6 +172,13 @@ export async function productionRoutes(app: FastifyInstance, ctx: AppContext) {
     const { id } = parse(idParam, req.params);
     await deleteShot(ctx, u, id);
     return { ok: true };
+  });
+
+  // Price first: the editor shows it and asks before any paid regeneration.
+  app.get('/api/shots/:id/regenerate/estimate', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(idParam, req.params);
+    return { credits: await estimateShotRegeneration(ctx, u, id) };
   });
 
   app.post('/api/shots/:id/regenerate', async (req) => {

@@ -97,7 +97,10 @@ function CreateAd() {
   useEffect(() => {
     const draft = loadDraft();
     const style = params.get('style');
-    setD(style ? { ...draft, style } : draft);
+    // From the "New video" hub: the idea and length the user typed there.
+    const idea = params.get('idea');
+    const length = Number(params.get('length')) || undefined;
+    setD({ ...draft, ...(style ? { style } : {}), ...(idea ? { request: idea } : {}), ...(length ? { lengthSec: Math.min(90, Math.max(10, length)) } : {}) });
     setLoaded(true);
   }, [params]);
   useEffect(() => {

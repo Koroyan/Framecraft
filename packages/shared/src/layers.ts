@@ -11,7 +11,7 @@ const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 /** Motion of a tracked object: offsets (fractions of the frame) from where the selection was made. */
 export const motionTrackSchema = z.object({
   /** Seconds on the clock of the thing being tracked (source time for shot masks, timeline time for layers). */
-  points: z.array(z.object({ t: z.number().min(0), dx: z.number().min(-1).max(1), dy: z.number().min(-1).max(1), conf: z.number().min(0).max(1).optional() })).min(1).max(2000),
+  points: z.array(z.object({ t: z.number().min(0), dx: z.number().min(-1).max(1), dy: z.number().min(-1).max(1), conf: z.number().min(0).max(1).optional(), /** Size relative to where it was drawn (1 = same); scales about the selection's centre. */ s: z.number().min(0.05).max(20).optional() })).min(1).max(2000),
   smoothing: z.number().min(0).max(1).default(0.3),
 });
 export type MotionTrack = z.infer<typeof motionTrackSchema>;
@@ -124,16 +124,18 @@ export function revealUnits(layer: Pick<Layer, 'kind' | 'text' | 'animIn'>): str
 }
 
 function trackAt(track: MotionTrack | undefined, t: number) {
-  if (!track?.points.length) return { dx: 0, dy: 0 };
+  if (!track?.points.length) return { dx: 0, dy: 0, s: 1 };
   const p = track.points;
-  if (t <= p[0]!.t) return { dx: p[0]!.dx, dy: p[0]!.dy };
+  if (t <= p[0]!.t) return { dx: p[0]!.dx, dy: p[0]!.dy, s: p[0]!.s ?? 1 };
   for (let i = 0; i < p.length - 1; i++) {
     if (t <= p[i + 1]!.t) {
       const u = (t - p[i]!.t) / Math.max(1e-6, p[i + 1]!.t - p[i]!.t);
-      return { dx: p[i]!.dx + (p[i + 1]!.dx - p[i]!.dx) * u, dy: p[i]!.dy + (p[i + 1]!.dy - p[i]!.dy) * u };
+      const s0 = p[i]!.s ?? 1;
+      return { dx: p[i]!.dx + (p[i + 1]!.dx - p[i]!.dx) * u, dy: p[i]!.dy + (p[i + 1]!.dy - p[i]!.dy) * u, s: s0 + ((p[i + 1]!.s ?? 1) - s0) * u };
     }
   }
-  return { dx: p[p.length - 1]!.dx, dy: p[p.length - 1]!.dy };
+  const z = p[p.length - 1]!;
+  return { dx: z.dx, dy: z.dy, s: z.s ?? 1 };
 }
 export { trackAt as motionAt };
 

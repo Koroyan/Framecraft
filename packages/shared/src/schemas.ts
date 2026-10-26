@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { gradeSchema } from './grade';
 import { layerSchema, trackMetaSchema } from './layers';
+import { objectEditSchema } from './objects';
 import { ASPECT_RATIOS, QUALITY_MODES, RESOLUTIONS, LANGUAGES } from './constants';
 
 export const emailSchema = z.string().trim().toLowerCase().email().max(254);
@@ -246,6 +247,8 @@ export const timelineClipSchema = z.object({
   camera: clipCameraSchema.optional(),
   /** Auto reframe: the crop follows a subject (centre in source fractions over source seconds) when the source's aspect differs. */
   reframe: z.object({ points: z.array(z.object({ t: z.number().min(0), x: z.number().min(0).max(1), y: z.number().min(0).max(1) })).min(1).max(2000) }).optional(),
+  /** Selected objects with their own effects (recolour, adjust, blur…), optionally tracked. */
+  objects: z.array(objectEditSchema).max(8).optional(),
 });
 export type TimelineClip = z.infer<typeof timelineClipSchema>;
 

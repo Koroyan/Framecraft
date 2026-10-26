@@ -99,7 +99,8 @@ export async function trackInAsset(ctx: AppContext, user: SessionLike, assetId: 
   const a = await getOwnedAsset(ctx, user.id, assetId);
   if (a.mediaType !== 'video') throw badRequest('Tracking needs a video');
   if (o.endSec - o.startSec > 120) throw badRequest('Track at most 2 minutes at a time');
-  const src = await downloadAssetToTemp(ctx, a);
+  // The editing proxy has the same timeline and orientation (positions are fractions of the frame).
+  const src = await downloadAssetToTemp(ctx, a, { prefer: 'proxy' });
   try {
     return await trackBox(src, o);
   } finally {

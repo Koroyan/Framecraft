@@ -29,6 +29,7 @@ import { cn, formatCredits, newKey } from '@/lib/utils';
 export type ComposerInitial = Partial<VideoSpecInput> & { prompt?: string };
 
 const DURATIONS = [5, 8, 10, 15, 20];
+const MOTION_PRESETS = ['slow camera push-in', 'gentle pan left', 'orbit around the subject', 'the subject smiles and turns their head', 'hair and clothes move in the wind', 'water and clouds move', 'light parallax, still camera'];
 const ASPECT_LABEL: Record<AspectRatio, string> = { '9:16': '9:16 Vertical', '16:9': '16:9 Wide', '1:1': '1:1 Square', '4:5': '4:5 Feed' };
 
 function useDebounced<T>(value: T, ms: number) {
@@ -110,6 +111,7 @@ export function VideoComposer({
   projectId: fixedProjectId,
   advancedDefault = false,
   cinematic = false,
+  animate = false,
   title,
   onCreated,
 }: {
@@ -119,6 +121,8 @@ export function VideoComposer({
   projectId?: string;
   advancedDefault?: boolean;
   cinematic?: boolean;
+  /** "Animate an image": the start image comes first and is required; the text describes motion. */
+  animate?: boolean;
   title?: string;
   onCreated: (jobId: string, projectId: string, aspect: AspectRatio) => void;
 }) {
@@ -223,24 +227,46 @@ export function VideoComposer({
     else void submit();
   };
 
-  const canGenerate = Boolean(estimate?.ok) && prompt.trim().length >= 3;
+  const canGenerate = Boolean(estimate?.ok) && prompt.trim().length >= 3 && (!animate || Boolean(image));
 
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
       <div className="min-w-0 space-y-5">
+        {animate && (
+          <Card className="grid gap-4 p-4 md:grid-cols-[180px_minmax(0,1fr)]">
+            <div>
+              <div className="mb-1.5 text-xs font-medium text-white">1 · Your image</div>
+              <ImageSlot label="Image to animate" asset={image} onChange={setImage} projectId={fixedProjectId} />
+              {!image && <p className="mt-1.5 text-[11px] text-fog-400">JPG, PNG or WebP. It becomes the first frame.</p>}
+            </div>
+            <div>
+              <div className="mb-1.5 text-xs font-medium text-white">2 · How should it move?</div>
+              <div className="flex flex-wrap gap-1.5">
+                {MOTION_PRESETS.map((m) => (
+                  <button key={m} type="button" onClick={() => setPrompt((p) => (p.trim() ? `${p.trim().replace(/[.,]$/, '')}, ${m}` : m[0]!.toUpperCase() + m.slice(1)))} className="rounded-full border hairline px-2.5 py-1 text-[11px] text-fog-200 hover:border-white/25">
+                    + {m}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] text-fog-400">Pick one or two, or describe it below. Everything else in the image stays as it is.</p>
+            </div>
+          </Card>
+        )}
         <Card className="p-3 md:p-4">
           <Textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Describe the video you want to create…"
+            placeholder={animate ? 'Describe the motion — e.g. slow push-in, her hair moves in the wind' : 'Describe the video you want to create…'}
             aria-label="Video description"
             className="min-h-32 border-0 bg-transparent px-2 text-[16px] focus:bg-transparent md:text-[17px]"
             maxLength={4000}
           />
           <div className="flex flex-wrap items-center gap-2 border-t hairline px-1 pt-3">
-            <div className="w-16">
-              <ImageSlot label="Start image" asset={image} onChange={setImage} projectId={fixedProjectId} />
-            </div>
+            {!animate && (
+              <div className="w-16">
+                <ImageSlot label="Start image" asset={image} onChange={setImage} projectId={fixedProjectId} />
+              </div>
+            )}
             {cinematic && image && (
               <div className="w-16">
                 <ImageSlot label="End frame" asset={endImage} onChange={setEndImage} projectId={fixedProjectId} />
@@ -407,6 +433,7 @@ export function VideoComposer({
         <div className="space-y-3">
           <EstimatePanel estimate={estimate} loading={est.isFetching} />
           {est.error && <p className="text-sm text-signal-red">{(est.error as Error).message}</p>}
+          {animate && !image && <p className="text-center text-xs text-signal-amber">Add the image you want to animate first.</p>}
           <Button size="xl" className="w-full" onClick={onGenerate} disabled={!canGenerate} loading={busy}>
             <Wand2 /> Generate{estimate?.liveGenerationAvailable ? ` · ${formatCredits(estimate.credits)} credits` : ' test fixture'}
           </Button>
