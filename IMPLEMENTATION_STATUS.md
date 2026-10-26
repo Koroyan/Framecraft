@@ -1,6 +1,6 @@
 # Implementation Status
 
-_Last updated: 2026-10-25._ Verification legend: **✅ verified** (automated tests and/or exercised in a real browser), **🔑 needs credentials** (code complete, mocked-contract tested only), **🟡 partial**, **⬜ not implemented**.
+_Last updated: 2026-10-27 (Framecraft 5.0 editor)._ Verification legend: **✅ verified** (automated tests and/or exercised in a real browser), **🔑 needs credentials** (code complete, mocked-contract tested only), **🟡 partial**, **⬜ not implemented**.
 
 ## Test results at this checkpoint
 
@@ -8,10 +8,10 @@ _Last updated: 2026-10-25._ Verification legend: **✅ verified** (automated tes
 |---|---|
 | `pnpm typecheck` (server, web, shared) | ✅ clean |
 | `pnpm lint` (ESLint + typescript-eslint + Next + React Hooks) | ✅ clean |
-| `packages/shared` unit tests | ✅ 24/24 |
-| `apps/server` unit + integration tests (PGlite Postgres, real FFmpeg, mocked provider HTTP) | ✅ 133/133 (incl. upload pipeline, brand intelligence, chat @mentions, music reuse) |
+| `packages/shared` unit tests | ✅ 40/40 (incl. smart select, object edits, ripple delete, instant assistant EN/KA/RU, create intent) |
+| `apps/server` unit + integration tests (PGlite Postgres, real FFmpeg, mocked provider HTTP) | ✅ 148/148 (incl. object edit select → track → recolour → export and AI-result blending through a tracked mask, read back from the exported pixels) |
 | Real paid provider requests | Runway aleph2 video edit run by the user (localized edit result reviewed in the app); 2026-10-25: PIJILO photo ad (TTS + music, 8 credits) and one lip-sync shot (Wan 3.0, 81 credits + 2 for the voice and keyframe of two rejected, uncharged attempts) |
-| Playwright E2E (desktop + Pixel 7) on an isolated fixture stack (live generation off, separate DB) | ✅ 9/10 — the admin test needs `pnpm db:seed` on that DB; incl. the new editor-studio walkthrough. On the live dev server the paid paths skip themselves |
+| Playwright E2E (desktop + Pixel 7) | ✅ 10/10 on the live dev server (5 fixture-only tests skip themselves there so no credits are spent) — incl. `editor-5.spec.ts`: Task A assistant, B object recolour + tracking + export pixels, D full manual edit to MP4, G responsive 1366/1920/tablet, H no lost work |
 | `pnpm build` (server bundle + Next.js production build, 22 routes) | ✅ |
 | Server bundle runs migrations; provider check CLI runs | ✅ |
 | Docker images / compose | ⬜ written, **not executed** (Docker not installed on this machine) |
@@ -91,6 +91,13 @@ _Last updated: 2026-10-25._ Verification legend: **✅ verified** (automated tes
 - **Lip-sync for Georgian/Russian dialogue** ✅ *run live 2026-10-25*: speaking lines are recorded first (ElevenLabs), a keyframe is drawn for each speaking shot (even when the film's keyframes are off), then the shot is generated from its recording with a Runway model that accepts reference audio (Seedance 2.5 / Seedance 2 Mini / Wan 3 / Wan 3 Prime / MiniMax H3); voices sit on the timeline at the same offsets. Live test (Wan 3.0, 5 s, 9:16, "შეხედეთ, ეს პატარა მე ვარ — PIJILO-ს საჩუქარი!"): the mouth opens and shapes during speech, closes in the pauses and rests after the line. Provider rules learned live (both rejected for free): audio cannot be the only reference, and a first-frame keyframe cannot be combined with audio — the keyframe is sent as an unpositioned reference image. Falls back to dubbed voice over a silent-mouth shot when no such model fits.
 - **Ads from photos only**: each photo becomes a clip of the exact picture (fitted over a blurred fill, gentle push-in even for static styles) — no AI. Live PIJILO ad (4 figurine photos, Georgian voice-over + music, 8 credits) rendered and reviewed; text sits above heads / in the lower third with a readable backing, logo enters after the title hook.
 
+## Framecraft 5.0 — one editor, objects that follow motion, an assistant that docks ✅ *2026-10-27, see [docs/framecraft-5/DELIVERY.md](docs/framecraft-5/DELIVERY.md)*
+- **Workspace**: Media → Preview → Timeline → Inspector → Assistant; resizable / collapsible panels remembered per browser; the inspector follows the selection (clip: Edit · Colour · Objects · AI; layer; audio; object; project). Storyboard (simple cards, graph optional), Edit, Shot (Appearance · Motion · Edit with AI · Versions), Review. Creation hub "New video" with intent suggestion; *Animate an image* mode.
+- **Assistant**: dock right / bottom / floating, minimise (Ctrl+J), resize; conversation, draft and running requests survive hiding, docking and reload (stored per project in the browser). Everyday requests (EN/KA/RU) are understood on the device — free, instant, Preview / Keep / Cancel; AI planning for the rest; paid pixel edits show what changes, what stays, model and price, then ask. Knows the selected clip, object and range.
+- **Objects**: click-to-select (CIELAB geodesic region growing, automatic edge, Shift/Alt add/subtract, tightness), outline + toolbar (colour, adjust, blur, pixelate, AI), time scope (frame / whole clip / until it disappears / custom handles), tracking with size changes and marked uncertain frames, drag-to-correct re-tracks from that frame; grey/black/white objects are colourised. Preview (WebGL) = export (per-frame mask video in FFmpeg). Own footage becomes a shot on demand, so AI remove/replace/fix works on uploads too; AI results blend back through the tracked mask.
+- **Timeline**: edge-drag trim (ripple), ruler range with I/O and ripple cut (layers, audio, captions shift), audio select/move, snapping to playhead and cuts, lanes hidden when empty.
+- **Fixes**: preview stretched graded footage of another shape; paused preview showed a frame up to 0.35 s away (now exact); revisiting the editor could load a cached older timeline and autosave it over newer work; "Regenerate shot" spent credits without a price (now priced + confirmed); tracker took flat walls for matches.
+
 ## Ad Studio 4.0 — brand intelligence, large uploads, creative director
 - **Ad Studio workspace** ✅ *checked in the browser*: Overview, My Brands, Create Advertisement, Media Library, Creative Studio, Brand Templates; one creation flow with four entry points (videos / product photos / website / brand) feeding the same engine; beginner brief + folded advanced settings; autosaved draft (this browser).
 - **Large uploads** ✅ *run live 2026-10-25 through the web origin*: resumable 8 MB chunks (`/api/uploads`), offset-checked and idempotent, resume after a reload by re-selecting the same file, pause / cancel / retry, quota (default 50 GB/user), per-file limit (default 8 GB), dedupe by SHA-256, type by content (MOV, MP4, M4V, WebM, MKV, JPG, PNG, WebP; HEIC converted to JPEG in browsers that can decode it). Live: a 241 MB 4K portrait iPhone-style MOV, paused at 52 % and resumed, stored untouched; 1080×1920 H.264 proxy ready 12 s later. Disk-full answers 507 and keeps the offset (seen live).
@@ -116,13 +123,13 @@ _Last updated: 2026-10-25._ Verification legend: **✅ verified** (automated tes
 
 ## Manual editor & ads — honest limits
 - Tracking is a classic template tracker (translation only, no rotation/scale, no AI segmentation); hard occlusions need manual correction or a shorter range.
-- Not built yet: multi-clip primary video tracks with blend modes, slip/slide edits, clip grouping, audio volume automation curves, GIF/animated stickers, cover-image editor, captions/hashtags generator for ads, upscaling/denoise/stabilisation presets for uploads, reference-ad remix beyond pacing.
+- Not built yet: timeline multi-select, speed ramps, keyframed object effects, multi-clip primary video tracks with blend modes, slip/slide edits, clip grouping, audio volume automation curves, GIF/animated stickers, cover-image editor, captions/hashtags generator for ads, upscaling/denoise/stabilisation presets for uploads, reference-ad remix beyond pacing.
 - Custom colour presets are stored in the browser (localStorage).
 
 ## Editor studio — honest limits
 - Runway aleph2 was validated against its OpenAPI spec and with free validation requests; it has **not** yet been run with real credits from the app (mocked-contract tests). Its first live use should be reviewed.
 - aleph2 accepts no mask and no reference images: masks are enforced by local compositing (pixel-exact outside, model-dependent inside); reference images are not sent (an edited guide frame is).
-- Masks are static over the selected range (no subject tracking / AI subject selection — no provider for it is configured). Keep moving subjects inside a generous area or use short ranges.
+- Selections can follow a tracked subject (position and size; no rotation/perspective, no per-frame shape change). Click-to-select is colour/edge based — no segmentation model is configured.
 - Not implemented yet: *Extend* (continuation as a new version), blend modes and multiple main video tracks, slip editing, audio waveforms and multi-frame filmstrips (single thumbnails), volume automation curves, re-grouping shots into other scenes from the graph, Remotion.
 
 ## Known issues

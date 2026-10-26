@@ -104,7 +104,7 @@ export function EditorToolbox(p: {
         {tab === 'media' && (
           <>
             <MediaDropzone compact label="Import videos or photos" onAsset={() => p.onUploaded()} />
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-2">
               {list.filter((a) => a.mediaType === 'video' || a.mediaType === 'image').slice(0, 60).map((a) => (
                 <button
                   key={a.id}

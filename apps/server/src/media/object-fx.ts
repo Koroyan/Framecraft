@@ -189,3 +189,34 @@ export async function objectFilters(objects: ObjectEdit[] | undefined, o: Object
   }
   return out;
 }
+
+/**
+ * A selection as a mask video in *source* coordinates (no crop), from source second `startSec` for
+ * `durationSec` — moved and resized by its track on every frame. Used when an AI edit is blended
+ * back into the original shot.
+ */
+export async function writeSourceMaskVideo(mask: EditMask, o: { width: number; height: number; fps: number; startSec: number; durationSec: number; dir: string; file: string }): Promise<void> {
+  const long = 384;
+  const k = long / Math.max(o.width, o.height);
+  const mw = Math.max(2, Math.round((o.width * k) / 2) * 2);
+  const mh = Math.max(2, Math.round((o.height * k) / 2) * 2);
+  const frames = Math.ceil(o.durationSec * o.fps) + 2;
+  const raw = path.join(o.dir, `${path.basename(o.file)}.raw`);
+  const handle = await fsp.open(raw, 'w');
+  const buf = new Uint8Array(mw * mh);
+  try {
+    for (let f = 0; f < frames; f++) {
+      buf.fill(0);
+      const tr = maskTransformAt(mask, o.startSec + f / o.fps);
+      rasterizeMask(buf, mw, mh, mask, (x, y) => {
+        const [tx, ty] = applyTransform(tr, x, y);
+        return [tx * mw, ty * mh];
+      });
+      await handle.write(buf);
+    }
+  } finally {
+    await handle.close();
+  }
+  await ffmpeg(['-f', 'rawvideo', '-pix_fmt', 'gray', '-s', `${mw}x${mh}`, '-r', String(o.fps), '-i', raw, '-c:v', 'ffv1', '-pix_fmt', 'gray', o.file], { timeoutMs: 10 * 60_000 });
+  await fsp.rm(raw, { force: true });
+}

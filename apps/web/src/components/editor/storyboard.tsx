@@ -24,7 +24,12 @@ export function Storyboard({ timeline, assets, studio, apply, selectedClipId, on
           const clips = timeline.clips.filter((c) => n.clipIds.includes(c.id));
           const first = clips[0]!;
           const shot = studio?.shots.find((s) => s.id === n.shotId);
-          const thumb = (shot?.versions.find((v) => v.id === shot.activeVersionId)?.media?.thumbnailUrl ?? assets.get(first.assetId)?.thumbnailUrl) || undefined;
+          // The frame the timeline really shows first: the played file at the clip's in-point (a
+          // file's own thumbnail is its very first frame, which may be outside the part used).
+          const asset = assets.get(first.assetId);
+          const media = asset?.url ?? shot?.versions.find((v) => v.assetId === first.assetId)?.media?.url;
+          const thumb = (asset?.thumbnailUrl ?? shot?.versions.find((v) => v.assetId === first.assetId)?.media?.thumbnailUrl) || undefined;
+          const isVideo = asset ? asset.mediaType === 'video' : Boolean(media);
           const len = clips.reduce((s, c) => s + clipDuration(c), 0);
           const pending = shot?.operations.filter((o) => o.status === 'ready').length ?? 0;
           const running = shot?.operations.some((o) => o.status === 'processing' || o.status === 'queued') || shot?.status === 'generating' || shot?.status === 'queued';
@@ -62,7 +67,13 @@ export function Storyboard({ timeline, assets, studio, apply, selectedClipId, on
             >
               <button type="button" onClick={() => onPlay(first.id)} className="block w-full text-left" title="Play from this shot">
                 <div className="relative aspect-video bg-black">
-                  {thumb ? <img src={thumb} alt="" className="size-full object-cover" /> : <div className="grid size-full place-items-center text-xs text-fog-500">No preview</div>}
+                  {isVideo && media ? (
+                    <video src={`${media}#t=${(first.reverse ? first.outSec - 0.05 : first.inSec + 0.05).toFixed(2)}`} preload="metadata" muted playsInline poster={first.inSec < 0.2 ? thumb : undefined} className="pointer-events-none size-full object-cover" />
+                  ) : thumb ? (
+                    <img src={thumb} alt="" className="size-full object-cover" />
+                  ) : (
+                    <div className="grid size-full place-items-center text-xs text-fog-500">No preview</div>
+                  )}
                   <span className="absolute left-1.5 top-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white">{String(i + 1).padStart(2, '0')}</span>
                   <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-white">{seconds(len)}</span>
                   <span className="absolute inset-0 grid place-items-center opacity-0 transition group-hover:opacity-100"><Play className="size-7 rounded-full bg-black/60 p-1.5 text-white" /></span>

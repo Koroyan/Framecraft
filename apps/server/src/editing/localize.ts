@@ -1,8 +1,9 @@
 import path from 'node:path';
 import { fitToProviderLimits } from '../media/prepare';
-import { piecewiseExpr, type EditMask } from '@framecraft/shared';
+import type { EditMask } from '@framecraft/shared';
 import { ffmpeg, probe } from '../media/ffmpeg';
 import { writeMaskPgm } from '../media/mask-raster';
+import { writeSourceMaskVideo } from '../media/object-fx';
 
 /*
  * Localized editing primitives (FFmpeg only, no AI): cut the edit window out of a shot, rasterise a
@@ -66,22 +67,21 @@ export async function spliceEdit(o: {
   f.push(`[1:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},format=yuv420p,setsar=1,trim=start=${es}:end=${ee},setpts=PTS-STARTPTS[em]`);
   f.push(`[o2]trim=start=${rs}:end=${re},setpts=PTS-STARTPTS[om]`);
   if (o.mask) {
-    const maskFile = path.join(o.workdir, 'mask.pgm');
-    const mw = Math.min(W, 640);
-    const mh = even((H * mw) / W);
-    await writeMaskPgm(o.mask, mw, mh, maskFile);
-    args.push('-loop', '1', '-t', String(re - rs + 1), '-i', maskFile);
     const sigma = Math.max(0.5, o.mask.feather * W);
-    const pts = o.mask.track?.points ?? [];
-    if (pts.length) {
-      // The selection follows the tracked object: move the mask over black, on source time rs + t.
-      const src = `(${rs}+t)`;
-      const dx = piecewiseExpr(pts.map((p) => p.t), pts.map((p) => p.dx), 'linear').replaceAll('T', src);
-      const dy = piecewiseExpr(pts.map((p) => p.t), pts.map((p) => p.dy), 'linear').replaceAll('T', src);
-      f.push(`color=c=black:s=${W}x${H}:r=${fps},format=gray,trim=duration=${re - rs}[mbg]`);
-      f.push(`[2:v]scale=${W}:${H},format=gray[mshape]`);
-      f.push(`[mbg][mshape]overlay=x='(${dx})*${W}':y='(${dy})*${H}':eof_action=repeat,gblur=sigma=${sigma.toFixed(2)},setpts=PTS-STARTPTS[mk]`);
-    } else f.push(`[2:v]scale=${W}:${H},format=gray,gblur=sigma=${sigma.toFixed(2)},fps=${fps},trim=duration=${re - rs},setpts=PTS-STARTPTS[mk]`);
+    if (o.mask.track?.points.length) {
+      // The selection follows the tracked object (position and size), frame by frame from source second rs.
+      const maskVideo = path.join(o.workdir, 'mask-track.mkv');
+      await writeSourceMaskVideo(o.mask, { width: W, height: H, fps, startSec: rs, durationSec: re - rs, dir: o.workdir, file: maskVideo });
+      args.push('-i', maskVideo);
+      f.push(`[2:v]format=gray,scale=${W}:${H},gblur=sigma=${sigma.toFixed(2)},trim=duration=${re - rs},setpts=PTS-STARTPTS[mk]`);
+    } else {
+      const maskFile = path.join(o.workdir, 'mask.pgm');
+      const mw = Math.min(W, 640);
+      const mh = even((H * mw) / W);
+      await writeMaskPgm(o.mask, mw, mh, maskFile);
+      args.push('-loop', '1', '-t', String(re - rs + 1), '-i', maskFile);
+      f.push(`[2:v]scale=${W}:${H},format=gray,gblur=sigma=${sigma.toFixed(2)},fps=${fps},trim=duration=${re - rs},setpts=PTS-STARTPTS[mk]`);
+    }
     f.push('[em][mk]alphamerge[ea]');
     f.push('[om][ea]overlay=format=auto:shortest=1,format=yuv420p[mid]');
   } else {

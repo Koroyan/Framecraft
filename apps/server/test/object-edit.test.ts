@@ -7,6 +7,7 @@ import { hexToRgb, rgbToHsl, smartSelect, timelineSchema, type EditMask } from '
 import { ffmpeg } from '../src/media/ffmpeg';
 import { trackBox } from '../src/media/tracker';
 import { renderTimeline } from '../src/media/render';
+import { spliceEdit } from '../src/editing/localize';
 
 /*
  * Task B end to end on real FFmpeg: a red box moves (and grows) across a beige wall. We select it
@@ -114,6 +115,26 @@ describe('object edit: select → track → recolour → export', () => {
       const ref = hexToRgb('#D6C4A8');
       expect(Math.abs(wall[0] - ref[0]) + Math.abs(wall[1] - ref[1]) + Math.abs(wall[2] - ref[2]), `wall at ${t}s`).toBeLessThan(0.08);
     }
+  }, 180_000);
+
+  it('an AI result is blended back only inside the moving, growing object and only in its seconds', async () => {
+    // Stand-in for the model's output: the whole window turned solid blue.
+    const edited = path.join(dir, 'ai-window.mp4');
+    await ffmpeg(['-f', 'lavfi', '-i', 'color=c=0x2563EB:s=640x360:r=30:d=3.2', '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', edited]);
+    const out = path.join(dir, 'spliced.mp4');
+    await spliceEdit({ original: clip, edited, output: out, windowStart: 0.4, rangeStart: 0.5, rangeEnd: 3.5, mask, workdir: dir });
+    for (const t of [1, 3]) {
+      const buf = await frameRgb(out, t, 640, 360);
+      const b = boxAt(t);
+      expect(hue(px(buf, 640, b.x + b.size / 2, b.y + b.size / 2)), `object at ${t}s`).toBeGreaterThan(205);
+      const wall = px(buf, 640, 20, 30);
+      const ref = hexToRgb('#D6C4A8');
+      expect(Math.abs(wall[0] - ref[0]) + Math.abs(wall[1] - ref[1]) + Math.abs(wall[2] - ref[2]), `wall at ${t}s`).toBeLessThan(0.08);
+    }
+    const before = await frameRgb(out, 0.2, 640, 360);
+    const b0 = boxAt(0.2);
+    const h0 = hue(px(before, 640, b0.x + b0.size / 2, b0.y + b0.size / 2));
+    expect(Math.min(h0, 360 - h0)).toBeLessThan(15); // outside the range: the original red
   }, 180_000);
 
   it('a time-limited edit leaves the other seconds untouched', async () => {

@@ -599,7 +599,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             ) : (
               <div className="space-y-2">
                 <section aria-label="Preview" className="h-[56dvh] rounded-2xl border hairline bg-ink-900/40 p-2">{previewEl}</section>
-                <section aria-label="Timeline" className="h-[300px] rounded-2xl border hairline bg-ink-900/40 p-3">{timelineEl}</section>
+                <section aria-label="Timeline" className="flex max-h-[380px] min-h-[170px] flex-col rounded-2xl border hairline bg-ink-900/40 p-3">{timelineEl}</section>
                 <div className="h-[360px]" data-testid="tool-panel">{toolbox}</div>
                 <aside aria-label="Properties" className="max-h-[70dvh] overflow-hidden rounded-2xl border hairline bg-ink-900/70">{inspector}</aside>
               </div>

@@ -2,6 +2,7 @@
 
 ## Must do before taking money
 - [ ] Production PostgreSQL, R2/S3 bucket, domain + TLS, secrets (`SESSION_SECRET`, `STORAGE_SIGNING_SECRET`).
+- [ ] Bucket CORS: allow `GET` (and `HEAD`) from the app's origin. The editor reads video pixels in the browser (WebGL colour/object preview and click-to-select); without CORS those features fall back to an honest "preview unavailable" note and the export still applies the edits.
 - [ ] `docker compose up --build` (or your platform) verified. The Dockerfiles have **not been executed yet** (no Docker on the build machine).
 - [ ] Provider keys added → `pnpm providers:check` green → one capped `pnpm providers:smoke` per provider you enable.
 - [ ] Review every enabled model in Admin → Models & pricing against the provider's current price page. Prices change.
