@@ -66,7 +66,7 @@ async function call<T>(page: Page, method: string, url: string, body?: unknown):
 }
 
 async function upload(page: Page, file: string, mimeType: string, projectId: string): Promise<{ id: string }> {
-  const r = await page.context().request.post('/api/assets', { multipart: { file: { name: path.basename(file), mimeType, buffer: fs.readFileSync(file) }, rightsConfirmed: 'true', projectId } });
+  const r = await page.context().request.post('/api/assets', { multipart: { rightsConfirmed: 'true', projectId, file: { name: path.basename(file), mimeType, buffer: fs.readFileSync(file) } } }); // fields before the file: the server reads them first
   expect(r.status(), await r.text()).toBe(201);
   return ((await r.json()) as { asset: { id: string } }).asset;
 }
@@ -87,7 +87,7 @@ async function openEditor(page: Page, projectId: string) {
   await expect(page.getByRole('region', { name: 'Preview' })).toBeVisible();
 }
 
-const box = async (page: Page, name: string) => (await page.getByRole(name === 'Assistant' ? 'region' : 'region', { name }).boundingBox())!;
+const box = async (page: Page, name: string) => (await page.getByRole(name === 'Properties' ? 'complementary' : 'region', { name }).boundingBox())!;
 
 function probe(file: string) {
   return JSON.parse(execFileSync(ffprobeBin, ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file]).toString()) as { format: { duration: string }; streams: { codec_type: string }[] };
@@ -105,7 +105,7 @@ const hueAt = (buf: Buffer, w: number, x: number, y: number) => {
   const max = Math.max(r, g, b), min = Math.min(r, g, b);
   if (max === min) return 0;
   const d = max - min;
-  let h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  const h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
   return h * 60;
 };
 
@@ -122,8 +122,6 @@ async function exportAndDownload(page: Page, name: string): Promise<string> {
   await page.keyboard.press('Escape');
   return file;
 }
-
-test.describe.configure({ mode: 'serial' });
 
 test('A — assistant collapses, releases space, keeps conversation and draft (also after reload)', async ({ page }) => {
   test.setTimeout(240_000);
@@ -329,14 +327,16 @@ test('H — no lost work: edits, object, title, hidden assistant, workspace swit
   // Edit the clip: 1.5× speed.
   await page.getByRole('button', { name: /^Clip 1/ }).click();
   await page.getByRole('button', { name: '1.5×' }).click();
-  // An object with an effect (blur).
+  // An object with an effect (blur) — on the box at the first frame.
+  await page.keyboard.press('Home');
   await page.getByRole('button', { name: 'Select object' }).click();
   const lb = (await page.getByTestId('object-layer').boundingBox())!;
   await page.waitForTimeout(600);
   await page.mouse.click(lb.x + (100 / 640) * lb.width, lb.y + (180 / 360) * lb.height);
   await expect(page.getByTestId('object-toolbar')).toBeVisible();
   await page.getByTestId('object-toolbar').getByRole('button', { name: 'Blur' }).click();
-  await page.getByRole('radio', { name: 'Blur' }).or(page.getByRole('button', { name: 'Blur', exact: true }).last()).first().click();
+  await page.getByTestId('object-toolbar').getByRole('radio', { name: 'Blur' }).click();
+  await expect(page.getByTestId('object-toolbar').getByRole('radio', { name: 'Blur' })).toHaveAttribute('aria-checked', 'true');
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   // A title.

@@ -4,9 +4,14 @@ export const uniqueEmail = (p = 'e2e') => `${p}-${Date.now()}-${Math.random().to
 
 export async function register(page: Page, email = uniqueEmail()) {
   await page.goto('/register');
-  await page.getByLabel('Name').fill('E2E Creator');
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill('e2e-password-123');
+  await page.waitForLoadState('networkidle');
+  // A field filled before React hydrates is cleared again — fill until the values stick.
+  await expect(async () => {
+    await page.getByLabel('Name').fill('E2E Creator');
+    await page.getByLabel('Email').fill(email);
+    await page.getByLabel('Password').fill('e2e-password-123');
+    await expect(page.getByLabel('Name')).toHaveValue('E2E Creator', { timeout: 500 });
+  }).toPass({ timeout: 20_000 });
   await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: 'Create account' }).click();
   await expect(page).toHaveURL(/\/app/);

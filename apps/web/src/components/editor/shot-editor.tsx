@@ -239,10 +239,9 @@ export function ShotEditor({ projectId, clipId, timeline, apply, shot, assets, o
       <div className="min-w-0 space-y-3">
         <div className="flex flex-wrap gap-1 rounded-xl border hairline bg-white/[0.02] p-1">
           {([
-            ['ai', Sparkles, 'AI edit', Boolean(shot)],
-            ['comments', MessageSquare, `Comments${shot?.comments.filter((c) => c.author === 'user' && c.status === 'open').length ? ` · ${shot.comments.filter((c) => c.author === 'user' && c.status === 'open').length}` : ''}`, Boolean(shot)],
-            ['camera', Camera, 'Camera', true],
-            ['color', Palette, 'Color', true],
+            ['color', Palette, 'Appearance', true],
+            ['camera', Camera, 'Motion', true],
+            ['ai', Sparkles, `Edit with AI${shot?.comments.filter((c) => c.author === 'user' && c.status === 'open').length ? ` · ${shot.comments.filter((c) => c.author === 'user' && c.status === 'open').length}` : ''}`, Boolean(shot)],
             ['versions', GitBranch, `Versions${shot ? ` · ${shot.versions.length}` : ''}`, Boolean(shot)],
           ] as const).filter((x) => x[3]).map(([k, Icon, label]) => (
             <button key={k} type="button" onClick={() => { setTab(k); setTool('none'); }} className={cn('flex flex-1 items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-xs', tab === k ? 'bg-iris-500 text-white' : 'text-fog-300 hover:bg-white/[0.06]')}><Icon className="size-3.5" />{label}</button>
@@ -270,7 +269,14 @@ export function ShotEditor({ projectId, clipId, timeline, apply, shot, assets, o
             refresh={refresh}
           />
         )}
-        {tab === 'comments' && shot && <Comments shot={shot} t={t} range={range} mask={mask} pin={pin} clearPin={() => setPin(null)} onSendToAi={sendToAi} refresh={refresh} versionId={viewing?.id} />}
+        {(tab === 'ai' || tab === 'comments') && shot && (
+          <details className="group rounded-xl border hairline p-2.5" open={tab === 'comments'}>
+            <summary className="flex cursor-pointer select-none items-center gap-1.5 text-xs font-medium text-white"><MessageSquare className="size-3.5 text-iris-300" /> Notes on this shot <span className="font-normal text-fog-500">— point at a moment, send it to AI later</span></summary>
+            <div className="mt-2">
+              <Comments shot={shot} t={t} range={range} mask={mask} pin={pin} clearPin={() => setPin(null)} onSendToAi={sendToAi} refresh={refresh} versionId={viewing?.id} />
+            </div>
+          </details>
+        )}
         {tab === 'camera' && (
           <CameraPanel
             camera={clip.camera}

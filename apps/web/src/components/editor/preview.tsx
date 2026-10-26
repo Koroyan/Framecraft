@@ -202,11 +202,13 @@ export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, s
   const localTime = clip ? (clip.freezeSec ? clip.inSec : clip.inSec + clipT * speed) : 0;
   const clipLenNow = clip ? clipDuration(clip) : 0;
 
+  // Paused: show exactly the frame at the playhead (frame stepping, selecting objects). Playing: only
+  // correct real drift, so the video is not re-seeked on every playhead tick.
   useEffect(() => {
     const v = video.current;
     if (!v || !asset) return;
-    if (Math.abs(v.currentTime - localTime) > 0.35) v.currentTime = Math.max(0, localTime);
-  }, [asset, localTime]);
+    if (Math.abs(v.currentTime - localTime) > (playing ? 0.35 : 0.004)) v.currentTime = Math.max(0, localTime);
+  }, [asset, localTime, playing]);
 
   useEffect(() => {
     const v = video.current;

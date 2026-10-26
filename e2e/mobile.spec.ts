@@ -12,6 +12,10 @@ test('mobile: landing, navigation and create flow fit the phone screen', async (
   await page.screenshot({ path: 'test-results/mobile-dashboard.png' });
 
   await page.getByRole('link', { name: 'Create' }).click();
+  await expect(page).toHaveURL(/\/app\/new/);
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: 'test-results/mobile-new-video.png', fullPage: true });
+  await page.getByRole('link', { name: /Create with AI/ }).click();
   await expect(page).toHaveURL(/\/app\/create/);
   await page.getByLabel('Video description').fill('Golden retriever surfing a small wave at sunset');
   await expect(page.getByText('Estimate', { exact: true })).toBeVisible();

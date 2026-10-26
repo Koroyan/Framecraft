@@ -48,7 +48,10 @@ function ncc(frame: Frame, W: number, H: number, tpl: Float32Array, tw: number, 
   if (cnt < 16 || miss > cnt) return -1;
   const mean = sum / cnt;
   const std = Math.sqrt(Math.max(1e-6, sum2 / cnt - mean * mean));
-  return (cross / cnt - mean * tMean) / (std * tStd);
+  // A flat patch (plain wall, sky) cannot match a template with an edge in it — and dividing by its
+  // near-zero spread would make noise look like a perfect match.
+  if (std < 0.012 || tStd < 0.012) return -1;
+  return Math.max(-1, Math.min(1, (cross / cnt - mean * tMean) / (std * tStd)));
 }
 
 function stats(tpl: Float32Array) {

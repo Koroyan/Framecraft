@@ -48,8 +48,9 @@ test('editor studio: graph → shot → AI fix (fixture) → compare → accept 
   await call(page, 'POST', `/api/movies/${pid}/generate`, { approvedCredits: est.estimate.totalCredits, idempotencyKey: `e2e-gen-${Date.now()}` });
   await until(() => call<{ movieJob: { status: string } | null }>(page, 'GET', `/api/movies/${pid}`), (m) => ['completed', 'failed'].includes(m.movieJob?.status ?? ''), 300_000);
 
-  // 1) Story graph.
+  // 1) Story graph (films open on the simple storyboard; the graph is one click away).
   await page.goto(`/app/editor/${pid}`);
+  await page.getByRole('button', { name: 'Graph' }).click();
   await expect(page.getByText('FILM START')).toBeVisible();
   await expect(page.getByText('SHOT 01')).toBeVisible();
   await page.waitForTimeout(1500);
@@ -96,7 +97,7 @@ test('editor studio: graph → shot → AI fix (fixture) → compare → accept 
   expect(studio.shots.slice(1).every((s) => s.versions.length === 1)).toBe(true);
 
   // 3) Camera: zoom the framing window, keyframe at the start and at the end, preview the result.
-  await page.getByRole('button', { name: /^Camera$/ }).click();
+  await page.getByRole('button', { name: /^Motion$/ }).click();
   const frame = page.getByRole('slider', { name: /Camera framing/ });
   const fb = (await frame.boundingBox())!;
   await page.mouse.move(fb.x + fb.width - 10, fb.y + fb.height - 10);
@@ -120,6 +121,7 @@ test('editor studio: graph → shot → AI fix (fixture) → compare → accept 
   await page.keyboard.press('Control+s');
   await page.waitForTimeout(1500);
   await page.reload();
+  await page.getByRole('button', { name: 'Graph' }).click();
   await expect(page.getByText('FILM START')).toBeVisible();
   const tl = await call<{ timeline: { clips: { shotId?: string; camera?: { keyframes: unknown[] }; versionId?: string; assetId: string }[] } }>(page, 'GET', `/api/projects/${pid}/timeline`);
   const c1 = tl.timeline.clips.find((c) => c.shotId === s1.id)!;

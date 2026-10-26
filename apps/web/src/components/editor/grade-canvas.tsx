@@ -318,7 +318,10 @@ export function GradeCanvas({ video, adjust, lutUrl, srcTime, objectPosition, ob
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, key]);
 
-  if (!supported || !active) return null;
+  if (!active) return null;
+  // Never pretend: without WebGL2 the picture here shows no colour/object effects, the export does.
+  if (!supported)
+    return <span className="pointer-events-none absolute bottom-2 left-2 rounded-full bg-black/75 px-2 py-0.5 text-[10px] text-white">Colour preview needs WebGL — the export applies it exactly</span>;
   return (
     <canvas
       ref={canvas}

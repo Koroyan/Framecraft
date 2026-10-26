@@ -133,11 +133,14 @@ export function useObjectActions(projectId: string, apply: Apply) {
   };
 
   /** New selection (or add / subtract a region) from a click on the picture at source point (sx, sy). */
-  const selectAt = (pf: PreviewFrame, sx: number, sy: number, mode: 'new' | 'add' | 'subtract') => {
+  const selectAt = async (pf: PreviewFrame, sx: number, sy: number, mode: 'new' | 'add' | 'subtract') => {
     const clip = pf.clip;
     const v = pf.video.current;
     if (!clip || !v) return;
-    const key = `${clip.assetId}:${pf.srcTime.toFixed(3)}`;
+    // Read the pixels of the frame that is really on screen, and record *its* time.
+    if (v.seeking) await new Promise((r) => v.addEventListener('seeked', r, { once: true }));
+    const shownAt = v.currentTime;
+    const key = `${clip.assetId}:${shownAt.toFixed(3)}`;
     if (last.key !== key || !last.prep) {
       const img = grab(v);
       if (!img) {
@@ -159,7 +162,7 @@ export function useObjectActions(projectId: string, apply: Apply) {
     const current = ref && ref.clipId === clip.id ? clip.objects?.find((o) => o.id === ref.objectId) : undefined;
     if ((mode === 'add' || sub) && current) {
       // Regions are added in the object's drawn coordinates (undo the track transform at this frame).
-      const tr = maskTransformAt(current.mask, pf.srcTime);
+      const tr = maskTransformAt(current.mask, shownAt);
       const inv = (x: number, y: number): [number, number] => [tr.cx + (x - tr.dx - tr.cx) / tr.s, tr.cy + (y - tr.dy - tr.cy) / tr.s];
       updateObject(apply, clip.id, current.id, (o) => ({ ...o, mask: { ...o.mask, polygons: [...o.mask.polygons, { points: region.polygon.map(([x, y]) => inv(x, y)), subtract: sub }].slice(-20) } }));
       last.sel = sel;
@@ -173,7 +176,7 @@ export function useObjectActions(projectId: string, apply: Apply) {
       id,
       name,
       mask: { rects: [], strokes: [], polygons: [{ points: region.polygon, subtract: false }], feather: 0.006, invert: false },
-      atSec: pf.srcTime,
+      atSec: shownAt,
       startSec: Math.min(clip.inSec, clip.outSec),
       endSec: Math.max(clip.inSec, clip.outSec),
       scope: 'clip',
@@ -302,11 +305,11 @@ export function ObjectLayer({ pf, projectId, apply }: { pf: PreviewFrame; projec
         }
         setGhost(null);
         const [sx, sy] = toSrc(e.clientX, e.clientY);
-        if (e.shiftKey || e.altKey) return actions.selectAt(pf, sx, sy, e.altKey ? 'subtract' : 'add');
+        if (e.shiftKey || e.altKey) return void actions.selectAt(pf, sx, sy, e.altKey ? 'subtract' : 'add');
         // Clicking an existing object selects it; anywhere else makes a new selection.
         const hit = [...objs].reverse().find((o) => active(o) && shapes(o).srcPolys.some((p) => pointInPoly(sx, sy, p)));
         if (hit) useObjectUi.getState().set({ sel: { clipId: clip.id, objectId: hit.id }, popover: null });
-        else actions.selectAt(pf, sx, sy, 'new');
+        else void actions.selectAt(pf, sx, sy, 'new');
       }}
     >
       <svg viewBox="0 0 1 1" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 size-full overflow-visible" aria-hidden>
