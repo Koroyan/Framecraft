@@ -250,7 +250,7 @@ function AudioTab(p: Parameters<typeof EditorToolbox>[0] & { list: Asset[] }) {
         {p.list.filter((a) => a.mediaType === 'audio').slice(0, 40).map((a) => (
           <button key={a.id} type="button" onClick={() => p.onAddMusic(a)} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-fog-200 hover:bg-white/[0.05]">
             <Music className="size-3.5 text-fog-400" />
-            <span className="min-w-0 flex-1 truncate">{a.originalName ?? (a.source as { kind?: string }).kind ?? 'audio'}</span>
+            <span className="min-w-0 flex-1 truncate" title={audioLabel(a)}>{audioLabel(a)}</span>
             {a.durationMs ? <span className="text-fog-500">{seconds(a.durationMs / 1000)}</span> : null}
             <Plus className="size-3.5" />
           </button>
@@ -258,6 +258,15 @@ function AudioTab(p: Parameters<typeof EditorToolbox>[0] & { list: Asset[] }) {
       </div>
     </div>
   );
+}
+
+/** A name people can tell apart: the file name, or what was generated and when. */
+function audioLabel(a: Asset) {
+  if (a.originalName) return a.originalName;
+  const kind = (a.source as { kind?: string } | null)?.kind;
+  const what = kind === 'music' ? 'AI music' : kind === 'sfx' ? 'AI sound effect' : kind === 'voice' || kind === 'tts' ? 'AI voice-over' : 'Audio';
+  const d = new Date(a.createdAt);
+  return Number.isNaN(d.getTime()) ? what : `${what} · ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
 }
 
 function CaptionsTab({ timeline, apply, transcribe }: { timeline: Timeline; apply: Apply; transcribe: React.ReactNode }) {

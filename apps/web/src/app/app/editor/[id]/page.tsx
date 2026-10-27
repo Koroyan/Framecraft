@@ -67,6 +67,13 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
   const layout = useEditorUi();
   const wide = useMediaQuery('(min-width: 1024px)');
   const roomy = useMediaQuery('(min-width: 1500px)');
+  // A right-docked assistant on a narrow screen folds the tool panel away by default — but a click
+  // on the tool rail opens it anyway (until the assistant is moved or closed).
+  const crowded = layout.assistantOpen && layout.assistantDock === 'right' && !roomy;
+  const [leftForced, setLeftForced] = useState(false);
+  useEffect(() => {
+    if (!crowded) setLeftForced(false);
+  }, [crowded]);
   const [playhead, setPlayhead] = useState(0);
   const playheadRef = useRef(0);
   playheadRef.current = playhead;
@@ -361,7 +368,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     clips: extra.length && sel ? [sel.id, ...extra].map((cid) => ({ id: cid, index: timeline.clips.findIndex((c) => c.id === cid) })).filter((c) => c.index >= 0) : undefined,
   };
   // On smaller screens a right-docked assistant takes the tool panel's room (the icon rail stays).
-  const leftOpen = layout.leftOpen && !(layout.assistantOpen && layout.assistantDock === 'right' && !roomy);
+  const leftOpen = layout.leftOpen && (leftForced || !crowded);
   const assistantProps = { projectId: id, timeline, apply, context, onEditStarted: () => void refetchStudio() };
 
   const studio = studioQ.data;
@@ -484,7 +491,14 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       onSelectLayer={(lid) => setSelectedLayer(lid)}
       transcribe={<TranscribeButton projectId={id} timeline={timeline} assets={assets} onCues={(cues) => apply((t) => ({ ...t, subtitles: cues.map((c) => ({ ...c, id: newId('sub') })) }))} />}
       open={wide ? leftOpen : true}
-      onOpenChange={wide ? (o) => layout.set({ leftOpen: o }) : undefined}
+      onOpenChange={
+        wide
+          ? (o) => {
+              setLeftForced(o && crowded);
+              layout.set({ leftOpen: o });
+            }
+          : undefined
+      }
       panelWidth={wide ? layout.leftWidth : undefined}
       onSelectObject={() => useObjectUi.getState().set({ selecting: true })}
       onOpenAssistant={() => layout.set({ assistantOpen: true })}
@@ -664,7 +678,13 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
           {workspace === 'review' && (
             <div className={cn('space-y-3 overflow-y-auto', wide && 'min-h-0 flex-1')}>
               <p className="text-sm text-fog-300">AI results waiting for your decision. Nothing in the video changes until you accept.</p>
-              {!reviewOps.length && <div className="rounded-2xl border hairline p-6 text-center text-sm text-fog-400">Nothing to review.</div>}
+              {!reviewOps.length && (
+                <div className="rounded-2xl border hairline p-6 text-center text-sm text-fog-400">
+                  <p className="text-fog-200">Nothing to review yet.</p>
+                  <p className="mx-auto mt-1 max-w-md text-xs">When an AI edit finishes — removing or replacing an object, fixing a part of a clip — its result waits here so you can compare it with the original and accept or reject it.</p>
+                  <Button size="sm" variant="secondary" className="mt-3" onClick={() => setWorkspace('edit')}>Back to editing</Button>
+                </div>
+              )}
               {reviewOps.map(({ shot, op }) => {
                 const v = shot.versions.find((x) => x.id === op.resultVersionId);
                 return (

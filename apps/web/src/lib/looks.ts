@@ -19,3 +19,21 @@ export function lookActive(look: Record<string, unknown>, grade: Record<string, 
     return typeof a === 'number' ? typeof b === 'number' && Math.abs(a - b) < 1e-3 : JSON.stringify(a) === JSON.stringify(b);
   });
 }
+
+/**
+ * A CSS filter that roughly shows a clip's grade on thumbnails (storyboard cards, timeline strip),
+ * so a black-and-white or warmed clip looks like that everywhere — the preview and export are exact.
+ */
+export function gradeCss(a: Record<string, unknown> | undefined): string | undefined {
+  if (!a) return undefined;
+  const n = (k: string) => Number(a[k] ?? 0) || 0;
+  const parts: string[] = [];
+  const sat = Math.max(0, 1 + n('saturation') + 0.5 * n('vibrance'));
+  if (Math.abs(sat - 1) > 0.01) parts.push(`saturate(${sat.toFixed(2)})`);
+  if (n('contrast')) parts.push(`contrast(${(1 + n('contrast')).toFixed(2)})`);
+  const br = Math.pow(2, n('exposure')) * (1 + n('brightness'));
+  if (Math.abs(br - 1) > 0.01) parts.push(`brightness(${br.toFixed(2)})`);
+  if (n('temperature') > 0.02) parts.push(`sepia(${Math.min(0.45, n('temperature') * 0.45).toFixed(2)})`);
+  if (n('hue')) parts.push(`hue-rotate(${Math.round(n('hue'))}deg)`);
+  return parts.join(' ') || undefined;
+}

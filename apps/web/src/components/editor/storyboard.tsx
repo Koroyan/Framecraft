@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Crosshair, GripVertical, Loader2, Play, Plus, Sparkles, Trash2 } from 'lucide-react';
 import { clipDuration, moveNodeAfter, removeNode, sequenceOf, type Timeline } from '@framecraft/shared';
+import { gradeCss } from '@/lib/looks';
 import type { Asset } from '@/lib/api';
 import type { StudioData } from '@/lib/studio';
 import { cn, seconds } from '@/lib/utils';
@@ -68,9 +69,9 @@ export function Storyboard({ timeline, assets, studio, apply, selectedClipId, on
               <button type="button" onClick={() => onPlay(first.id)} className="block w-full text-left" title="Play from this shot">
                 <div className="relative aspect-video bg-black">
                   {isVideo && media ? (
-                    <video src={`${media}#t=${(first.reverse ? first.outSec - 0.05 : first.inSec + 0.05).toFixed(2)}`} preload="metadata" muted playsInline poster={first.inSec < 0.2 ? thumb : undefined} className="pointer-events-none size-full object-cover" />
+                    <video src={`${media}#t=${(first.reverse ? first.outSec - 0.05 : first.inSec + 0.05).toFixed(2)}`} preload="metadata" muted playsInline poster={first.inSec < 0.2 ? thumb : undefined} className="pointer-events-none size-full object-cover" style={{ filter: gradeCss(first.adjust as Record<string, unknown> | undefined) }} />
                   ) : thumb ? (
-                    <img src={thumb} alt="" className="size-full object-cover" />
+                    <img src={thumb} alt="" className="size-full object-cover" style={{ filter: gradeCss(first.adjust as Record<string, unknown> | undefined) }} />
                   ) : (
                     <div className="grid size-full place-items-center text-xs text-fog-500">No preview</div>
                   )}

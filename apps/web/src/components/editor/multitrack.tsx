@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { gradeCss } from '@/lib/looks';
 import { api } from '@/lib/api';
 import { Blend, Captions, Film, Layers, Mic, Minus, Music2, Plus, Type } from 'lucide-react';
 import { lostSpans, timelineDuration, type Timeline } from '@framecraft/shared';
@@ -33,9 +34,9 @@ function Wave({ assetId, className, style }: { assetId: string; className: strin
   const url = useDerived('waveform', assetId);
   return <span className={className} style={{ ...style, backgroundImage: url ? `url(${url})` : undefined, backgroundSize: '100% 100%' }} />;
 }
-function Strip({ assetId }: { assetId: string }) {
+function Strip({ assetId, filter }: { assetId: string; filter?: string }) {
   const url = useDerived('filmstrip', assetId);
-  return url ? <span className="absolute inset-0 opacity-80" style={{ backgroundImage: `url(${url})`, backgroundSize: 'auto 100%', backgroundRepeat: 'repeat-x' }} /> : null;
+  return url ? <span className="absolute inset-0 opacity-80" style={{ backgroundImage: `url(${url})`, backgroundSize: 'auto 100%', backgroundRepeat: 'repeat-x', filter }} /> : null;
 }
 
 type Range = { start: number; end: number };
@@ -326,7 +327,7 @@ export function MultiTrack({
                       className={cn('group absolute inset-y-0 cursor-pointer overflow-hidden rounded-md border text-left', selected === c.id ? 'z-10 border-iris-400 ring-2 ring-iris-500/40' : selectedExtra.includes(c.id) ? 'z-10 border-iris-300 ring-2 ring-iris-300/50' : 'border-white/10 hover:border-white/30')}
                       style={{ left: x(starts[i] ?? 0), width: Math.max(6, x(len) - 2) }}
                     >
-                      {a?.mediaType === 'video' ? <Strip assetId={c.assetId} /> : a?.thumbnailUrl && <img src={a.thumbnailUrl} alt="" className="absolute inset-0 size-full object-cover opacity-80" />}
+                      {a?.mediaType === 'video' ? <Strip assetId={c.assetId} filter={gradeCss(c.adjust as Record<string, unknown> | undefined)} /> : a?.thumbnailUrl && <img src={a.thumbnailUrl} alt="" className="absolute inset-0 size-full object-cover opacity-80" style={{ filter: gradeCss(c.adjust as Record<string, unknown> | undefined) }} />}
                       <span className="pointer-events-none absolute bottom-0.5 left-2 rounded bg-black/60 px-1 text-[9px] text-white">{i + 1}{c.freezeSec ? ' ❄' : c.speed !== 1 ? ` ${c.speed}×` : ''}{c.reverse ? ' ⟲' : ''}{c.camera ? ' 🎥' : ''}{c.adjust ? ' ◐' : ''}{c.objects?.length ? ` ◎${c.objects.length}` : ''}</span>
                       {lost.map((l, k) => <span key={k} title="Object tracking unsure here" className="pointer-events-none absolute top-0 h-1 rounded bg-signal-red" style={{ left: x(Math.max(0, l.a)), width: Math.max(2, x(Math.min(len, l.b) - Math.max(0, l.a))) }} />)}
                       {onTrimClip && !c.freezeSec && (
