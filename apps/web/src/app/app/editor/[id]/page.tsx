@@ -63,7 +63,7 @@ const SHORTCUTS: [string, string][] = [
 export default function EditorPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const qc = useQueryClient();
-  const { timeline, apply, undo, redo, load, selected, select, dirty, markSaved, past, future } = useEditor();
+  const { timeline, apply, undo, redo, load, selected, select, extra, toggleExtra, dirty, markSaved, past, future } = useEditor();
   const layout = useEditorUi();
   const wide = useMediaQuery('(min-width: 1024px)');
   const roomy = useMediaQuery('(min-width: 1500px)');
@@ -202,7 +202,11 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             toast.success(`Cut ${seconds(r.start)}–${seconds(r.end)} and closed the gap — Ctrl+Z undoes it`);
           } else if (ci >= 0 && t.clips.length > 1 && !useObjectUi.getState().sel) {
             e.preventDefault();
-            st.apply((x) => ({ ...x, clips: x.clips.filter((c) => c.id !== st.selected) }));
+            const gone = new Set([st.selected!, ...st.extra]);
+            if (gone.size >= t.clips.length) return void toast.message('Keep at least one clip in the video.');
+            st.apply((x) => ({ ...x, clips: x.clips.filter((c) => !gone.has(c.id)) }));
+            st.select(null);
+            if (gone.size > 1) toast.success(`Removed ${gone.size} clips — Ctrl+Z undoes it`);
           }
         }
         return;
@@ -354,6 +358,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     range: range ?? undefined,
     srcRange,
     playhead,
+    clips: extra.length && sel ? [sel.id, ...extra].map((cid) => ({ id: cid, index: timeline.clips.findIndex((c) => c.id === cid) })).filter((c) => c.index >= 0) : undefined,
   };
   // On smaller screens a right-docked assistant takes the tool panel's room (the icon rail stays).
   const leftOpen = layout.leftOpen && !(layout.assistantOpen && layout.assistantDock === 'right' && !roomy);
@@ -415,12 +420,18 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             playhead={playhead}
             selected={selected}
             onSeek={setPlayhead}
-            onSelectClip={(clipId, at) => {
+            onSelectClip={(clipId, at, additive) => {
+              if (additive) {
+                toggleExtra(clipId);
+                setFocus('clip');
+                return;
+              }
               select(clipId);
               setFocus('clip');
               setPlayhead(at);
               if (useObjectUi.getState().sel?.clipId !== clipId) useObjectUi.getState().set({ sel: null });
             }}
+            selectedExtra={extra}
             selectedLayer={selectedLayer}
             onSelectLayer={(lid) => setSelectedLayer(lid)}
             onLayerTiming={(lid, startSec, endSec) => apply((t) => ({ ...t, layers: t.layers.map((x) => (x.id === lid ? { ...x, startSec, endSec } : x)) }))}
@@ -568,7 +579,21 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         </div>
       </div>
 
-      <ReviewBar timeline={timeline} reviewOps={reviewOps} apply={apply} onDone={() => void refetchStudio()} />
+      <ReviewBar
+        timeline={timeline}
+        reviewOps={reviewOps}
+        apply={apply}
+        onDone={() => void refetchStudio()}
+        onImprove={(shotId) => {
+          const c = timeline.clips.find((x) => x.shotId === shotId);
+          if (c) {
+            select(c.id);
+            setFocus('clip');
+          }
+          useAssistant.getState().setDraft(id, 'Better, but ');
+          layout.set({ assistantOpen: true });
+        }}
+      />
 
       {/* Workspace + docked assistant */}
       <div className={cn('flex min-h-0 gap-2', wide ? 'flex-1' : 'flex-col')}>

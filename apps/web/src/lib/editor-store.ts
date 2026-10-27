@@ -11,6 +11,8 @@ type State = {
   past: Timeline[];
   future: Timeline[];
   selected: string | null;
+  /** Further clips selected with Shift/Ctrl-click (batch edits); the primary one is `selected`. */
+  extra: string[];
   dirty: boolean;
   load: (t: Timeline) => void;
   /** Apply a change as one undoable step. */
@@ -18,6 +20,9 @@ type State = {
   undo: () => void;
   redo: () => void;
   select: (id: string | null) => void;
+  /** Add or remove a clip from the multi-selection (Shift/Ctrl-click). */
+  toggleExtra: (id: string) => void;
+  clearExtra: () => void;
   markSaved: () => void;
 };
 
@@ -26,8 +31,9 @@ export const useEditor = create<State>((set, get) => ({
   past: [],
   future: [],
   selected: null,
+  extra: [],
   dirty: false,
-  load: (t) => set({ timeline: t, past: [], future: [], dirty: false, selected: t.clips[0]?.id ?? null }),
+  load: (t) => set({ timeline: t, past: [], future: [], dirty: false, selected: t.clips[0]?.id ?? null, extra: [] }),
   apply: (fn) => {
     const cur = get().timeline;
     if (!cur) return;
@@ -44,7 +50,14 @@ export const useEditor = create<State>((set, get) => ({
     if (!future.length || !timeline) return;
     set({ timeline: future[0]!, future: future.slice(1), past: [...past, timeline], dirty: true });
   },
-  select: (id) => set({ selected: id }),
+  select: (id) => set({ selected: id, extra: [] }),
+  toggleExtra: (id) => {
+    const { selected, extra } = get();
+    if (!selected) return set({ selected: id });
+    if (id === selected) return;
+    set({ extra: extra.includes(id) ? extra.filter((x) => x !== id) : [...extra, id] });
+  },
+  clearExtra: () => set({ extra: [] }),
   markSaved: () => set({ dirty: false }),
 }));
 

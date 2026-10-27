@@ -4,7 +4,8 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Clapperboard, ImagePlay, Megaphone, Scissors, Sparkles, Wand2 } from 'lucide-react';
-import { guessIntent, type CreateFlow, type CreateIntent } from '@framecraft/shared';
+import { guessIntent, type CreateFlow } from '@framecraft/shared';
+import { FLOW_LABEL as LABEL, hrefFor } from '@/lib/create-flow';
 import { Button } from '@/components/ui';
 import { cn } from '@/lib/utils';
 
@@ -15,32 +16,6 @@ const FLOWS: { key: CreateFlow; icon: typeof Wand2; title: string; text: string;
   { key: 'ad', icon: Megaphone, title: 'Create an advertisement', text: 'Your product, your footage, a real ad.', needs: 'Product videos or photos', cost: 'Paid parts priced first' },
   { key: 'film', icon: Clapperboard, title: 'Create a film', text: 'Story, characters, scenes and shots.', needs: 'An idea', cost: 'Paid · plan first' },
 ];
-
-const LABEL: Record<CreateFlow, string> = { ai: 'AI video', animate: 'Animate an image', edit: 'Edit your video', ad: 'Advertisement', film: 'Film' };
-
-function hrefFor(flow: CreateFlow, idea: string, intent: CreateIntent | null): string {
-  const q = new URLSearchParams();
-  if (flow === 'edit') {
-    if (intent?.aspect) q.set('aspect', intent.aspect);
-    return `/app/edit?${q}`;
-  }
-  if (flow === 'ad') {
-    if (idea) q.set('idea', idea);
-    if (intent?.durationSec) q.set('length', String(intent.durationSec));
-    return `/app/ads/create?${q}`;
-  }
-  if (flow === 'film') {
-    if (idea) q.set('idea', idea);
-    if (intent?.durationSec) q.set('length', String(intent.durationSec));
-    if (intent?.aspect) q.set('aspect', intent.aspect);
-    return `/app/movie?${q}`;
-  }
-  if (idea) q.set('prompt', idea);
-  if (intent?.aspect) q.set('aspect', intent.aspect);
-  if (intent?.durationSec) q.set('duration', String(intent.durationSec));
-  if (flow === 'animate') q.set('mode', 'animate');
-  return `/app/create?${q}`;
-}
 
 /** New video: describe it (we suggest the right start) or pick one of five clear starting points. */
 export default function NewVideoPage() {

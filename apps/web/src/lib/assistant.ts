@@ -24,6 +24,8 @@ export type AssistantContext = {
   mask?: EditMask;
   layer?: { id: string; name: string };
   playhead?: number;
+  /** Several clips selected (Shift/Ctrl-click): "these clips". */
+  clips?: { id: string; index: number }[];
 };
 
 export type ItemState = 'proposed' | 'previewing' | 'applied' | 'cancelled' | 'started';
@@ -65,7 +67,8 @@ const MAX_THREADS = 30;
 /** Human words for the current selection, shown above the input and stored with the request. */
 export function describeContext(c: AssistantContext): string {
   const parts: string[] = [];
-  if (c.clip) parts.push(`Clip ${c.clip.index + 1}`);
+  if (c.clips && c.clips.length > 1) parts.push(`Clips ${c.clips.map((x) => x.index + 1).sort((a, b) => a - b).join(', ')}`);
+  else if (c.clip) parts.push(`Clip ${c.clip.index + 1}`);
   if (c.object) parts.push(c.object.name);
   if (c.range) parts.push(`${c.range.start.toFixed(1)}–${c.range.end.toFixed(1)} s`);
   else if (c.srcRange) parts.push(`${c.srcRange.start.toFixed(1)}–${c.srcRange.end.toFixed(1)} s of the shot`);
@@ -122,7 +125,7 @@ export const useAssistant = create<State>()(
           };
 
           // 1) Common edits are understood right here: free, instant, no AI call.
-          const quick = quickPlan(text, { clipIndex: ctx.clip?.index, objectId: ctx.object?.id, clipId: ctx.clip?.id, range: ctx.range, playhead: ctx.playhead });
+          const quick = quickPlan(text, { clipIndex: ctx.clip?.index, objectId: ctx.object?.id, clipId: ctx.clip?.id, clipIds: ctx.clips?.map((c) => c.id), range: ctx.range, playhead: ctx.playhead });
           if (quick) {
             reply({ text: quick.reply, plan: quick.ops.map((op) => ({ op, generative: false })), local: true });
             return;

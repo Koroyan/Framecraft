@@ -215,3 +215,11 @@ describe('create intent', () => {
     expect(guessIntent('golden retriever surfing at sunset')).toMatchObject({ flow: 'ai', aspect: '9:16' });
   });
 });
+
+describe('several selected clips', () => {
+  it('"these" clips take the place of the single clip', () => {
+    const r = quickPlan('make them warmer', { clipId: 'a', clipIndex: 0, clipIds: ['a', 'b'] })!;
+    expect(r.ops).toEqual([{ op: 'clip_adjust', clipIds: ['a', 'b'], delta: { temperature: 0.2 } }]);
+    expect(quickPlan('black and white', { clipId: 'a', clipIds: ['a', 'b'] })!.ops).toEqual([{ op: 'look', clipIds: ['a', 'b'], key: 'bw' }]);
+  });
+});

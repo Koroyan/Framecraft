@@ -52,6 +52,7 @@ export function MultiTrack({
   selected,
   onSeek,
   onSelectClip,
+  selectedExtra = [],
   onMoveClip,
   selectedLayer,
   onSelectLayer,
@@ -68,7 +69,9 @@ export function MultiTrack({
   playhead: number;
   selected: string | null;
   onSeek: (t: number) => void;
-  onSelectClip: (id: string, start: number) => void;
+  /** additive = Shift/Ctrl/Cmd-click (add to / remove from the multi-selection). */
+  onSelectClip: (id: string, start: number, additive?: boolean) => void;
+  selectedExtra?: string[];
   onMoveClip: (fromId: string, toIndex: number) => void;
   selectedLayer?: string | null;
   onSelectLayer?: (id: string) => void;
@@ -137,7 +140,7 @@ export function MultiTrack({
   return (
     <div>
       <div className="mb-1.5 flex items-center justify-between gap-2 text-xs text-fog-400">
-        <span className="text-[11px] text-fog-500">Shift + drag on the ruler (or I / O) marks a range · drag clip edges to trim</span>
+        <span className="text-[11px] text-fog-500">Shift + drag on the ruler (or I / O) marks a range · drag clip edges to trim · Shift-click selects several</span>
         <span className="flex items-center gap-1">
           <button type="button" aria-label="Zoom out" onClick={() => setPps(Math.max(4, scale / 1.6))} className="grid size-7 place-items-center rounded-md hover:bg-white/[0.06] hover:text-white"><Minus className="size-3.5" /></button>
           <button type="button" onClick={() => setPps(null)} className={cn('rounded-md px-2 py-1 hover:bg-white/[0.06] hover:text-white', pps === null && 'text-white')}>Fit</button>
@@ -304,14 +307,15 @@ export function MultiTrack({
                         // Select the clip and put the playhead where it was clicked (so S splits there).
                         const r = e.currentTarget.getBoundingClientRect();
                         const within = Math.max(0, Math.min(len - 0.01, ((e.clientX - r.left) / Math.max(1, r.width)) * len));
-                        onSelectClip(c.id, (starts[i] ?? 0) + Math.max(0.01, within));
+                        onSelectClip(c.id, (starts[i] ?? 0) + Math.max(0.01, within), e.shiftKey || e.ctrlKey || e.metaKey);
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') onSelectClip(c.id, (starts[i] ?? 0) + 0.01);
                       }}
                       title={c.label ?? `Clip ${i + 1}`}
                       aria-label={`Clip ${i + 1}${c.label ? ` · ${c.label}` : ''}`}
-                      className={cn('group absolute inset-y-0 cursor-pointer overflow-hidden rounded-md border text-left', selected === c.id ? 'z-10 border-iris-400 ring-2 ring-iris-500/40' : 'border-white/10 hover:border-white/30')}
+                      aria-selected={selected === c.id || selectedExtra.includes(c.id)}
+                      className={cn('group absolute inset-y-0 cursor-pointer overflow-hidden rounded-md border text-left', selected === c.id ? 'z-10 border-iris-400 ring-2 ring-iris-500/40' : selectedExtra.includes(c.id) ? 'z-10 border-iris-300 ring-2 ring-iris-300/50' : 'border-white/10 hover:border-white/30')}
                       style={{ left: x(starts[i] ?? 0), width: Math.max(6, x(len) - 2) }}
                     >
                       {a?.mediaType === 'video' ? <Strip assetId={c.assetId} /> : a?.thumbnailUrl && <img src={a.thumbnailUrl} alt="" className="absolute inset-0 size-full object-cover opacity-80" />}

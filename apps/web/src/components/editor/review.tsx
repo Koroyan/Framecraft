@@ -15,7 +15,7 @@ type Item = { shot: StudioShot; op: EditOperation };
  * AI results waiting for a decision, right above the editor — compare in place (wipe or side by
  * side, scrubbed together) and accept or reject without leaving the timeline.
  */
-export function ReviewBar({ reviewOps, apply, onDone }: { timeline: Timeline; reviewOps: Item[]; apply: (fn: (t: Timeline) => Timeline) => void; onDone: () => void }) {
+export function ReviewBar({ reviewOps, apply, onDone, onImprove }: { timeline: Timeline; reviewOps: Item[]; apply: (fn: (t: Timeline) => Timeline) => void; onDone: () => void; onImprove?: (shotId: string) => void }) {
   const [open, setOpen] = useState<Item | null>(null);
   if (!reviewOps.length) return null;
   const first = reviewOps[0]!;
@@ -26,12 +26,12 @@ export function ReviewBar({ reviewOps, apply, onDone }: { timeline: Timeline; re
         <span className="min-w-0 flex-1 truncate text-fog-300">Shot {first.shot.number} · {first.op.mode.replaceAll('_', ' ')} · {seconds(first.op.startSec)}–{seconds(first.op.endSec)} — nothing changes until you accept.</span>
         <Button size="sm" onClick={() => setOpen(first)}>Compare</Button>
       </div>
-      {open && <CompareDialog item={open} apply={apply} onClose={() => setOpen(null)} onDone={() => { setOpen(null); onDone(); }} />}
+      {open && <CompareDialog item={open} apply={apply} onClose={() => setOpen(null)} onDone={() => { setOpen(null); onDone(); }} onImprove={onImprove ? () => { onImprove(open.shot.id); setOpen(null); } : undefined} />}
     </>
   );
 }
 
-export function CompareDialog({ item, apply, onClose, onDone }: { item: Item; apply: (fn: (t: Timeline) => Timeline) => void; onClose: () => void; onDone: () => void }) {
+export function CompareDialog({ item, apply, onClose, onDone, onImprove }: { item: Item; apply: (fn: (t: Timeline) => Timeline) => void; onClose: () => void; onDone: () => void; onImprove?: () => void }) {
   const { shot, op } = item;
   const va = shot.versions.find((v) => v.id === op.sourceVersionId);
   const vb = shot.versions.find((v) => v.id === op.resultVersionId);
@@ -91,6 +91,7 @@ export function CompareDialog({ item, apply, onClose, onDone }: { item: Item; ap
       footer={
         <>
           <Button variant="ghost" loading={busy === 'reject'} onClick={() => decide(false)}><X /> Reject</Button>
+          {onImprove && <Button variant="secondary" onClick={onImprove} title="Ask for a refinement — the assistant starts from this result">Improve…</Button>}
           <Button loading={busy === 'accept'} onClick={() => decide(true)}><Check /> Accept</Button>
         </>
       }
@@ -129,7 +130,7 @@ export function CompareDialog({ item, apply, onClose, onDone }: { item: Item; ap
           <input type="range" aria-label="Scrub both" min={0} max={dur} step={0.02} value={Math.min(t, dur)} onChange={(e) => seek(Number(e.target.value))} className="flex-1" />
           <span className="w-20 text-right text-xs tabular-nums text-fog-300">{seconds(t)}</span>
         </div>
-        <p className="text-[11px] text-fog-500">The changed seconds are {seconds(op.startSec)}–{seconds(op.endSec)}; everything else should look identical. To refine it, open the shot (Shot tab) and ask for a change — it starts from this result.</p>
+        <p className="text-[11px] text-fog-500">The changed seconds are {seconds(op.startSec)}–{seconds(op.endSec)}; everything else should look identical. <b className="text-fog-300">Improve…</b> asks for a refinement that starts from this result (nothing is lost).</p>
       </div>
     </Dialog>
   );

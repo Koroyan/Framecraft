@@ -7,6 +7,8 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowUp, Clapperboard, Coins, FolderKanban, LayoutTemplate, Megaphone, Scissors, Smartphone, Sparkles, Wand2 } from 'lucide-react';
 import { endpoints } from '@/lib/api';
 import { KIND_LABEL, projectHref } from '@/lib/projects';
+import { hrefFor } from '@/lib/create-flow';
+import { guessIntent } from '@framecraft/shared';
 import { useMe, useSystemStatus, useTemplates } from '@/lib/hooks';
 import { Badge, Card, EmptyState, Skeleton, buttonVariants } from '@/components/ui';
 import { JobCard } from '@/components/studio/job-card';
@@ -33,7 +35,9 @@ export default function Dashboard() {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            router.push(`/app/create?prompt=${encodeURIComponent(idea)}`);
+            // Same suggestion as "New video": an ad goes to Ad Studio, a story to the film flow…
+            const intent = guessIntent(idea);
+            router.push(intent ? hrefFor(intent.flow, idea.trim(), intent) : '/app/new');
           }}
           className="mt-6 flex max-w-2xl items-center gap-2 rounded-2xl border hairline bg-black/30 p-2 pl-4 backdrop-blur focus-within:border-iris-500/50"
         >
@@ -45,11 +49,11 @@ export default function Dashboard() {
         <div className="mt-6 grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-6">
           {[
             { href: '/app/create', icon: Wand2, label: 'AI video', hint: 'From one sentence' },
+            { href: '/app/create?mode=animate', icon: Sparkles, label: 'Animate an image', hint: 'A photo comes alive' },
             { href: '/app/edit', icon: Scissors, label: 'Edit a video', hint: 'Your own clips' },
-            { href: '/app/social', icon: Smartphone, label: 'Social post', hint: 'TikTok · Reels' },
             { href: '/app/ads', icon: Megaphone, label: 'Product ad', hint: 'For your brand' },
             { href: '/app/movie', icon: Clapperboard, label: 'AI short film', hint: 'With a story' },
-            { href: '/app/cinematic', icon: Sparkles, label: 'Cinematic shot', hint: 'One great shot' },
+            { href: '/app/social', icon: Smartphone, label: 'Social post', hint: 'TikTok · Reels' },
           ].map((a) => (
             <Link key={a.href} href={a.href} className="flex flex-col gap-1 rounded-2xl border hairline bg-white/[0.03] p-3 text-sm text-fog-100 transition hover:border-iris-400/40 hover:bg-white/[0.06]">
               <a.icon className="size-4 text-iris-300" />

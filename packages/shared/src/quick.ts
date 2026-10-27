@@ -9,6 +9,8 @@ import { COLOR_WORDS } from './objects';
 
 export type QuickContext = {
   clipId?: string;
+  /** Several selected clips (they take the place of the single clip). */
+  clipIds?: string[];
   clipIndex?: number;
   objectId?: string;
   /** Selected stretch of the movie, timeline seconds. */
@@ -102,7 +104,8 @@ export function quickPlan(message: string, ctx: QuickContext): { reply: string; 
   const text = REPLY[lang];
   const ops: PlanOp[] = [];
   const target: 'object' | 'clip' | 'all' = has(W.allWord, s) ? 'all' : ctx.objectId && !has(W.clipWord, s) ? 'object' : ctx.clipId ? 'clip' : 'all';
-  const clipIds = target === 'clip' && ctx.clipId ? [ctx.clipId] : [];
+  const many = ctx.clipIds && ctx.clipIds.length > 1 ? ctx.clipIds : null;
+  const clipIds = target === 'clip' && many ? many : target === 'clip' && ctx.clipId ? [ctx.clipId] : [];
   const adjust = (delta: Record<string, number>) => {
     if (target === 'object' && ctx.objectId && ctx.clipId) ops.push({ op: 'object_adjust', clipId: ctx.clipId, objectId: ctx.objectId, delta });
     else ops.push({ op: 'clip_adjust', clipIds, delta });
@@ -122,7 +125,7 @@ export function quickPlan(message: string, ctx: QuickContext): { reply: string; 
   else if (has(W.cut, s) && has(W.clipWord, s) && ctx.clipId && !ctx.range) ops.push({ op: 'remove_clip', clipId: ctx.clipId });
 
   // Looks: the whole video unless the request points at the clip ("this clip", "this shot").
-  const lookIds = ctx.clipId && has(W.clipWord, s) && !has(W.allWord, s) ? [ctx.clipId] : [];
+  const lookIds = many && !has(W.allWord, s) ? many : ctx.clipId && has(W.clipWord, s) && !has(W.allWord, s) ? [ctx.clipId] : [];
   if (has(W.bw, s)) ops.push({ op: 'look', clipIds: lookIds, key: 'bw' });
   else if (has(W.cinematic, s)) ops.push({ op: 'look', clipIds: lookIds, key: 'cinematic' });
   else if (has(W.vintage, s)) ops.push({ op: 'look', clipIds: lookIds, key: 'vintage' });

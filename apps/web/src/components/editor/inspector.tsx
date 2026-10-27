@@ -3,9 +3,9 @@
 import { useEffect, useState } from 'react';
 import { ArrowLeft, ArrowRight, AudioLines, ChevronsRight, Copy, Crosshair, Film, ImagePlus, Layers, MousePointerClick, Music, Mic, Pause, Plus, RotateCcw, Scissors, Settings2, Sparkles, Trash2, Type } from 'lucide-react';
 import { toast } from 'sonner';
-import { clipDuration, describeEffects, type Timeline } from '@framecraft/shared';
+import { applyPlanOp, clipDuration, describeEffects, LOOKS, type Timeline } from '@framecraft/shared';
 import { api, ApiError, type Asset } from '@/lib/api';
-import { clipStarts, moveClip, newId, splitClip } from '@/lib/editor-store';
+import { clipStarts, moveClip, newId, splitClip, useEditor } from '@/lib/editor-store';
 import { useObjectUi } from '@/lib/object-ui';
 import { Badge, Button, Dialog, Field, Input, NativeSelect, Segmented, Spinner, Switch } from '@/components/ui';
 import { ColorPro } from '@/components/editor/color-pro';
@@ -58,11 +58,13 @@ const HEAD: Record<Focus, { icon: typeof Film; label: string }> = {
 
 /** Properties of whatever is selected — it follows the selection (clip, layer, audio, object). */
 export function Inspector(p: InspectorProps) {
+  const extra = useEditor((s) => s.extra);
   const sel = p.timeline.clips.find((c) => c.id === p.selectedClipId);
   const focus: Focus = p.focus === 'clip' && !sel ? 'project' : p.focus;
   const H = HEAD[focus];
   const index = sel ? p.timeline.clips.indexOf(sel) : -1;
-  const title = focus === 'clip' && sel ? `Clip ${index + 1}` : focus === 'layer' ? (p.timeline.layers.find((l) => l.id === p.selectedLayer)?.name ?? 'Layers') : H.label;
+  const many = focus === 'clip' && sel && extra.length > 0;
+  const title = many ? `${extra.length + 1} clips selected` : focus === 'clip' && sel ? `Clip ${index + 1}` : focus === 'layer' ? (p.timeline.layers.find((l) => l.id === p.selectedLayer)?.name ?? 'Layers') : H.label;
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b hairline px-3">
@@ -83,11 +85,71 @@ export function Inspector(p: InspectorProps) {
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {focus === 'clip' && sel && <ClipPanel {...p} />}
+        {focus === 'clip' && sel && (many ? <BatchPanel {...p} ids={[sel.id, ...extra]} /> : <ClipPanel {...p} />)}
         {focus === 'layer' && <LayersPanel timeline={p.timeline} apply={p.apply} playhead={p.playhead} selectedId={p.selectedLayer} setSelectedId={p.setSelectedLayer} logoAssetId={p.timeline.logo?.assetId} onPickAsset={p.onPickLayerAsset} />}
         {focus === 'audio' && <AudioPanel {...p} />}
         {focus === 'object' && <ObjectInspector projectId={p.projectId} timeline={p.timeline} apply={p.apply} playhead={p.playhead} setPlayhead={p.setPlayhead} clipStart={(() => { const t = p.timeline; const ref = useObjectUi.getState().sel; const i = t.clips.findIndex((c) => c.id === ref?.clipId); return i >= 0 ? (clipStarts(t)[i] ?? 0) : 0; })()} />}
         {focus === 'project' && <ProjectPanel {...p} />}
+      </div>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ several clips
+
+function BatchPanel(p: InspectorProps & { ids: string[] }) {
+  const ids = new Set(p.ids);
+  const t = p.timeline;
+  const clips = t.clips.filter((c) => ids.has(c.id));
+  const each = (fn: (c: Timeline['clips'][number], i: number) => void) =>
+    p.apply((tl) => {
+      tl.clips.forEach((c, i) => ids.has(c.id) && fn(c, i));
+      return tl;
+    });
+  const sameSpeed = clips.every((c) => c.speed === clips[0]!.speed) ? clips[0]!.speed : null;
+  const vol = Math.round((clips.reduce((s, c) => s + c.volume, 0) / clips.length) * 100) / 100;
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-fog-400">Changes here apply to all {clips.length} selected clips. Shift- or Ctrl-click a clip on the timeline to add or remove it.</p>
+      <Field label="Transition into the next clip">
+        <div className="flex flex-wrap gap-1">
+          {TRANSITIONS.map((x) => (
+            <button key={x} type="button" onClick={() => each((c, i) => (c.transition = x === 'cut' || i === t.clips.length - 1 ? undefined : { type: x, durationSec: Math.min(0.5, clipDuration(c) / 3) }))} className="rounded-lg border hairline px-2 py-1 text-[11px] text-fog-200 hover:border-white/25">{x}</button>
+          ))}
+        </div>
+      </Field>
+      <Field label={`Speed${sameSpeed ? ` · ${sameSpeed}×` : ' · mixed'}`}>
+        <div className="flex gap-1">
+          {SPEEDS.map((v) => (
+            <button key={v} type="button" onClick={() => each((c) => !c.freezeSec && (c.speed = v))} className={cn('flex-1 rounded-lg border py-1 text-xs', sameSpeed === v ? 'border-iris-400 bg-iris-500/20 text-white' : 'hairline text-fog-300 hover:border-white/25')}>{v}×</button>
+          ))}
+        </div>
+      </Field>
+      <Field label={`Volume · ${Math.round(vol * 100)}%`}>
+        <input type="range" aria-label="Volume of the selected clips" className="w-full" min={0} max={2} step={0.05} value={vol} onChange={(e) => each((c) => (c.volume = Number(e.target.value)))} />
+      </Field>
+      <Field label="Look">
+        <div className="flex flex-wrap gap-1">
+          {LOOKS.map((l) => (
+            <button key={l.key} type="button" onClick={() => p.apply((tl) => applyPlanOp(tl, { op: 'look', clipIds: p.ids, key: l.key }, () => newId('clip')))} className="rounded-lg border hairline px-2 py-1 text-[11px] text-fog-200 hover:border-white/25">{l.label}</button>
+          ))}
+          <button type="button" onClick={() => each((c) => (c.adjust = undefined))} className="rounded-lg border hairline px-2 py-1 text-[11px] text-fog-400 hover:border-white/25">Original</button>
+        </div>
+      </Field>
+      <div className="grid grid-cols-2 gap-2">
+        <Button size="sm" variant="ghost" onClick={() => useEditor.getState().clearExtra()}>Select one</Button>
+        <Button
+          size="sm"
+          variant="danger"
+          disabled={clips.length >= t.clips.length}
+          onClick={() => {
+            p.apply((tl) => ({ ...tl, clips: tl.clips.filter((c) => !ids.has(c.id)) }));
+            p.selectClip(null);
+            toast.success(`Removed ${clips.length} clips — Ctrl+Z undoes it`);
+          }}
+        >
+          <Trash2 /> Remove {clips.length}
+        </Button>
       </div>
     </div>
   );
