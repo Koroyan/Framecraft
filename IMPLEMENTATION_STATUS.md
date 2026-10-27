@@ -9,7 +9,7 @@ _Last updated: 2026-10-27 (Framecraft 5.0 editor)._ Verification legend: **✅ v
 | `pnpm typecheck` (server, web, shared) | ✅ clean |
 | `pnpm lint` (ESLint + typescript-eslint + Next + React Hooks) | ✅ clean |
 | `packages/shared` unit tests | ✅ 45/45 (incl. smart select, object edits, objects that change shape, ripple delete, instant assistant EN/KA/RU, create intent) |
-| `apps/server` unit + integration tests (PGlite Postgres, real FFmpeg, mocked provider HTTP) | ✅ 150/150, 1 skipped (incl. object edit select → track → recolour → export, a shape-changing object exported in its new shape, and AI-result blending through a tracked mask, read back from the exported pixels) |
+| `apps/server` unit + integration tests (PGlite Postgres, real FFmpeg, mocked provider HTTP) | ✅ 152/152, 1 skipped (incl. texts with % drawn in preview and export) (incl. object edit select → track → recolour → export, a shape-changing object exported in its new shape, and AI-result blending through a tracked mask, read back from the exported pixels) |
 | Real paid provider requests | Runway aleph2 video edit run by the user (localized edit result reviewed in the app); 2026-10-25: PIJILO photo ad (TTS + music, 8 credits) and one lip-sync shot (Wan 3.0, 81 credits + 2 for the voice and keyframe of two rejected, uncharged attempts) |
 | Playwright E2E (desktop + Pixel 7) | ✅ 10/10 on the live dev server (5 fixture-only tests skip themselves there so no credits are spent) — incl. `editor-5.spec.ts`: Task A assistant, B object recolour + tracking + export pixels, D full manual edit to MP4, G responsive 1366/1920/tablet, H no lost work |
 | `pnpm build` (server bundle + Next.js production build, 22 routes) | ✅ |

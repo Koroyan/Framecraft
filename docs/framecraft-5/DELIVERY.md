@@ -77,6 +77,25 @@ by design: they need test-fixture mode and would otherwise spend real credits) �
 After the shape-following update: shared 45 ✓ · server 150 ✓ (1 skipped) · Playwright 10 ✓ (5 skipped by
 design) · typecheck, lint and production build clean.
 
+### Hands-on UI test of the Edit workspace (2026-10-27, evening)
+
+A new 9:16 project was built by hand in the browser: three clips uploaded, added, split, trimmed by
+the edge, reordered, deleted with undo/redo, one clip at 2×, a dissolve, a "Summer sale -30%" text,
+music, a black-and-white look, the assistant ("მუსიკა უფრო ჩუმად" → music 40 % quieter, free) and an
+export, read back frame by frame. Fixed on the way:
+
+- **Texts containing "%" came out empty in the preview and in the export** (FFmpeg text expansion) —
+  every user text is literal now (titles, layers, shape labels, subtitles); regression test.
+- **Transitions were invisible in the preview** — they now play there as in the export, and a marker on
+  the timeline opens the transition setting. Transition names are readable, with a seconds unit.
+- **A text added at the playhead was invisible** (first frame of its entrance animation) — the selected
+  layer shows settled while paused; clicking a layer bar puts the playhead inside it.
+- **The tool panel could not be opened** while the assistant was docked right on a narrow screen.
+- Time display showed frames after a dot (00:11.24 meant 11.8 s) — now hundredths of a second.
+- Looks show a swatch and which one is active; storyboard cards and the timeline strip show each
+  clip's look; generated audio is named by type and date; the export dialog plays the result; the
+  audio import and upload questions fit audio; short screens give the timeline room for its lanes.
+
 ## 5. Code map (new or rebuilt)
 
 - `packages/shared/src/objects.ts` — object edits (selection, time scope, effects), transforms, colour function (incl. colourising grey/black objects), track merge.
