@@ -158,7 +158,7 @@ export async function renderTimeline({ timeline, resolve, output, onProgress }: 
       await fsp.writeFile(path.join(dir, `text${i}.txt`), t.text);
       const size = Math.round(t.fontSize * (dims.width / 1080));
       vf.push(
-        `drawtext=${font}textfile=text${i}.txt:fontsize=${size}:fontcolor=${t.color}:x=(w-text_w)/2:y=${POS_Y[t.position]}${
+        `drawtext=${font}textfile=text${i}.txt:expansion=none:fontsize=${size}:fontcolor=${t.color}:x=(w-text_w)/2:y=${POS_Y[t.position]}${
           t.background ? `:box=1:boxcolor=black@0.5:boxborderw=${Math.round(size / 3)}` : ':shadowcolor=black@0.7:shadowx=2:shadowy=2'
         }:enable='between(t,${t.startSec},${t.endSec})'`,
       );
@@ -176,7 +176,7 @@ export async function renderTimeline({ timeline, resolve, output, onProgress }: 
         for (let i = 0; i < timeline.subtitles.length; i++) {
           const s = timeline.subtitles[i]!;
           await fsp.writeFile(path.join(dir, `sub${i}.txt`), s.text);
-          vf.push(`drawtext=${font}textfile=sub${i}.txt:fontsize=${fontSize}:fontcolor=white:borderw=3:bordercolor=black:x=(w-text_w)/2:y=h*0.82:enable='between(t,${s.startSec},${s.endSec})'`);
+          vf.push(`drawtext=${font}textfile=sub${i}.txt:expansion=none:fontsize=${fontSize}:fontcolor=white:borderw=3:bordercolor=black:x=(w-text_w)/2:y=h*0.82:enable='between(t,${s.startSec},${s.endSec})'`);
         }
       }
     }

@@ -84,7 +84,8 @@ export async function rasterLayer(ctx: AppContext, user: SessionLike, input: Lay
   const h = Math.min(2160, Math.max(240, Math.round(frameHeight)));
   const hash = rasterHash(layer);
   // v2: Georgian text no longer falls back to boxes in fonts without Georgian glyphs.
-  const key = `raster:v2:${hash}:${h}`;
+  // v3: text with a "%" is drawn (it used to come out empty).
+  const key = `raster:v3:${hash}:${h}`;
   const hit = await derived(ctx, user.id, key);
   if (hit) return { assetId: hit.id, url: await assetUrl(ctx, hit), hash, ...(hit.source as { width: number; height: number; rows: number }) };
   return withTemp(async (dir) => {

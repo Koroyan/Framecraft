@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { Crosshair, Pipette, Plus, RotateCcw, Trash2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { curveFn, gradeSchema, HSL_BANDS, hslToRgb, LOOKS, maskIsEmpty, rgbToHex, rgbToHsl, type ColorReplace, type EditMask, type GradeSettings, type HslBand } from '@framecraft/shared';
+import { lookActive, lookSwatch } from '@/lib/looks';
 import { api, ApiError } from '@/lib/api';
 import { Button, Field, NativeSelect, Segmented } from '@/components/ui';
 import { cn } from '@/lib/utils';
@@ -344,9 +345,15 @@ function Looks({ grade, onApply, onLut, otherShots, onMatchFrom }: { grade: Grad
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-1.5">
-        {LOOKS.map((l) => (
-          <button key={l.key} type="button" onClick={() => onApply(l.grade)} className="rounded-lg border hairline px-2 py-1.5 text-left text-[11px] text-fog-100 hover:border-white/25">{l.label}</button>
-        ))}
+        {LOOKS.map((l) => {
+          const on = lookActive(l.grade, grade as unknown as Record<string, unknown>);
+          return (
+            <button key={l.key} type="button" aria-pressed={on} onClick={() => onApply(l.grade)} className={cn('flex items-center gap-2 rounded-lg border px-2 py-1.5 text-left text-[11px] hover:border-white/25', on ? 'border-iris-400 bg-iris-500/15 text-white' : 'hairline text-fog-100')}>
+              <span aria-hidden className="h-4 w-6 shrink-0 rounded" style={{ background: lookSwatch(l.grade) }} />
+              <span className="truncate">{l.label}</span>
+            </button>
+          );
+        })}
       </div>
       {presets.length > 0 && (
         <div className="flex flex-wrap gap-1.5">

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { ArrowLeft, ArrowRight, AudioLines, ChevronsRight, Copy, Crosshair, Film, ImagePlus, Layers, MousePointerClick, Music, Mic, Pause, Plus, RotateCcw, Scissors, Settings2, Sparkles, Trash2, Type } from 'lucide-react';
 import { toast } from 'sonner';
 import { applyPlanOp, clipDuration, describeEffects, LOOKS, type Timeline } from '@framecraft/shared';
+import { TRANSITION_LABEL, TRANSITIONS } from '@/lib/transitions';
 import { api, ApiError, type Asset } from '@/lib/api';
 import { clipStarts, moveClip, newId, splitClip, useEditor } from '@/lib/editor-store';
 import { useObjectUi } from '@/lib/object-ui';
@@ -18,7 +19,6 @@ export type Focus = 'clip' | 'layer' | 'audio' | 'object' | 'project';
 type Apply = (fn: (t: Timeline) => Timeline) => void;
 type Logo = NonNullable<Timeline['logo']>;
 
-const TRANSITIONS = ['cut', 'fade', 'dissolve', 'fadeblack', 'wipeleft', 'wiperight', 'slideup', 'circleopen'] as const;
 const SPEEDS = [0.5, 1, 1.5, 2, 3] as const;
 
 export type InspectorProps = {
@@ -114,7 +114,7 @@ function BatchPanel(p: InspectorProps & { ids: string[] }) {
       <Field label="Transition into the next clip">
         <div className="flex flex-wrap gap-1">
           {TRANSITIONS.map((x) => (
-            <button key={x} type="button" onClick={() => each((c, i) => (c.transition = x === 'cut' || i === t.clips.length - 1 ? undefined : { type: x, durationSec: Math.min(0.5, clipDuration(c) / 3) }))} className="rounded-lg border hairline px-2 py-1 text-[11px] text-fog-200 hover:border-white/25">{x}</button>
+            <button key={x} type="button" onClick={() => each((c, i) => (c.transition = x === 'cut' || i === t.clips.length - 1 ? undefined : { type: x, durationSec: Math.min(0.5, clipDuration(c) / 3) }))} className="rounded-lg border hairline px-2 py-1 text-[11px] text-fog-200 hover:border-white/25">{TRANSITION_LABEL[x]}</button>
           ))}
         </div>
       </Field>
@@ -215,11 +215,14 @@ function ClipPanel(p: InspectorProps) {
             <input type="range" aria-label="Clip volume" className="w-full" min={0} max={2} step={0.05} value={sel.volume} onChange={(e) => set((c) => (c.volume = Number(e.target.value)))} />
           </Field>
           <Field label="Transition into the next clip">
-            <div className="grid grid-cols-[1fr_80px] gap-2">
+            <div className="grid grid-cols-[1fr_92px] gap-2">
               <NativeSelect aria-label="Transition" value={sel.transition?.type ?? 'cut'} onChange={(e) => set((c) => (c.transition = e.target.value === 'cut' ? undefined : { type: e.target.value as (typeof TRANSITIONS)[number], durationSec: c.transition?.durationSec ?? 0.5 }))}>
-                {TRANSITIONS.map((x) => <option key={x}>{x}</option>)}
+                {TRANSITIONS.map((x) => <option key={x} value={x}>{TRANSITION_LABEL[x]}</option>)}
               </NativeSelect>
-              <Input type="number" step={0.1} min={0.1} max={3} aria-label="Transition seconds" value={sel.transition?.durationSec ?? 0.5} disabled={!sel.transition} onChange={(e) => set((c) => c.transition && (c.transition.durationSec = Number(e.target.value)))} className="h-9" />
+              <label className="relative" title="How long the transition lasts">
+                <Input type="number" step={0.1} min={0.1} max={3} aria-label="Transition seconds" value={sel.transition?.durationSec ?? 0.5} disabled={!sel.transition} onChange={(e) => set((c) => c.transition && (c.transition.durationSec = Number(e.target.value)))} className="h-9 pr-6" />
+                <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-fog-400">s</span>
+              </label>
             </div>
           </Field>
           <div className="grid grid-cols-2 gap-2">

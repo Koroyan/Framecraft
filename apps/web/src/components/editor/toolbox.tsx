@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { AudioLines, Bot, Captions, ChevronsLeft, ChevronsRight, Crosshair, Film, Image as ImageIcon, Mic, MousePointerClick, Music, Palette, Plus, Shapes, Sparkles, Type, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { LOOKS, layerSchema, snapClipsToBeats, type LayerInput, type Timeline } from '@framecraft/shared';
+import { lookActive, lookSwatch } from '@/lib/looks';
 import { api, ApiError, type Asset } from '@/lib/api';
 import { Button, NativeSelect } from '@/components/ui';
 import { MediaDropzone } from '@/components/studio/media-dropzone';
@@ -227,7 +228,7 @@ function AudioTab(p: Parameters<typeof EditorToolbox>[0] & { list: Asset[] }) {
   return (
     <div className="space-y-3">
       <Button size="sm" variant="secondary" className="w-full" onClick={p.onTts}><Mic /> AI voice-over</Button>
-      <MediaDropzone compact accept="audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/ogg,.mp3,.wav,.m4a" label="Import music or sound" onAsset={() => p.onUploaded()} />
+      <MediaDropzone compact accept="audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/ogg,.mp3,.wav,.m4a" label="Import music or sound" hint="MP3, WAV, M4A · music or sound effects" onAsset={() => p.onUploaded()} />
       <div className="space-y-2 rounded-xl border hairline p-2.5">
         <div className="flex items-center gap-1.5 text-xs font-medium text-white"><Wand2 className="size-3.5 text-iris-300" /> Cut to the beat</div>
         {!music ? (
@@ -309,26 +310,18 @@ function FiltersTab({ timeline, apply, selectedClipId }: { timeline: Timeline; a
         <button type="button" onClick={() => set(undefined, all)} className="rounded-lg border hairline p-2 text-left text-[11px] text-fog-200 hover:border-white/25">
           <span className="mb-1 block h-8 rounded bg-gradient-to-r from-zinc-500 to-zinc-300" />Original
         </button>
-        {LOOKS.map((l) => (
-          <button key={l.key} type="button" onClick={() => set(l.grade, all)} className="rounded-lg border hairline p-2 text-left text-[11px] text-fog-200 hover:border-iris-400/60">
-            <span className="mb-1 block h-8 rounded" style={{ background: swatch(l.grade) }} />
-            {l.label}
-          </button>
-        ))}
+        {LOOKS.map((l) => {
+          const on = !all && lookActive(l.grade, sel?.adjust as Record<string, unknown> | undefined);
+          return (
+            <button key={l.key} type="button" aria-pressed={on} onClick={() => set(l.grade, all)} className={cn('rounded-lg border p-2 text-left text-[11px] hover:border-iris-400/60', on ? 'border-iris-400 bg-iris-500/15 text-white' : 'hairline text-fog-200')}>
+              <span className="mb-1 block h-8 rounded" style={{ background: lookSwatch(l.grade) }} />
+              {l.label}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
-}
-
-/** A rough colour preview of a look from its temperature / saturation / lift and gain. */
-function swatch(g: Record<string, unknown>) {
-  const temp = Number(g.temperature ?? 0);
-  const sat = Number(g.saturation ?? 0) + Number(g.vibrance ?? 0);
-  const exp = Number(g.exposure ?? 0);
-  const warm = Math.round(120 + temp * 200);
-  const cool = Math.round(140 - temp * 160);
-  const l = Math.round(40 + exp * 60);
-  return `linear-gradient(90deg, hsl(${cool + 60}, ${Math.round(30 + sat * 60)}%, ${l - 15}%), hsl(${warm - 90}, ${Math.round(45 + sat * 60)}%, ${l + 15}%))`;
 }
 
 function TransitionsTab({ timeline, apply, selectedClipId }: { timeline: Timeline; apply: Apply; selectedClipId: string | null }) {

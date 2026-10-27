@@ -382,7 +382,7 @@ export async function generateFixtureClip(output: string, o: { width: number; he
     const big = fit(o.title.slice(0, 80), Math.round(Math.min(o.width, o.height) / 14));
     const small = fit(o.subtitle ?? '', Math.round(Math.min(o.width, o.height) / 25));
     const draw = (file: string, size: number, y: string, color = 'white') =>
-      `drawtext=${font}textfile=${file}:fontsize=${size}:fontcolor=${color}:x=(w-text_w)/2:y=${y}:box=1:boxcolor=black@0.55:boxborderw=${Math.round(size / 3)}`;
+      `drawtext=${font}textfile=${file}:expansion=none:fontsize=${size}:fontcolor=${color}:x=(w-text_w)/2:y=${y}:box=1:boxcolor=black@0.55:boxborderw=${Math.round(size / 3)}`;
     const vf = [
       `hue=h=t*12`,
       draw('label.txt', small, `h*0.08`, '#FFD54F'),
@@ -478,8 +478,8 @@ export async function generatePlaceholderImage(output: string, o: { width: numbe
     await fsp.writeFile(path.join(dir, 'sub.txt'), (o.subtitle ?? 'Placeholder frame - not AI generated').slice(0, 90));
     const size = Math.round(Math.min(o.width, o.height) / 12);
     const vf = [
-      `drawtext=${font}textfile=title.txt:fontsize=${size}:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2`,
-      `drawtext=${font}textfile=sub.txt:fontsize=${Math.round(size * 0.5)}:fontcolor=#9aa0b4:x=(w-text_w)/2:y=h*0.62`,
+      `drawtext=${font}textfile=title.txt:expansion=none:fontsize=${size}:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2`,
+      `drawtext=${font}textfile=sub.txt:expansion=none:fontsize=${Math.round(size * 0.5)}:fontcolor=#9aa0b4:x=(w-text_w)/2:y=h*0.62`,
     ].join(',');
     await ffmpeg(['-f', 'lavfi', '-i', `gradients=s=${o.width}x${o.height}:c0=#141427:c1=#2a1f4d:duration=1`, '-frames:v', '1', '-vf', vf, 'out.jpg'], { cwd: dir }).catch(async () => {
       // `gradients` source is missing from older FFmpeg builds.

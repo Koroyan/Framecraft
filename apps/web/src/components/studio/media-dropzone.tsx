@@ -29,7 +29,7 @@ type Task = {
 const ACCEPT = 'video/mp4,video/quicktime,video/x-m4v,video/webm,video/x-matroska,.mov,.mp4,.m4v,.mkv,.webm,image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif';
 const CONCURRENCY = 2;
 
-export function MediaDropzone({ onAsset, accept = ACCEPT, kind = 'upload', projectId, compact, label = 'Drop videos and photos here' }: { onAsset: (a: UploadedAsset) => void; accept?: string; kind?: 'upload' | 'reference'; projectId?: string; compact?: boolean; label?: string }) {
+export function MediaDropzone({ onAsset, accept = ACCEPT, kind = 'upload', projectId, compact, label = 'Drop videos and photos here', hint }: { onAsset: (a: UploadedAsset) => void; accept?: string; kind?: 'upload' | 'reference'; projectId?: string; compact?: boolean; label?: string; /** What can be dropped (the default describes videos and photos). */ hint?: string }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [pending, setPending] = useState<File[]>([]);
   const [rights, setRights] = useState(false);
@@ -132,7 +132,7 @@ export function MediaDropzone({ onAsset, accept = ACCEPT, kind = 'upload', proje
       >
         <UploadCloud className={cn('text-iris-300', compact ? 'size-6' : 'size-9')} />
         <span className="text-sm font-medium text-white">{label}</span>
-        {compact ? <span className="text-[11px] text-fog-500">MOV, MP4, photos · any size</span> : <span className="max-w-md text-xs text-fog-400">MOV, MP4, M4V, WebM, MKV, JPG, PNG, WebP, HEIC — straight from the phone, 4K and multi-gigabyte files included. We keep your original and prepare an optimized copy automatically.</span>}
+        {compact ? <span className="text-[11px] text-fog-500">{hint ?? 'MOV, MP4, photos · any size'}</span> : <span className="max-w-md text-xs text-fog-400">{hint ?? 'MOV, MP4, M4V, WebM, MKV, JPG, PNG, WebP, HEIC — straight from the phone, 4K and multi-gigabyte files included. We keep your original and prepare an optimized copy automatically.'}</span>}
       </button>
 
       {visible.length > 0 && (
@@ -176,7 +176,7 @@ export function MediaDropzone({ onAsset, accept = ACCEPT, kind = 'upload', proje
             <span className="text-fog-200">I own these files or have permission to use them, including for commercial use where applicable.</span>
           </label>
           <div className="flex items-center justify-between gap-4 rounded-xl border hairline p-3">
-            <span className="text-fog-200">They show identifiable real people</span>
+            <span className="text-fog-200">{pending.length && pending.every((f) => f.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg)$/i.test(f.name)) ? 'They contain identifiable real people’s voices' : 'They show identifiable real people'}</span>
             <Switch checked={people} onCheckedChange={setPeople} label="Contains people" />
           </div>
           {people && <p className="rounded-xl bg-signal-amber/10 p-3 text-xs text-signal-amber">You confirm every identifiable person has consented.</p>}

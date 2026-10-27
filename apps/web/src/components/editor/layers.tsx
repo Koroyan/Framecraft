@@ -37,8 +37,19 @@ export function useRaster(layer: Layer, frameHeight: number): Raster | null {
   return needs ? r : null;
 }
 
+/**
+ * While paused, the selected layer is shown settled (after its entrance, before its exit), so a text
+ * added at the playhead is visible at once and you see what you edit; playback shows the animation.
+ */
+function settledTime(layer: Layer, t: number) {
+  if (t < layer.startSec || t > layer.endSec) return t;
+  const from = layer.startSec + (layer.animIn?.durationSec ?? 0);
+  const to = Math.max(layer.startSec, layer.endSec - (layer.animOut?.durationSec ?? 0) - 1e-3);
+  return Math.min(Math.max(t, Math.min(from, to)), to);
+}
+
 function LayerView({ layer, t, playing, assets, frameH, selected, onSelect, hidden }: { layer: Layer; t: number; playing: boolean; assets: Map<string, Asset>; frameH: number; selected: boolean; onSelect: () => void; hidden: boolean }) {
-  const st = layerStateAt(layer, t);
+  const st = layerStateAt(layer, selected && !playing ? settledTime(layer, t) : t);
   const raster = useRaster(layer, frameH);
   const vid = useRef<HTMLVideoElement>(null);
   const asset = layer.assetId ? assets.get(layer.assetId) : undefined;
@@ -169,7 +180,7 @@ export function LayerStage({ timeline, t, playing, assets, selectedId, onSelect,
   return (
     <>
       {layers.map((l) => <LayerView key={l.id} layer={l} t={t} playing={playing} assets={assets} frameH={frameH} selected={l.id === selectedId} onSelect={() => onSelect(l.id)} hidden={hidden.has(l.track)} />)}
-      {sel && !locked.has(sel.track) && !hidden.has(sel.track) && <TransformBox layer={sel} t={t} frame={frame} onChange={(p) => onChange(sel.id, p)} />}
+      {sel && !locked.has(sel.track) && !hidden.has(sel.track) && <TransformBox layer={sel} t={playing ? t : settledTime(sel, t)} frame={frame} onChange={(p) => onChange(sel.id, p)} />}
     </>
   );
 }

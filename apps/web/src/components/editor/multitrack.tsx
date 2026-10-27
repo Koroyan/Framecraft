@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
-import { Captions, Film, Layers, Mic, Minus, Music2, Plus, Type } from 'lucide-react';
+import { Blend, Captions, Film, Layers, Mic, Minus, Music2, Plus, Type } from 'lucide-react';
 import { lostSpans, timelineDuration, type Timeline } from '@framecraft/shared';
 import type { Asset } from '@/lib/api';
 import { clipLen, clipStarts } from '@/lib/editor-store';
+import { transitionLabel } from '@/lib/transitions';
 import { cn, seconds } from '@/lib/utils';
 
 const LANE = 'relative h-9 rounded-md bg-white/[0.025]';
@@ -240,7 +241,11 @@ export function MultiTrack({
                         role="button"
                         tabIndex={0}
                         aria-label={`Layer ${l.name ?? l.kind}`}
-                        onClick={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          // Like a clip: the playhead goes where you clicked (inside the layer), so it shows.
+                          e.stopPropagation();
+                          onSeek(Math.min(l.endSec - 0.01, Math.max(l.startSec, timeAt(e.clientX))));
+                        }}
                         className={cn('absolute inset-y-1 cursor-grab truncate rounded px-2 text-[9px] leading-7', l.kind === 'text' ? 'bg-signal-amber/25 text-signal-amber' : l.kind === 'shape' ? 'bg-pink-500/25 text-pink-200' : 'bg-signal-blue/25 text-signal-blue', selectedLayer === l.id && 'ring-1 ring-white')}
                         style={{ left: x(l.startSec), width: Math.max(6, x(l.endSec - l.startSec)) }}
                         onPointerDown={down('move')}
@@ -331,6 +336,35 @@ export function MultiTrack({
                         </>
                       )}
                     </div>
+                  );
+                })}
+                {/* Transitions: a marker on each blend; clicking it opens that clip's transition setting. */}
+                {timeline.clips.map((c, i) => {
+                  const tr = c.transition;
+                  const next = starts[i + 1];
+                  if (!tr || next === undefined) return null;
+                  const name = transitionLabel(tr.type);
+                  return (
+                    <button
+                      key={`tr-${c.id}`}
+                      type="button"
+                      title={`${name} · ${tr.durationSec}s — click to change`}
+                      aria-label={`Transition after clip ${i + 1}: ${name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelectClip(c.id, next + tr.durationSec / 2, false);
+                        // Bring the setting into view once the inspector shows this clip.
+                        setTimeout(() => {
+                          const field = document.querySelector<HTMLSelectElement>('select[aria-label="Transition"]');
+                          field?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                          field?.focus({ preventScroll: true });
+                        }, 80);
+                      }}
+                      className="absolute top-1/2 z-20 grid size-5 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-md border border-white/30 bg-ink-900/90 text-white shadow hover:border-iris-300 hover:text-iris-200"
+                      style={{ left: x(next + tr.durationSec / 2) }}
+                    >
+                      <Blend className="size-3" />
+                    </button>
                   );
                 })}
               </div>

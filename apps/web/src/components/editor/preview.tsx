@@ -14,13 +14,15 @@ const POS_CLASS = { top: 'top-[10%]', center: 'top-1/2 -translate-y-1/2', bottom
 
 type Logo = NonNullable<Timeline['logo']>;
 
-/** Frame-accurate time code: 00:03.12 (frames after the dot). */
-export function timecode(t: number, fps = 30) {
-  const s = Math.max(0, t);
-  const m = Math.floor(s / 60);
-  const sec = Math.floor(s % 60);
-  const f = Math.floor((s - Math.floor(s)) * fps);
-  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(f).padStart(2, '0')}`;
+/**
+ * Time as minutes:seconds with hundredths (00:03.40 = 3.4 s), the same units as the rest of the
+ * editor; it still changes on every one-frame step.
+ */
+export function timecode(t: number) {
+  const cs = Math.floor(Math.max(0, t) * 100 + 1e-6);
+  const m = Math.floor(cs / 6000);
+  const sec = Math.floor((cs % 6000) / 100);
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cs % 100).padStart(2, '0')}`;
 }
 
 /**
@@ -300,6 +302,42 @@ export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, s
   };
 
   const fade = clip ? Math.min(1, clip.fadeInSec ? clipT / clip.fadeInSec : 1, clip.fadeOutSec ? (clipLenNow - clipT) / clip.fadeOutSec : 1) * (clip.opacity ?? 1) : 1;
+
+  // Transitions, as in the export: during the blend the previous clip is drawn over this one. It is
+  // mounted a moment early (hidden) so it is loaded and in step when the blend starts.
+  const prevClip = index > 0 ? timeline.clips[index - 1] : undefined;
+  const blendDur = prevClip?.transition && prevClip.transition.type !== 'cut' ? prevClip.transition.durationSec : 0;
+  const blending = Boolean(blendDur && clipT >= 0 && clipT < blendDur);
+  const nextStart = starts[index + 1];
+  const outIndex = blending ? index - 1 : clip?.transition && clip.transition.type !== 'cut' && nextStart !== undefined && playhead >= nextStart - 1.5 ? index : -1;
+  const outClip = outIndex >= 0 ? timeline.clips[outIndex] : undefined;
+  const outAsset = outClip ? assets.get(outClip.assetId) : undefined;
+  const outTime = outClip ? (outClip.freezeSec ? outClip.inSec : outClip.inSec + (playhead - (starts[outIndex] ?? 0)) * (outClip.speed || 1)) : 0;
+  const blendP = blending ? Math.min(1, Math.max(0, clipT / blendDur)) : 0;
+  const outVideo = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const ov = outVideo.current;
+    if (!ov || !outClip) return;
+    ov.playbackRate = outClip.freezeSec ? 1 : outClip.speed || 1;
+    if (Math.abs(ov.currentTime - outTime) > (playing ? 0.25 : 0.004)) ov.currentTime = Math.max(0, outTime);
+    if (playing && !outClip.freezeSec) void ov.play().catch(() => undefined);
+    else ov.pause();
+  }, [outClip, outTime, playing]);
+  const outStyle = ((): React.CSSProperties => {
+    if (!blending) return { opacity: 0 };
+    const type = prevClip?.transition?.type;
+    if (type === 'fadeblack') return { opacity: blendP < 0.5 ? 1 : 0 };
+    if (type === 'wipeleft') return { clipPath: `inset(0 ${blendP * 100}% 0 0)` };
+    if (type === 'wiperight') return { clipPath: `inset(0 0 0 ${blendP * 100}%)` };
+    if (type === 'slideup') return { transform: `translateY(${-blendP * 100}%)` };
+    if (type === 'circleopen') {
+      const r = (blendP * Math.hypot(size.w, size.h)) / 2;
+      const m = `radial-gradient(circle at 50% 50%, transparent ${r}px, black ${r + 1}px)`;
+      return { maskImage: m, WebkitMaskImage: m };
+    }
+    return { opacity: 1 - blendP }; // fade, dissolve
+  })();
+  const blackOver = blending && prevClip?.transition?.type === 'fadeblack' ? (blendP < 0.5 ? blendP * 2 : (1 - blendP) * 2) : 0;
   const overlays = timeline.overlays.filter((o) => playhead >= o.startSec && playhead <= o.endSec);
   const texts = timeline.texts.filter((t) => playhead >= t.startSec && playhead <= t.endSec);
   const subs = timeline.burnSubtitles ? timeline.subtitles.filter((s) => playhead >= s.startSec && playhead <= s.endSec) : [];
@@ -347,6 +385,10 @@ export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, s
           ) : (
             <div className="grid size-full place-items-center px-2 text-center text-[11px] leading-snug text-fog-400">Add a clip from Media</div>
           )}
+          {outClip && outAsset && (
+            <video key={outClip.id} ref={outVideo} src={outAsset.url} crossOrigin="anonymous" muted playsInline preload="auto" aria-hidden className="pointer-events-none absolute inset-0 size-full object-cover" style={outStyle} />
+          )}
+          {blackOver > 0 && <div className="pointer-events-none absolute inset-0 bg-black" style={{ opacity: blackOver }} />}
           {overlays.map((o) => {
             const a = assets.get(o.assetId);
             if (!a) return null;
@@ -390,7 +432,7 @@ export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, s
         </button>
         <button type="button" aria-label="Next frame" title="Next frame (→)" onClick={() => step(1)} className="grid size-8 place-items-center rounded-lg text-fog-300 hover:bg-white/[0.06] hover:text-white"><ChevronRight className="size-4" /></button>
         <span className={cn('shrink-0 text-center font-mono text-[11px] tabular-nums text-fog-300', compact ? 'w-[4.5rem]' : 'w-[8.5rem]')} aria-label="Time">
-          <span className="text-white">{timecode(playhead, fps)}</span>{compact ? null : <> / {timecode(total, fps)}</>}
+          <span className="text-white">{timecode(playhead)}</span>{compact ? null : <> / {timecode(total)}</>}
         </span>
         <span className="flex-1" />
         <select aria-label="Safe zones" className={cn('h-8 rounded-lg border hairline bg-ink-900 px-1.5 text-[11px] text-fog-200', compact && 'hidden')} value={safe} onChange={(e) => setSafe(e.target.value as typeof safe)}>

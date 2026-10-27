@@ -51,9 +51,13 @@ export function ExportDialog({ open, onOpenChange, projectId, timeline }: { open
           <Card className="p-3 text-sm">
             {job.status === 'completed' ? <div className="text-fog-100">{job.phase}</div> : <ProgressBar progress={job.progress} etaSec={job.etaSec} label={job.phase} />}
             {job.status === 'completed' && job.outputUrl && (
-              <a href={job.outputUrl} download className={cn(buttonVariants({ variant: 'white', size: 'sm' }), 'mt-3')} data-testid="export-download">
-                <Download /> Download {job.isFixture ? '(contains test fixtures)' : ''}
-              </a>
+              <>
+                {/* Watch the result right here, before saving it. */}
+                <video src={job.outputUrl} controls playsInline preload="metadata" className="mt-3 max-h-[34dvh] w-full rounded-lg bg-black object-contain" data-testid="export-player" />
+                <a href={job.outputUrl} download className={cn(buttonVariants({ variant: 'white', size: 'sm' }), 'mt-3')} data-testid="export-download">
+                  <Download /> Download {job.isFixture ? '(contains test fixtures)' : ''}
+                </a>
+              </>
             )}
             {job.status === 'failed' && <p className="mt-2 text-signal-red">{job.error?.message}</p>}
           </Card>

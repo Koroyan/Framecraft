@@ -604,7 +604,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
           {workspace === 'edit' &&
             (wide ? (
               <>
-                <div className="flex min-h-[240px] flex-1">
+                <div className="flex min-h-[200px] flex-1">
                   <div className="shrink-0" data-testid="tool-panel">{toolbox}</div>
                   {leftOpen ? <ResizeHandle axis="x" label="Resize the tool panel" {...resize('leftWidth', 1)} /> : <span className="w-2 shrink-0" />}
                   <section aria-label="Preview" className="min-w-0 flex-1 rounded-2xl border hairline bg-ink-900/40 p-2">{previewEl}</section>
@@ -690,10 +690,10 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       <ObjectAiDialog projectId={id} timeline={timeline} apply={apply} onStarted={() => void refetchStudio()} />
 
       <Dialog open={helpOpen} onOpenChange={setHelpOpen} title="Keyboard shortcuts">
-        <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">
+        <div className="grid grid-cols-[auto_1fr] items-start gap-x-6 gap-y-2 text-sm">
           {SHORTCUTS.map(([k, v]) => (
             <div key={k} className="contents">
-              <kbd className="rounded-md border hairline bg-white/[0.04] px-2 py-0.5 text-xs text-fog-100">{k}</kbd>
+              <kbd className="justify-self-start whitespace-nowrap rounded-md border hairline bg-white/[0.04] px-2 py-0.5 text-xs text-fog-100">{k}</kbd>
               <span className="text-fog-300">{v}</span>
             </div>
           ))}

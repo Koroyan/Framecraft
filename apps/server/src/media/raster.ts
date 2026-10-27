@@ -73,6 +73,8 @@ export async function rasterizeLayer(layer: Layer, frameHeight: number, outFile:
       const parts = [
         'fontfile=font.ttf',
         `textfile=t${i}.txt`,
+        // Literal text: no %{…} expansion (a "-30%" would otherwise draw nothing).
+        'expansion=none',
         `fontsize=${size}`,
         `fontcolor=${st.gradientTo ? 'white' : ffColor(st.color)}`,
         `x=${pad}`,
@@ -136,7 +138,7 @@ async function rasterShape(layer: Layer, k: number, dir: string, outFile: string
   if (sh.label) {
     await fsp.copyFile(fontFile('bold'), path.join(dir, 'font.ttf'));
     fs.writeFileSync(path.join(dir, 'label.txt'), sh.label);
-    vf.push(`drawtext=fontfile=font.ttf:textfile=label.txt:fontsize=${Math.round(H * 0.42)}:fontcolor=${ffColor(sh.labelColor)}:x=(w-text_w)/2${sh.type === 'arrow' ? '*0.62' : ''}:y=(h-text_h)/2${sh.type === 'bubble' ? '*0.8' : ''}`);
+    vf.push(`drawtext=fontfile=font.ttf:textfile=label.txt:expansion=none:fontsize=${Math.round(H * 0.42)}:fontcolor=${ffColor(sh.labelColor)}:x=(w-text_w)/2${sh.type === 'arrow' ? '*0.62' : ''}:y=(h-text_h)/2${sh.type === 'bubble' ? '*0.8' : ''}`);
   }
   await ffmpeg(['-f', 'lavfi', '-i', `color=c=black@0.0:s=${W}x${H},format=rgba`, '-vf', vf.join(','), '-frames:v', '1', outFile], { cwd: dir });
   return { file: outFile, width: W, height: H, rows: 1 };
