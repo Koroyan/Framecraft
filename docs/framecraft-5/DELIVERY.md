@@ -96,6 +96,22 @@ export, read back frame by frame. Fixed on the way:
   clip's look; generated audio is named by type and date; the export dialog plays the result; the
   audio import and upload questions fit audio; short screens give the timeline room for its lanes.
 
+### Design pass for small laptop screens (2026-10-27, night)
+
+Checked on a 1280×585 browser viewport (the owner's laptop):
+
+- **One header row** in the editor — the app bar's home link, search, credits and notifications live
+  in the editor's own header, giving the workspace 48 px more height; the timeline also has a single
+  header row (title, zoom, clip tools, + Clip, Upload). Result: a larger preview, more inspector
+  controls in view, and the layer, video and music lanes all visible without scrolling.
+- **Clip tools above the timeline** (split, duplicate, freeze, delete) whenever a clip is selected;
+  split takes the clip under the playhead if the selection is elsewhere (never a silent no-op).
+- **Inspector** leads with speed, volume and transition; plain labels; the tool panel can be opened
+  beside a docked assistant; the Shot editor fits with its own play bar.
+- **Captions**: lines can be typed and edited by hand (free); automatic subtitles show what is
+  transcribed and the price and wait for a click (they used to run — and charge — on one click);
+  their times now follow the clip's position, trim and speed; "no speech found" is said plainly.
+
 ## 5. Code map (new or rebuilt)
 
 - `packages/shared/src/objects.ts` — object edits (selection, time scope, effects), transforms, colour function (incl. colourising grey/black objects), track merge.
