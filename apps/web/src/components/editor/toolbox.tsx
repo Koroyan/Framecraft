@@ -9,7 +9,7 @@ import { api, ApiError, type Asset } from '@/lib/api';
 import { Button, NativeSelect } from '@/components/ui';
 import { MediaDropzone } from '@/components/studio/media-dropzone';
 import { LAYER_TEMPLATES } from '@/components/editor/layers';
-import { newId } from '@/lib/editor-store';
+import { freeTrack, newId } from '@/lib/editor-store';
 import { cn, seconds } from '@/lib/utils';
 
 /*
@@ -33,7 +33,7 @@ const TABS: { key: Tab; label: string; icon: typeof Film }[] = [
 ];
 
 /** TikTok-style text looks (rendered by the server exactly like the preview). */
-const TEXT_STYLES: { key: string; label: string; demo: React.CSSProperties; make: (s: number) => LayerInput }[] = [
+export const TEXT_STYLES: { key: string; label: string; demo: React.CSSProperties; make: (s: number) => LayerInput }[] = [
   { key: 'yellow', label: 'Bold yellow', demo: { color: '#FFE14D', WebkitTextStroke: '1px #000', fontWeight: 900 }, make: (s) => ({ id: newId('ly'), name: 'Bold yellow', kind: 'text', track: 2, startSec: s, endSec: s + 2.5, x: 0.5, y: 0.7, w: 0.84, text: { content: 'ეს უნდა ნახო', font: 'black', size: 84, color: '#FFE14D', stroke: { color: '#000000', width: 8 } }, animIn: { type: 'pop', durationSec: 0.3 } }) },
   { key: 'neon', label: 'Neon glow', demo: { color: '#7CF7FF', textShadow: '0 0 8px #00E5FF', fontWeight: 800 }, make: (s) => ({ id: newId('ly'), name: 'Neon', kind: 'text', track: 2, startSec: s, endSec: s + 3, x: 0.5, y: 0.3, w: 0.84, text: { content: 'NEW DROP', font: 'black', size: 96, color: '#7CF7FF', gradientTo: '#FF4FD8', shadow: { color: '#00E5FF', opacity: 0.8, offset: 0 } }, animIn: { type: 'zoom', durationSec: 0.4 } }) },
   { key: 'boxed', label: 'Boxed white', demo: { color: '#111', background: '#fff', padding: '0 4px', fontWeight: 700 }, make: (s) => ({ id: newId('ly'), name: 'Boxed', kind: 'text', track: 2, startSec: s, endSec: s + 3, x: 0.5, y: 0.72, w: 0.8, text: { content: 'შენი ტექსტი', font: 'bold', size: 62, color: '#111111', background: { color: '#FFFFFF', opacity: 1, padding: 18 } }, animIn: { type: 'slide_up', durationSec: 0.35 } }) },
@@ -81,7 +81,8 @@ export function EditorToolbox(p: {
   const at = Math.round(playhead * 10) / 10;
   const list = [...p.assets.values()].filter((a) => a.kind !== 'thumbnail' && a.kind !== 'frame');
   const addLayer = (l: LayerInput) => {
-    const layer = layerSchema.parse(l);
+    const made = layerSchema.parse(l);
+    const layer = { ...made, track: freeTrack(timeline, made.startSec, made.endSec, made.track) };
     apply((t) => ({ ...t, layers: [...t.layers, layer] }));
     p.onSelectLayer(layer.id);
   };
@@ -275,7 +276,7 @@ function audioLabel(a: Asset) {
   return Number.isNaN(d.getTime()) ? what : `${what} · ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
 }
 
-function CaptionsTab({ timeline, apply, transcribe, playhead }: { timeline: Timeline; apply: Apply; transcribe: React.ReactNode; playhead: number }) {
+export function CaptionsTab({ timeline, apply, transcribe, playhead }: { timeline: Timeline; apply: Apply; transcribe: React.ReactNode; playhead: number }) {
   const [style, setStyle] = useState(CAPTION_STYLES[0]!.key);
   const subs = timeline.subtitles;
   const styled = timeline.layers.filter((l) => l.name === 'Caption (auto)').length;

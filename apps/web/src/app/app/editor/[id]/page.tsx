@@ -2,7 +2,7 @@
 
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, CheckCheck, ChevronsLeft, Copy, Crosshair, Download, Film, History, Keyboard, LayoutGrid, Network, Plus, Redo2, Save, Scissors, Snowflake, Trash2, Undo2, Upload } from 'lucide-react';
+import { Bot, CheckCheck, ChevronsLeft, Copy, Crosshair, Download, Film, History, Keyboard, LayoutGrid, Network, Plus, Redo2, Save, Scissors, SlidersHorizontal, Snowflake, Trash2, Undo2, Upload } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { rippleDelete, swapShotVersion, timelineDuration, type Timeline } from '@framecraft/shared';
@@ -16,6 +16,7 @@ import { useEditorChrome } from '@/components/editor-chrome';
 import { Button, Dialog, Skeleton, buttonVariants } from '@/components/ui';
 import { useUploader } from '@/components/studio/upload';
 import { MultiTrack } from '@/components/editor/multitrack';
+import { SimpleEditor } from '@/components/editor/simple-editor';
 import { StoryGraph } from '@/components/editor/story-graph';
 import { Storyboard } from '@/components/editor/storyboard';
 import { ShotEditor } from '@/components/editor/shot-editor';
@@ -77,6 +78,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     if (!crowded) setLeftForced(false);
   }, [crowded]);
   const [playhead, setPlayhead] = useState(0);
+  const [playing, setPlaying] = useState(false);
   const playheadRef = useRef(0);
   playheadRef.current = playhead;
   const [range, setRange] = useState<{ start: number; end: number } | null>(null);
@@ -254,6 +256,13 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasTimeline]);
 
+  // The simple editor is the default for your own videos; AI films and ads keep the full studio.
+  const aiProject = Boolean(timeline?.clips.some((c) => c.shotId) && (tq.data?.project.kind === 'movie' || tq.data?.project.kind === 'ad'));
+  const simple = layout.simple && !aiProject;
+  useEffect(() => {
+    if (simple) setWorkspace('edit');
+  }, [simple]);
+
   const openShot = useCallback(
     (clipId: string, compare: string | null = null) => {
       select(clipId);
@@ -401,6 +410,28 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     />
   );
 
+  const simplePreviewEl = (
+    <Preview
+      timeline={timeline}
+      assets={assets}
+      playhead={playhead}
+      setPlayhead={setPlayhead}
+      onLogoMove={(pos) => apply((t) => ({ ...t, logo: t.logo ? { ...t.logo, ...pos } : t.logo }))}
+      selectedLayer={selectedLayer}
+      onSelectLayer={(lid) => {
+        if (lid) setSelectedLayer(lid);
+        else setSelectedLayerRaw(null);
+      }}
+      onLayerChange={(lid, patch) => apply((t) => ({ ...t, layers: t.layers.map((x) => (x.id === lid ? { ...x, ...patch } : x)) }))}
+      onBackgroundClick={() => {
+        if (focus === 'layer') setFocus(sel ? 'clip' : 'project');
+      }}
+      minimal
+      controls={false}
+      onPlayingChange={setPlaying}
+    />
+  );
+
   const timelineTitle = (
     <span className="flex shrink-0 items-center gap-2 text-sm font-medium text-white">
       Timeline <span className="font-normal text-fog-400">· {seconds(total)}</span>
@@ -431,20 +462,21 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       <Button size="sm" variant="ghost" className="h-7" onClick={async () => { const a = await videoUp.pick(); if (a) { addAssetAsClip(a); void assetsQ.refetch(); } }}><Upload /> <span className="max-lg:hidden">Upload video</span></Button>
     </span>
   );
-  const timelineEl = (
+  const timelineFor = (actions: React.ReactNode, musicHint?: string) => (
     <div className="flex h-full min-h-0 flex-col">
       {/* With clips, the title and buttons share the timeline's own header row (one row, not two). */}
       {!timeline.clips.length && (
         <div className="mb-1 flex shrink-0 flex-wrap items-center justify-between gap-2">
           {timelineTitle}
-          {timelineActions}
+          {actions}
         </div>
       )}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {timeline.clips.length ? (
           <MultiTrack
             title={timelineTitle}
-            actions={timelineActions}
+            actions={actions}
+            musicHint={musicHint}
             timeline={timeline}
             assets={assets}
             playhead={playhead}
@@ -487,15 +519,20 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         ) : (
           <div className="grid h-full min-h-24 place-items-center rounded-lg border border-dashed hairline text-center text-sm text-fog-400">
             <div>
-              <p>No clips yet — add videos from Media (left) or upload one.</p>
-              <Button size="sm" className="mt-2" onClick={async () => { const a = await videoUp.pick(); if (a) { addAssetAsClip(a); void assetsQ.refetch(); } }}><Upload /> Upload a video</Button>
+              <p>No clips yet — upload a video or pick one you already have.</p>
+              <div className="mt-2 flex justify-center gap-2">
+                <Button size="sm" onClick={async () => { const a = await videoUp.pick(); if (a) { addAssetAsClip(a); void assetsQ.refetch(); } }}><Upload /> Upload a video</Button>
+                <Button size="sm" variant="secondary" onClick={() => setLibraryFor('clip')}><Plus /> From my media</Button>
+              </div>
             </div>
           </div>
         )}
       </div>
     </div>
   );
+  const timelineEl = timelineFor(timelineActions);
 
+  const transcribeEl = <TranscribeButton projectId={id} timeline={timeline} assets={assets} onCues={(cues) => apply((t) => ({ ...t, burnSubtitles: true, subtitles: cues.map((c) => ({ ...c, id: newId('sub') })) }))} />;
   const toolbox = (
     <EditorToolbox
       projectId={id}
@@ -512,7 +549,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       onTts={() => setTtsOpen(true)}
       onUploaded={() => void assetsQ.refetch()}
       onSelectLayer={(lid) => setSelectedLayer(lid)}
-      transcribe={<TranscribeButton projectId={id} timeline={timeline} assets={assets} onCues={(cues) => apply((t) => ({ ...t, subtitles: cues.map((c) => ({ ...c, id: newId('sub') })) }))} />}
+      transcribe={transcribeEl}
       open={wide ? leftOpen : true}
       onOpenChange={
         wide
@@ -590,6 +627,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
           <h1 className="max-w-[32ch] truncate text-sm font-semibold text-white" title={project.title}>{project.title}</h1>
           <span className="hidden text-[11px] text-fog-500 md:inline" aria-live="polite">{saving ? 'Saving…' : dirty ? 'Unsaved' : 'Saved'}</span>
         </div>
+        {!simple && (
         <div className="flex items-center gap-0.5 rounded-xl border hairline bg-white/[0.02] p-1" role="tablist" aria-label="Workspace">
           {(
             [
@@ -605,17 +643,34 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             </button>
           ))}
         </div>
+        )}
         <div className="flex items-center gap-1">
           <Button size="icon" variant="ghost" aria-label="Undo" title="Undo (Ctrl+Z)" onClick={undo} disabled={!past.length}><Undo2 /></Button>
           <Button size="icon" variant="ghost" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" onClick={redo} disabled={!future.length}><Redo2 /></Button>
-          <Button size="icon" variant="ghost" aria-label="Versions" title="Version history" onClick={() => setVersionsOpen(true)}><History /></Button>
-          <Button size="icon" variant="ghost" aria-label="Save a version" title="Save a version (Ctrl+S)" onClick={() => save(false, 'Manual save')}><Save /></Button>
-          <Button size="icon" variant="ghost" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)" onClick={() => setHelpOpen(true)} className="hidden md:inline-flex"><Keyboard /></Button>
-          {campaignId && <Link href={`/app/ads/footage/${campaignId}`} className={cn(buttonVariants({ size: 'sm', variant: 'ghost' }), 'hidden lg:inline-flex')}>Ad storyboard</Link>}
-          <Button size="sm" variant={layout.assistantOpen ? 'secondary' : 'outline'} aria-pressed={layout.assistantOpen} title="Assistant (Ctrl+J)" onClick={() => layout.toggleAssistant()} className="relative">
-            <Bot /> <span className="hidden sm:inline">Assistant</span>
-            {!layout.assistantOpen && unread > 0 && <span className="absolute -right-1 -top-1 grid size-4 place-items-center rounded-full bg-iris-500 text-[9px] font-semibold text-white">{unread}</span>}
-          </Button>
+          {!simple && (
+            <>
+              <Button size="icon" variant="ghost" aria-label="Versions" title="Version history" onClick={() => setVersionsOpen(true)}><History /></Button>
+              <Button size="icon" variant="ghost" aria-label="Save a version" title="Save a version (Ctrl+S)" onClick={() => save(false, 'Manual save')}><Save /></Button>
+              <Button size="icon" variant="ghost" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)" onClick={() => setHelpOpen(true)} className="hidden md:inline-flex"><Keyboard /></Button>
+              {campaignId && <Link href={`/app/ads/footage/${campaignId}`} className={cn(buttonVariants({ size: 'sm', variant: 'ghost' }), 'hidden lg:inline-flex')}>Ad storyboard</Link>}
+              <Button size="sm" variant={layout.assistantOpen ? 'secondary' : 'outline'} aria-pressed={layout.assistantOpen} title="Assistant (Ctrl+J)" onClick={() => layout.toggleAssistant()} className="relative">
+                <Bot /> <span className="hidden sm:inline">Assistant</span>
+                {!layout.assistantOpen && unread > 0 && <span className="absolute -right-1 -top-1 grid size-4 place-items-center rounded-full bg-iris-500 text-[9px] font-semibold text-white">{unread}</span>}
+              </Button>
+            </>
+          )}
+          {!aiProject && (
+            <button
+              type="button"
+              onClick={() => layout.set({ simple: !layout.simple })}
+              aria-pressed={!layout.simple}
+              aria-label="Pro tools"
+              title={layout.simple ? 'All tools: object selection, colour grading, layers, camera, AI and the assistant' : 'Back to the simple editor'}
+              className={cn('flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition', !layout.simple ? 'border-iris-400/60 bg-iris-500/15 text-white' : 'hairline text-fog-300 hover:border-white/25 hover:text-white')}
+            >
+              <SlidersHorizontal className="size-3.5" /> <span className="hidden sm:inline">Pro tools</span>
+            </button>
+          )}
           <Button size="sm" onClick={() => setExportOpen(true)}><Download /> Export</Button>
           {chrome.tools && <span className="ml-1 flex items-center gap-1.5 border-l hairline pl-2">{chrome.tools}</span>}
         </div>
@@ -640,7 +695,55 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       {/* Workspace + docked assistant */}
       <div className={cn('flex min-h-0 gap-2', wide ? 'flex-1' : 'flex-col')}>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+          {workspace === 'edit' && simple && (
+            <SimpleEditor
+              projectId={id}
+              timeline={timeline}
+              assets={assets}
+              apply={apply}
+              playhead={playhead}
+              setPlayhead={setPlayhead}
+              playing={playing}
+              selected={selected}
+              select={(cid) => {
+                select(cid);
+                setFocus('clip');
+              }}
+              focus={focus === 'layer' ? 'layer' : focus === 'audio' ? 'audio' : 'clip'}
+              selectedLayer={selectedLayer}
+              setSelectedLayer={(lid) => {
+                if (lid) setSelectedLayer(lid);
+                else {
+                  setSelectedLayerRaw(null);
+                  setFocus('clip');
+                }
+              }}
+              selectedAudio={selectedAudio}
+              setSelectedAudio={(aid) => {
+                setSelectedAudio(aid);
+                setFocus(aid ? 'audio' : 'clip');
+              }}
+              preview={simplePreviewEl}
+              timelineEl={timelineFor(null, 'No music yet — add some with Music above')}
+              timelineHeight={`min(${Math.min(layout.timelineHeight, timelineNeed)}px, 34dvh)`}
+              resizeHandle={wide ? <ResizeHandle axis="y" label="Resize the timeline" {...resize('timelineHeight', -1)} /> : undefined}
+              onAddFromLibrary={() => setLibraryFor('clip')}
+              onUploadVideo={async () => {
+                const a = await videoUp.pick();
+                if (a) {
+                  addAssetAsClip(a);
+                  void assetsQ.refetch();
+                }
+              }}
+              onAddMusic={(a) => {
+                addMusic(a);
+                void assetsQ.refetch();
+              }}
+              transcribe={transcribeEl}
+            />
+          )}
           {workspace === 'edit' &&
+            !simple &&
             (wide ? (
               <>
                 <div className="flex min-h-[200px] flex-1">
@@ -726,11 +829,11 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             </div>
           )}
 
-          {wide && <DockedAssistant side="bottom" {...assistantProps} />}
+          {wide && !simple && <DockedAssistant side="bottom" {...assistantProps} />}
         </div>
-        {wide && <DockedAssistant side="right" {...assistantProps} />}
+        {wide && !simple && <DockedAssistant side="right" {...assistantProps} />}
       </div>
-      <FloatingAssistant {...assistantProps} compact={!wide} />
+      {!simple && <FloatingAssistant {...assistantProps} compact={!wide} />}
 
       <ObjectAiDialog projectId={id} timeline={timeline} apply={apply} onStarted={() => void refetchStudio()} />
 

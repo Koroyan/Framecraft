@@ -12,6 +12,8 @@ export type AssistantDock = 'right' | 'bottom' | 'float';
 export type FloatRect = { x: number; y: number; w: number; h: number };
 
 type Layout = {
+  /** The simple editor (big picture, one toolbar, timeline); false = Pro tools (all panels). */
+  simple: boolean;
   /** Tool panel next to the icon rail (the rail itself always stays). */
   leftOpen: boolean;
   leftWidth: number;
@@ -33,6 +35,7 @@ type UiState = Layout & {
 };
 
 export const DEFAULT_LAYOUT: Layout = {
+  simple: true,
   leftOpen: true,
   leftWidth: 264,
   inspectorOpen: true,

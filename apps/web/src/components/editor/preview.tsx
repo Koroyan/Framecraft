@@ -157,9 +157,14 @@ export type PreviewProps = {
   /** Contextual toolbar shown above the picture (e.g. for the selected object). */
   toolbar?: (f: PreviewFrame) => React.ReactNode;
   onBackgroundClick?: () => void;
+  /** Simple editor: only play, time and full screen under the picture. */
+  minimal?: boolean;
+  /** false = no control row (the simple editor puts play / time in its toolbar). */
+  controls?: boolean;
+  onPlayingChange?: (playing: boolean) => void;
 };
 
-export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, selectedLayer, onSelectLayer, onLayerChange, selecting, onToggleSelecting, overlay, objectsLayer, toolbar, onBackgroundClick }: PreviewProps) {
+export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, selectedLayer, onSelectLayer, onLayerChange, selecting, onToggleSelecting, overlay, objectsLayer, toolbar, onBackgroundClick, minimal, controls = true, onPlayingChange }: PreviewProps) {
   const video = useRef<HTMLVideoElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -170,17 +175,21 @@ export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, s
   const [, setVideoMeta] = useState(0); // re-render once the intrinsic size is known (reframe)
   const fps = timeline.fps || 30;
 
-  // Space (editor shortcut) toggles playback.
+  // Space (editor shortcut) and outside controls toggle playback; full screen on request.
   useEffect(() => {
     const toggle = () => setPlaying((v) => !v);
     const pause = () => setPlaying(false);
+    const full = () => void frame.current?.requestFullscreen?.();
     window.addEventListener('fc-editor-toggle-play', toggle);
     window.addEventListener('fc-editor-pause', pause);
+    window.addEventListener('fc-editor-fullscreen', full);
     return () => {
       window.removeEventListener('fc-editor-toggle-play', toggle);
       window.removeEventListener('fc-editor-pause', pause);
+      window.removeEventListener('fc-editor-fullscreen', full);
     };
   }, []);
+  useEffect(() => onPlayingChange?.(playing), [playing, onPlayingChange]);
 
   // Fit the frame (timeline aspect) into the space the panel gives us.
   const [aw, ah] = timeline.aspectRatio.split(':').map(Number) as [number, number];
@@ -383,7 +392,7 @@ export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, s
               <Grain amount={clip?.adjust?.grain} />
             </div>
           ) : (
-            <div className="grid size-full place-items-center px-2 text-center text-[11px] leading-snug text-fog-400">Add a clip from Media</div>
+            <div className="grid size-full place-items-center px-2 text-center text-[11px] leading-snug text-fog-400">Add a video to start</div>
           )}
           {outClip && outAsset && (
             <video key={outClip.id} ref={outVideo} src={outAsset.url} crossOrigin="anonymous" muted playsInline preload="auto" aria-hidden className="pointer-events-none absolute inset-0 size-full object-cover" style={outStyle} />
@@ -419,6 +428,7 @@ export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, s
           {overlay?.(pf)}
         </div>
       </div>
+      {controls && (
       <div className="flex h-11 shrink-0 items-center gap-1.5 px-1">
         {onToggleSelecting && (
           <button type="button" onClick={onToggleSelecting} aria-pressed={selecting} aria-label="Select object" title="Click an object in the picture to select it (V)" className={cn('flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition', selecting ? 'bg-iris-500 text-white' : 'border hairline text-fog-200 hover:border-white/25 hover:text-white')}>
@@ -435,13 +445,14 @@ export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, s
           <span className="text-white">{timecode(playhead)}</span>{compact ? null : <> / {timecode(total)}</>}
         </span>
         <span className="flex-1" />
-        <select aria-label="Safe zones" className={cn('h-8 rounded-lg border hairline bg-ink-900 px-1.5 text-[11px] text-fog-200', compact && 'hidden')} value={safe} onChange={(e) => setSafe(e.target.value as typeof safe)}>
+        <select aria-label="Safe zones" className={cn('h-8 rounded-lg border hairline bg-ink-900 px-1.5 text-[11px] text-fog-200', (compact || minimal) && 'hidden')} value={safe} onChange={(e) => setSafe(e.target.value as typeof safe)}>
           <option value="off">Safe zones</option>
           <option value="tiktok">TikTok</option>
           <option value="reels">Reels</option>
         </select>
         <button type="button" aria-label="Full screen" title="Full screen preview" onClick={() => void frame.current?.requestFullscreen?.()} className="grid size-8 place-items-center rounded-lg text-fog-300 hover:bg-white/[0.06] hover:text-white"><Maximize2 className="size-3.5" /></button>
       </div>
+      )}
     </div>
   );
 }

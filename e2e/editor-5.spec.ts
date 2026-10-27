@@ -82,9 +82,16 @@ async function setTimeline(page: Page, projectId: string, mutate: (t: Record<str
   await call(page, 'PUT', `/api/projects/${projectId}/timeline`, { timeline, autosave: false, label: 'e2e setup' });
 }
 
-async function openEditor(page: Page, projectId: string) {
+/** Opens the editor in the full studio ("Pro tools", default here) or the simple editor. */
+async function openEditor(page: Page, projectId: string, mode: 'pro' | 'simple' = 'pro') {
   await page.goto(`/app/editor/${projectId}`);
   await expect(page.getByRole('region', { name: 'Preview' })).toBeVisible();
+  const pro = page.getByRole('button', { name: 'Pro tools' });
+  if (await pro.isVisible()) {
+    const on = (await pro.getAttribute('aria-pressed')) === 'true';
+    if ((mode === 'pro') !== on) await pro.click();
+  }
+  if (mode === 'simple') await expect(page.getByTestId('simple-editor')).toBeVisible();
 }
 
 const box = async (page: Page, name: string) => (await page.getByRole(name === 'Properties' ? 'complementary' : 'region', { name }).boundingBox())!;
@@ -359,4 +366,63 @@ test('H — no lost work: edits, object, title, hidden assistant, workspace swit
   await expect(page.getByRole('button', { name: /^Clip 1/ })).toContainText('1.5×');
   await page.screenshot({ path: `${SHOTS}/H-after-reload.png` });
   await call(page, 'DELETE', `/api/projects/${pid}`, {});
+});
+
+test('S — simple editor: one toolbar for split, speed, filter, text, music and export', async ({ page }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await register(page);
+  const pid = await newEditProject(page, '9:16');
+  const a = path.join(work, 's1.mp4');
+  const b = path.join(work, 's2.mp4');
+  patternClip(a, 'testsrc2', 330);
+  patternClip(b, 'smptebars', 440);
+  const ua = await upload(page, a, 'video/mp4', pid);
+  const ub = await upload(page, b, 'video/mp4', pid);
+  await setTimeline(page, pid, (t) => {
+    t.clips = [ua, ub].map((u, i) => ({ id: `s${i}`, assetId: u.id, inSec: 0, outSec: 3, volume: 1, speed: 1, reverse: false, fadeInSec: 0, fadeOutSec: 0, opacity: 1 }));
+  });
+  await openEditor(page, pid, 'simple');
+  const tools = page.getByRole('toolbar', { name: 'Edit tools' });
+  // No studio clutter: no assistant, no object selection, no workspace tabs.
+  await expect(page.getByRole('button', { name: 'Select object' })).toHaveCount(0);
+  await expect(page.getByRole('tablist', { name: 'Workspace' })).toHaveCount(0);
+  // The picture is the largest thing on screen.
+  const stage = (await page.getByRole('region', { name: 'Preview' }).boundingBox())!;
+  const tl = (await page.getByRole('region', { name: 'Timeline' }).boundingBox())!;
+  expect(stage.height).toBeGreaterThan(tl.height * 0.9);
+
+  // Split clip 1 in the middle.
+  await page.getByRole('button', { name: /^Clip 1/ }).click();
+  await tools.getByRole('button', { name: 'Split' }).click();
+  await expect(page.getByRole('button', { name: /^Clip 3/ })).toBeVisible();
+
+  // Speed 2× on the selected clip: the video gets shorter.
+  await tools.getByRole('button', { name: 'Speed' }).click();
+  await page.getByRole('dialog', { name: /Speed/ }).getByRole('button', { name: '2×' }).click();
+  await expect(page.getByRole('dialog', { name: /Speed/ })).toContainText('long on the timeline');
+
+  // Filter, shown as active.
+  await tools.getByRole('button', { name: 'Filter' }).click();
+  const filters = page.getByRole('dialog', { name: /Filter/ });
+  await filters.getByRole('button', { name: 'Black & white' }).click();
+  await expect(filters.getByRole('button', { name: 'Black & white' })).toHaveAttribute('aria-pressed', 'true');
+
+  // Text: add a style, the edit panel stays open, the words change.
+  await tools.getByRole('button', { name: 'Text' }).click();
+  await page.getByRole('dialog', { name: /Add text/ }).getByRole('button', { name: /Bold yellow/ }).click();
+  const box = page.getByRole('dialog', { name: 'Text' }).getByRole('textbox', { name: 'Text' });
+  await expect(box).toBeVisible();
+  await box.fill('Sale -30%');
+  await expect(page.getByRole('button', { name: /^Layer / }).filter({ hasText: 'Sale -30%' })).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/S-simple-editor.png` });
+
+  // Everything is saved; Pro tools are one click away and come back with all the panels.
+  await expect(page.getByText('Saved', { exact: true })).toBeVisible({ timeout: 10_000 });
+  await page.getByRole('button', { name: 'Pro tools' }).click();
+  await expect(page.getByRole('complementary', { name: 'Properties' })).toBeVisible();
+  await page.getByRole('button', { name: 'Pro tools' }).click();
+  await expect(page.getByTestId('simple-editor')).toBeVisible();
+  await page.getByRole('button', { name: 'Export' }).first().click();
+  await expect(page.getByRole('dialog', { name: 'Export video' })).toBeVisible();
 });

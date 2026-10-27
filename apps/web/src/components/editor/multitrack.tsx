@@ -34,6 +34,12 @@ function Wave({ assetId, className, style }: { assetId: string; className: strin
   const url = useDerived('waveform', assetId);
   return <span className={className} style={{ ...style, backgroundImage: url ? `url(${url})` : undefined, backgroundSize: '100% 100%' }} />;
 }
+/** What a layer lane holds, in words: Text, Stickers, Pictures — or Overlays when mixed. */
+function laneName(layers: Timeline['layers']) {
+  const kinds = new Set(layers.map((l) => (l.kind === 'text' ? 'Text' : l.kind === 'shape' ? 'Stickers' : l.kind === 'image' ? 'Pictures' : 'Videos')));
+  return kinds.size === 1 ? [...kinds][0]! : 'Overlays';
+}
+
 function Strip({ assetId, filter }: { assetId: string; filter?: string }) {
   const url = useDerived('filmstrip', assetId);
   return url ? <span className="absolute inset-0 opacity-80" style={{ backgroundImage: `url(${url})`, backgroundSize: 'auto 100%', backgroundRepeat: 'repeat-x', filter }} /> : null;
@@ -67,10 +73,13 @@ export function MultiTrack({
   onAudioTiming,
   title,
   actions,
+  musicHint = 'Add music from Audio (left)',
 }: {
   /** Shown at the start / end of the timeline's single header row (saves a row of height). */
   title?: React.ReactNode;
   actions?: React.ReactNode;
+  /** What the empty music lane says (where music is added in this layout). */
+  musicHint?: string;
   timeline: Timeline;
   assets: Map<string, Asset>;
   playhead: number;
@@ -134,7 +143,7 @@ export function MultiTrack({
   const beds = timeline.audio.filter((a) => a.kind !== 'voice');
 
   const lanes: { key: string; icon: React.ReactNode; label: string; show: boolean }[] = [
-    ...layerTracks.map((tr) => ({ key: `layer-${tr}`, icon: <Layers className="size-3.5" />, label: `Layers ${tr}${locked.has(tr) ? ' 🔒' : ''}${hiddenT.has(tr) ? ' (hidden)' : ''}`, show: true })),
+    ...layerTracks.map((tr) => ({ key: `layer-${tr}`, icon: <Layers className="size-3.5" />, label: `${laneName(timeline.layers.filter((l) => l.track === tr))}${locked.has(tr) ? ' 🔒' : ''}${hiddenT.has(tr) ? ' (hidden)' : ''}`, show: true })),
     { key: 'overlay', icon: <Layers className="size-3.5" />, label: 'Overlays', show: timeline.overlays.length > 0 },
     { key: 'video', icon: <Film className="size-3.5" />, label: 'Video', show: true },
     { key: 'voice', icon: <Mic className="size-3.5" />, label: 'Voice', show: voices.length > 0 },
@@ -396,7 +405,7 @@ export function MultiTrack({
                     <span className="relative px-1.5 text-[9px] leading-7">{a.kind === 'music' ? 'music' : 'sound'}</span>
                   </AudioBar>
                 ))}
-                {!beds.length && <span className="pointer-events-none absolute inset-0 flex items-center px-2 text-[10px] text-fog-500">Add music from Audio (left)</span>}
+                {!beds.length && <span className="pointer-events-none absolute inset-0 flex items-center px-2 text-[10px] text-fog-500">{musicHint}</span>}
               </div>
               {show('text') && (
                 <div className={LANE}>

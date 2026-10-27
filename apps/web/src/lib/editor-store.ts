@@ -103,6 +103,12 @@ export function splitAtPlayhead(t: Timeline, playhead: number, preferId?: string
   return splitClip(t, c.id, c.inSec + (playhead - (starts[i] ?? 0)) * (c.freezeSec ? 0 : c.speed || 1));
 }
 
+/** The first layer track (from `from` up) with nothing between start and end — so new texts and stickers never pile up on each other. */
+export function freeTrack(t: Timeline, start: number, end: number, from: number): number {
+  for (let tr = from; tr < from + 12; tr++) if (!t.layers.some((l) => l.track === tr && l.startSec < end - 0.01 && l.endSec > start + 0.01)) return tr;
+  return from + 12;
+}
+
 export function moveClip(t: Timeline, clipId: string, dir: -1 | 1): Timeline {
   const i = t.clips.findIndex((c) => c.id === clipId);
   const j = i + dir;
