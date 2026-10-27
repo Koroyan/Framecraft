@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { hexToRgb, rgbToHsl, smartSelect, timelineSchema, type EditMask } from '@framecraft/shared';
+import { hexToRgb, interiorPoints, prepareFrame, regionAt, rgbToHsl, selectFrom, smartSelect, timelineSchema, type EditMask } from '@framecraft/shared';
 import { ffmpeg } from '../src/media/ffmpeg';
 import { trackBox } from '../src/media/tracker';
 import { renderTimeline } from '../src/media/render';
@@ -137,6 +137,33 @@ describe('object edit: select → track → recolour → export', () => {
     expect(Math.min(h0, 360 - h0)).toBeLessThan(15); // outside the range: the original red
   }, 180_000);
 
+  it('a landscape clip in a vertical project: the edit lands on the object inside the crop', async () => {
+    // 640×360 source in a 9:16 project: only the middle ~200 px of the width are visible.
+    const out = path.join(dir, 'out-vertical.mp4');
+    const timeline = timelineSchema.parse({
+      aspectRatio: '9:16',
+      resolution: '720p',
+      fps: 30,
+      clips: [{ id: 'c1', assetId: ASSET, inSec: 0, outSec: 4, objects: [{ id: 'o1', name: 'Box', mask, atSec: 1, startSec: 0, endSec: 4, effects: [{ type: 'recolor', from: '#CC2233', to: '#2563EB' }] }] }],
+    });
+    await renderTimeline({ timeline, resolve: async () => clip, output: out });
+    // Cover scale k = 1280 / 360; visible source x from (640·k − 720) / 2 / k.
+    const k = 1280 / 360;
+    const x0 = (640 * k - 720) / 2 / k;
+    for (const t of [2.1, 2.6]) {
+      const buf = await frameRgb(out, t, 720, 1280);
+      const b = boxAt(t);
+      const cx = (b.x + b.size / 2 - x0) * k;
+      const cy = (b.y + b.size / 2) * k;
+      expect(cx).toBeGreaterThan(40);
+      expect(cx).toBeLessThan(680);
+      expect(hue(px(buf, 720, cx, cy)), `box at ${t}s in the vertical frame`).toBeGreaterThan(205);
+      const ref = hexToRgb('#D6C4A8');
+      const wall = px(buf, 720, 360, 120);
+      expect(Math.abs(wall[0] - ref[0]) + Math.abs(wall[1] - ref[1]) + Math.abs(wall[2] - ref[2]), 'wall').toBeLessThan(0.08);
+    }
+  }, 180_000);
+
   it('a time-limited edit leaves the other seconds untouched', async () => {
     const out = path.join(dir, 'out-range.mp4');
     const timeline = timelineSchema.parse({
@@ -154,4 +181,64 @@ describe('object edit: select → track → recolour → export', () => {
     const b3 = boxAt(3);
     expect(hue(px(late, 1280, (b3.x + b3.size / 2) * 2, (b3.y + b3.size / 2) * 2))).toBeGreaterThan(205); // blue at 3 s
   }, 180_000);
+});
+
+describe('object edit: a shape-changing object is followed exactly', () => {
+  // An orange blob that turns from wide (60×30) to tall (30×60) over 2 s, on a grey wall.
+  const S = 320;
+  const turning = path.join(dir, 'turning.mp4');
+  const shapeAt = (t: number) => ({ rx: 60 - 15 * t, ry: 30 + 15 * t });
+
+  beforeAll(async () => {
+    const fps = 30, frames = 2 * fps;
+    const raw = path.join(dir, 'turning.rgb');
+    const buf = Buffer.alloc(S * S * 3 * frames);
+    for (let f = 0; f < frames; f++) {
+      const { rx, ry } = shapeAt(f / fps);
+      for (let y = 0; y < S; y++)
+        for (let x = 0; x < S; x++) {
+          const i = ((f * S + y) * S + x) * 3;
+          const inside = ((x - 160) / rx) ** 2 + ((y - 160) / ry) ** 2 <= 1;
+          buf[i] = inside ? 0xe8 : 0x80;
+          buf[i + 1] = inside ? 0x78 : 0x82;
+          buf[i + 2] = inside ? 0x1e : 0x86;
+        }
+    }
+    await fsp.writeFile(raw, buf);
+    await ffmpeg(['-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', `${S}x${S}`, '-r', String(fps), '-i', raw, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '12', '-pix_fmt', 'yuv420p', turning]);
+    await fsp.rm(raw, { force: true });
+  }, 120_000);
+
+  it('exports it blue in its new shape (the drawn outline alone would miss it)', async () => {
+    // Selected on the first frame, as the editor does: the outline plus how to find it again.
+    const f0 = await frameRgb(turning, 0, S, S);
+    const p = prepareFrame({ data: new Uint8Array(f0), width: S, height: S, channels: 3 });
+    const sel = selectFrom(p, 160, 160);
+    const region = regionAt(p, sel, sel.auto)!;
+    const adapt = { on: true, parts: [{ seeds: interiorPoints(region.mask, S, S, 12), lab: [sel.ref.L, sel.ref.A, sel.ref.B], wL: sel.ref.wL, threshold: sel.auto }], res: S };
+    const timeline = (follow: boolean) =>
+      timelineSchema.parse({
+        aspectRatio: '1:1',
+        resolution: '720p',
+        fps: 30,
+        clips: [{ id: 'c1', assetId: ASSET, inSec: 0, outSec: 2, objects: [{ id: 'o1', name: 'Blob', mask: { rects: [], strokes: [], polygons: [{ points: region.polygon, subtract: false }], feather: 0.004, invert: false }, atSec: 0, startSec: 0, endSec: 2, color: region.color, ...(follow ? { adapt } : {}), effects: [{ type: 'recolor', from: region.color, to: '#2563EB' }] }] }],
+      });
+    const k = 720 / S;
+    const { ry } = shapeAt(1.8);
+    for (const follow of [true, false]) {
+      const out = path.join(dir, `turning-${follow}.mp4`);
+      await renderTimeline({ timeline: timeline(follow), resolve: async () => turning, output: out });
+      const buf = await frameRgb(out, 1.8, 720, 720);
+      const centre = hue(px(buf, 720, 160 * k, 160 * k));
+      const newPart = hue(px(buf, 720, 160 * k, (160 + ry - 8) * k)); // inside the tall shape only
+      const wall = rgbToHsl(...px(buf, 720, 40 * k, 40 * k));
+      expect(centre).toBeGreaterThan(200);
+      expect(centre).toBeLessThan(245);
+      if (follow) {
+        expect(newPart).toBeGreaterThan(200);
+        expect(newPart).toBeLessThan(245);
+      } else expect(newPart).toBeLessThan(45); // still orange: the drawn outline does not reach it
+      expect(wall[1]).toBeLessThan(0.12); // the grey wall stays grey
+    }
+  }, 240_000);
 });

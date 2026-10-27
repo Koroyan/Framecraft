@@ -29,3 +29,20 @@ export const useObjectUi = create<State>((set) => ({
   ai: null,
   set: (patch) => set(patch),
 }));
+
+/**
+ * The shape the preview last found for objects that follow shape changes (normalised source
+ * outline at source second `t`), so the dashed selection line hugs what is really being changed.
+ */
+export type FoundOutline = { t: number; polys: [number, number][][] };
+
+export const useFoundOutlines = create<{ byId: Record<string, FoundOutline>; put: (id: string, f: FoundOutline | null) => void }>((set) => ({
+  byId: {},
+  put: (id, f) =>
+    set((st) => {
+      const byId = { ...st.byId };
+      if (f) byId[id] = f;
+      else delete byId[id];
+      return { byId };
+    }),
+}));

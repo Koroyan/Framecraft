@@ -3,10 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Crosshair, Droplet, EyeOff, Loader2, Palette, Plus, Scissors, Sparkles, SunMedium, Trash2, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { applyTransform, colorName, describeEffects, lostSpans, maskBounds, maskTransformAt, mergeTrack, OBJECT_SCOPES, prepareFrame, regionAt, selectFrom, type EditMask, type ObjectEdit, type ObjectEffect, type ObjectScope, type PreparedFrame, type Selection, type Timeline, type TimelineClip } from '@framecraft/shared';
+import { adapts, applyTransform, colorName, describeEffects, interiorPoints, lostSpans, maskBounds, maskTransformAt, mergeTrack, OBJECT_SCOPES, prepareFrame, regionAt, selectFrom, type AdaptPart, type EditMask, type ObjectEdit, type ObjectEffect, type ObjectScope, type PreparedFrame, type Selection, type Timeline, type TimelineClip } from '@framecraft/shared';
 import { api, ApiError } from '@/lib/api';
 import { newId, useEditor } from '@/lib/editor-store';
-import { useObjectUi } from '@/lib/object-ui';
+import { useFoundOutlines, useObjectUi } from '@/lib/object-ui';
 import type { EditEstimate } from '@/lib/studio';
 import { Button, Dialog, Field, Segmented, Spinner, Textarea } from '@/components/ui';
 import { cn, newKey, seconds } from '@/lib/utils';
@@ -27,7 +27,8 @@ type Track = NonNullable<EditMask['track']> & { lost: number; reliable: { start:
 export const PALETTE: [string, string][] = [['Red', '#D92B2B'], ['Orange', '#F07C1E'], ['Yellow', '#F2C823'], ['Green', '#2E9E4F'], ['Teal', '#1E9C9C'], ['Blue', '#2563EB'], ['Navy', '#1E2F6B'], ['Purple', '#7C3AED'], ['Pink', '#E84A8A'], ['White', '#F2F2F2'], ['Grey', '#7A7A7A'], ['Black', '#151515']];
 
 // The last click's prepared frame and growth map (re-used for tightness, add and subtract).
-const last: { key: string; prep: PreparedFrame | null; sel: Selection | null; objectId: string | null; poly: number } = { key: '', prep: null, sel: null, objectId: null, poly: 0 };
+// `part`: which part of the object's shape-following data the last click made (-1: none).
+const last: { key: string; prep: PreparedFrame | null; sel: Selection | null; objectId: string | null; poly: number; part: number } = { key: '', prep: null, sel: null, objectId: null, poly: 0, part: -1 };
 
 function grab(video: HTMLVideoElement): { data: Uint8ClampedArray; width: number; height: number } | null {
   const vw = video.videoWidth;
@@ -48,6 +49,31 @@ function grab(video: HTMLVideoElement): { data: Uint8ClampedArray; width: number
 }
 
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const r4 = (v: number) => Math.round(v * 10000) / 10000;
+
+const clampT = (t: number) => Math.min(80, Math.max(0.5, r4(t)));
+
+/**
+ * A clicked part as the preview and the export find it again on other frames: its colour and points
+ * well inside it (`map`: this frame -> the selection's drawn coordinates).
+ */
+function partFor(prep: PreparedFrame, sel: Selection, mask: Uint8Array, threshold: number, map?: (x: number, y: number) => [number, number]): AdaptPart | undefined {
+  const seeds = interiorPoints(mask, prep.width, prep.height, 12);
+  if (!seeds.length) return undefined;
+  return {
+    seeds: seeds.map(([x, y]) => (map ? map(x, y) : ([x, y] as [number, number]))).map(([x, y]) => [r4(x), r4(y)] as [number, number]),
+    lab: [r4(sel.ref.L), r4(sel.ref.A), r4(sel.ref.B)],
+    wL: sel.ref.wL,
+    threshold: clampT(threshold),
+  };
+}
+
+/** The first (clicked) part of a selection, for the tracker to pick its points inside. */
+const outlineOf = (mask: EditMask, map?: (x: number, y: number) => [number, number]): [number, number][] | undefined => {
+  const p = mask.polygons[0];
+  if (!p || p.subtract || p.points.length < 3) return undefined;
+  return p.points.slice(0, 400).map(([x, y]) => (map ? map(x, y) : [x, y]));
+};
 const pointInPoly = (x: number, y: number, pts: [number, number][]) => {
   let c = false;
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -100,7 +126,7 @@ export function useObjectActions(projectId: string, apply: Apply) {
     const endSec = o.wholeClip ? hi : Math.max(obj.endSec, obj.atSec + 0.05);
     useObjectUi.getState().set({ tracking: obj.id });
     try {
-      const r = await api<{ track: Track }>(`/api/assets/${clip.assetId}/track`, { body: { box: { x: b.x0, y: b.y0, w: Math.max(0.005, b.x1 - b.x0), h: Math.max(0.005, b.y1 - b.y0) }, atSec: obj.atSec, startSec, endSec } });
+      const r = await api<{ track: Track }>(`/api/assets/${clip.assetId}/track`, { body: { box: { x: b.x0, y: b.y0, w: Math.max(0.005, b.x1 - b.x0), h: Math.max(0.005, b.y1 - b.y0) }, atSec: obj.atSec, startSec, endSec, region: outlineOf(obj.mask) } });
       updateObject(apply, clip.id, obj.id, (x) => ({ ...x, mask: { ...x.mask, track: { points: r.track.points, smoothing: r.track.smoothing } } }));
       if (r.track.lost) toast.message(`Tracked — ${r.track.lost} uncertain frame${r.track.lost === 1 ? '' : 's'} (marked red). Drag the outline there to correct.`);
       else toast.success('Tracked — the selection follows the object.');
@@ -152,7 +178,8 @@ export function useObjectActions(projectId: string, apply: Apply) {
     }
     const prep = last.prep!;
     const sel = selectFrom(prep, sx * prep.width, sy * prep.height);
-    const region = regionAt(prep, sel, sel.auto * useObjectUi.getState().tightness);
+    const threshold = sel.auto * useObjectUi.getState().tightness;
+    const region = regionAt(prep, sel, threshold);
     if (!region || region.area > 0.85) {
       toast.message('No clear object there. Click the middle of the object, or use Refine to add or remove parts.');
       return;
@@ -164,10 +191,19 @@ export function useObjectActions(projectId: string, apply: Apply) {
       // Regions are added in the object's drawn coordinates (undo the track transform at this frame).
       const tr = maskTransformAt(current.mask, shownAt);
       const inv = (x: number, y: number): [number, number] => [tr.cx + (x - tr.dx - tr.cx) / tr.s, tr.cy + (y - tr.dy - tr.cy) / tr.s];
-      updateObject(apply, clip.id, current.id, (o) => ({ ...o, mask: { ...o.mask, polygons: [...o.mask.polygons, { points: region.polygon.map(([x, y]) => inv(x, y)), subtract: sub }].slice(-20) } }));
+      // A shape-following object learns the added part too (its own colour, e.g. the lit side of a coat).
+      const part = !sub && current.adapt && current.adapt.res === prep.width ? partFor(prep, sel, region.mask, threshold, inv) : undefined;
+      const parts = part && current.adapt ? [...current.adapt.parts, part] : null;
+      const kept = parts && parts.length > 6 ? [parts[0]!, ...parts.slice(-5)] : parts;
+      updateObject(apply, clip.id, current.id, (o) => ({
+        ...o,
+        mask: { ...o.mask, polygons: [...o.mask.polygons, { points: region.polygon.map(([x, y]) => inv(x, y)), subtract: sub }].slice(-20) },
+        ...(kept && o.adapt ? { adapt: { ...o.adapt, parts: kept } } : {}),
+      }));
       last.sel = sel;
       last.objectId = current.id;
       last.poly = current.mask.polygons.length;
+      last.part = kept ? kept.length - 1 : -1;
       return;
     }
     const id = newId('obj').slice(0, 40);
@@ -182,12 +218,17 @@ export function useObjectActions(projectId: string, apply: Apply) {
       scope: 'clip',
       effects: [],
       color: region.color,
+      adapt: (() => {
+        const part = partFor(prep, sel, region.mask, threshold);
+        return part ? { on: true, parts: [part], res: prep.width } : undefined;
+      })(),
       enabled: true,
     };
     apply((t) => ({ ...t, clips: t.clips.map((c) => (c.id === clip.id ? { ...c, objects: [...(c.objects ?? []), obj].slice(-8) } : c)) }));
     last.sel = sel;
     last.objectId = id;
     last.poly = 0;
+    last.part = obj.adapt ? 0 : -1;
     ui.set({ sel: { clipId: clip.id, objectId: id }, popover: null });
   };
 
@@ -196,20 +237,36 @@ export function useObjectActions(projectId: string, apply: Apply) {
     useObjectUi.getState().set({ tightness });
     const ref = useObjectUi.getState().sel;
     if (!ref || !last.prep || !last.sel || last.objectId !== ref.objectId) return;
-    const region = regionAt(last.prep, last.sel, last.sel.auto * tightness);
+    const threshold = last.sel.auto * tightness;
+    const region = regionAt(last.prep, last.sel, threshold);
     if (!region) return;
+    const prep = last.prep;
+    const sel = last.sel;
     updateObject(apply, ref.clipId, ref.objectId, (o) => {
       const polys = [...o.mask.polygons];
       if (!polys[last.poly]) return o;
       polys[last.poly] = { ...polys[last.poly]!, points: region.polygon };
-      return { ...o, mask: { ...o.mask, polygons: polys }, ...(last.poly === 0 ? { color: region.color } : {}) };
+      // The shape-following data of that click moves its edge too.
+      let adapt = o.adapt;
+      const old = adapt && last.part >= 0 ? adapt.parts[last.part] : undefined;
+      if (adapt && old) {
+        const parts = [...adapt.parts];
+        parts[last.part] = (last.part === 0 ? partFor(prep, sel, region.mask, threshold) : undefined) ?? { ...old, threshold: clampT(threshold) };
+        adapt = { ...adapt, parts };
+      }
+      return { ...o, mask: { ...o.mask, polygons: polys }, adapt, ...(last.poly === 0 ? { color: region.color } : {}) };
     });
   };
 
   /** The user dragged the outline at source time t by (ddx, ddy): move the selection, or correct the track from here on. */
   const correct = async (clip: TimelineClip, obj: ObjectEdit, t: number, ddx: number, ddy: number) => {
     if (!obj.mask.track) {
-      updateObject(apply, clip.id, obj.id, (o) => ({ ...o, mask: { ...o.mask, polygons: o.mask.polygons.map((p) => ({ ...p, points: p.points.map(([x, y]) => [Math.min(1, Math.max(0, x + ddx)), Math.min(1, Math.max(0, y + ddy))] as [number, number]) })), rects: o.mask.rects.map((r) => ({ ...r, x: r.x + ddx, y: r.y + ddy })) } }));
+      const move = ([x, y]: [number, number]) => [Math.min(1, Math.max(0, x + ddx)), Math.min(1, Math.max(0, y + ddy))] as [number, number];
+      updateObject(apply, clip.id, obj.id, (o) => ({
+        ...o,
+        mask: { ...o.mask, polygons: o.mask.polygons.map((p) => ({ ...p, points: p.points.map(move) })), rects: o.mask.rects.map((r) => ({ ...r, x: r.x + ddx, y: r.y + ddy })) },
+        ...(o.adapt ? { adapt: { ...o.adapt, parts: o.adapt.parts.map((p) => ({ ...p, seeds: p.seeds.map(move) })) } } : {}),
+      }));
       return;
     }
     const tr = maskTransformAt(obj.mask, t);
@@ -219,7 +276,8 @@ export function useObjectActions(projectId: string, apply: Apply) {
     const [x1, y1] = applyTransform({ ...tr, ...offset }, b.x1, b.y1);
     useObjectUi.getState().set({ tracking: obj.id });
     try {
-      const r = await api<{ track: Track }>(`/api/assets/${clip.assetId}/track`, { body: { box: { x: Math.max(0, x0), y: Math.max(0, y0), w: Math.max(0.005, x1 - x0), h: Math.max(0.005, y1 - y0) }, atSec: t, startSec: t, endSec: Math.max(obj.endSec, t + 0.05) } });
+      const region = outlineOf(obj.mask, (x, y) => applyTransform({ ...tr, ...offset }, x, y));
+      const r = await api<{ track: Track }>(`/api/assets/${clip.assetId}/track`, { body: { box: { x: Math.max(0, x0), y: Math.max(0, y0), w: Math.max(0.005, x1 - x0), h: Math.max(0.005, y1 - y0) }, atSec: t, startSec: t, endSec: Math.max(obj.endSec, t + 0.05), region } });
       updateObject(apply, clip.id, obj.id, (o) => ({ ...o, mask: { ...o.mask, track: mergeTrack(o.mask.track, t, r.track, offset) } }));
       toast.success('Corrected — tracked again from this frame.');
     } catch (e) {
@@ -241,6 +299,7 @@ export function useObjectActions(projectId: string, apply: Apply) {
 
 export function ObjectLayer({ pf, projectId, apply }: { pf: PreviewFrame; projectId: string; apply: Apply }) {
   const { selecting, sel, tracking } = useObjectUi();
+  const found = useFoundOutlines((st) => st.byId);
   const actions = useObjectActions(projectId, apply);
   const el = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x0: number; y0: number; moved: boolean; inside: boolean } | null>(null);
@@ -262,6 +321,21 @@ export function ObjectLayer({ pf, projectId, apply }: { pf: PreviewFrame; projec
       const [sx, sy] = applyTransform(t2, x, y);
       return [(sx - crop[0]) / crop[2], (sy - crop[1]) / crop[3]] as [number, number];
     };
+    // Objects that follow shape changes: the shape the preview really found (moved on by the track
+    // if it was found on a slightly different frame) instead of the outline as drawn.
+    const f = adapts(o) ? found[o.id] : undefined;
+    if (f && f.polys.length && Math.abs(f.t - pf.srcTime) < 1) {
+      const ta = maskTransformAt(o.mask, f.t);
+      const k = t2.s / (ta.s || 1);
+      const move = ([x, y]: [number, number]): [number, number] => [t2.cx + t2.dx + (x - ta.cx - ta.dx) * k, t2.cy + t2.dy + (y - ta.cy - ta.dy) * k];
+      const srcPolys = f.polys.map((poly) => poly.map(move));
+      const elem = ([x, y]: [number, number]) => [(x - crop[0]) / crop[2], (y - crop[1]) / crop[3]] as [number, number];
+      return {
+        polys: [...srcPolys.map((pts) => ({ sub: false, pts: pts.map(elem) })), ...o.mask.polygons.filter((p) => p.subtract).map((p) => ({ sub: true, pts: p.points.map(([x, y]) => toElem(x, y)) }))],
+        rects: o.mask.rects.map((r) => ({ sub: r.subtract, ellipse: r.ellipse, a: toElem(r.x, r.y), b: toElem(r.x + r.w, r.y + r.h) })),
+        srcPolys,
+      };
+    }
     return {
       polys: o.mask.polygons.map((p) => ({ sub: p.subtract, pts: p.points.map(([x, y]) => toElem(x, y)) })),
       rects: o.mask.rects.map((r) => ({ sub: r.subtract, ellipse: r.ellipse, a: toElem(r.x, r.y), b: toElem(r.x + r.w, r.y + r.h) })),
@@ -322,7 +396,7 @@ export function ObjectLayer({ pf, projectId, apply }: { pf: PreviewFrame; projec
           return (
             <g key={o.id} opacity={active(o) ? 1 : 0.35}>
               {s.polys.map((p, i) => (
-                <polygon key={`p${i}`} points={p.pts.map(([x, y]) => `${x},${y}`).join(' ')} fill={p.sub ? 'rgba(0,0,0,0.25)' : isSel ? 'rgba(124,92,255,0.18)' : 'transparent'} stroke={stroke} strokeWidth={isSel ? 2 : 1} strokeDasharray={isSel ? '6 4' : '3 3'} vectorEffect="non-scaling-stroke" className={isSel ? 'animate-ants' : ''} />
+                <polygon key={`p${i}`} points={p.pts.map(([x, y]) => `${x},${y}`).join(' ')} fill={p.sub ? 'rgba(0,0,0,0.25)' : isSel && !o.effects.length ? 'rgba(124,92,255,0.18)' : 'transparent'} stroke={stroke} strokeWidth={isSel ? 2 : 1} strokeDasharray={isSel ? '6 4' : '3 3'} vectorEffect="non-scaling-stroke" className={isSel ? 'animate-ants' : ''} />
               ))}
               {s.rects.map((r, i) =>
                 r.ellipse ? (
@@ -336,38 +410,55 @@ export function ObjectLayer({ pf, projectId, apply }: { pf: PreviewFrame; projec
         })}
       </svg>
       {selected && lost && <span className="pointer-events-none absolute left-2 top-2 rounded-full bg-signal-red/90 px-2 py-0.5 text-[10px] font-medium text-white">Tracking unsure here — drag the outline onto the object</span>}
-      {tracking && <span className="pointer-events-none absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/75 px-2.5 py-1 text-[11px] text-white"><Loader2 className="size-3 animate-spin" /> Tracking the object…</span>}
+      {tracking && <span className="pointer-events-none absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-1 whitespace-nowrap rounded-full bg-black/75 px-2 py-0.5 text-[10px] text-white"><Loader2 className="size-3 animate-spin" /> Tracking…</span>}
     </div>
   );
 }
 
 // ------------------------------------------------------------------ floating toolbar
 
+// Side column (portrait frames) or row (landscape) - set by the toolbar for its buttons and panels.
+let VERTICAL = false;
+// Free space right of a portrait picture, where panels open without covering it.
+let PANEL: { left: number; width: number } | undefined;
+
 function Pop({ children, className }: { children: React.ReactNode; className?: string }) {
-  // Opens from the toolbar's left edge so the middle of the picture (and the live result) stays visible.
-  return <div className={cn('pointer-events-auto absolute left-0 top-full z-30 mt-2 max-h-[60dvh] w-[min(284px,92vw)] overflow-y-auto rounded-2xl border hairline bg-ink-900/97 p-3 text-xs shadow-2xl backdrop-blur', className)}>{children}</div>;
+  // Opens right of the picture (column, when there is room), beside the toolbar, or below its left
+  // edge (row): the picture and the live result stay visible.
+  return (
+    <div
+      className={cn('pointer-events-auto absolute z-30 max-h-[60dvh] overflow-y-auto rounded-2xl border hairline bg-ink-900/97 p-3 text-xs shadow-2xl backdrop-blur', PANEL ? 'top-0' : VERTICAL ? 'left-full top-0 ml-2 w-[min(284px,92vw)]' : 'left-0 top-full mt-2 w-[min(284px,92vw)]', className)}
+      style={PANEL ? { left: PANEL.left, width: PANEL.width } : undefined}
+    >
+      {children}
+    </div>
+  );
 }
 
 function TBtn({ icon: Icon, label, active, onClick, disabled, title }: { icon: typeof Palette; label: string; active?: boolean; onClick: () => void; disabled?: boolean; title?: string }) {
   return (
-    <button type="button" onClick={onClick} disabled={disabled} title={title ?? label} aria-pressed={active} className={cn('flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs transition disabled:opacity-40', active ? 'bg-white/12 text-white' : 'text-fog-200 hover:bg-white/[0.07] hover:text-white')}>
-      <Icon className="size-3.5" />
-      <span className="hidden sm:inline">{label}</span>
+    <button type="button" onClick={onClick} disabled={disabled} title={title ?? label} aria-pressed={active} className={cn('flex items-center gap-1.5 rounded-lg px-2 text-xs transition disabled:opacity-40', VERTICAL ? 'h-7 w-full shrink-0' : 'h-8', active ? 'bg-white/12 text-white' : 'text-fog-200 hover:bg-white/[0.07] hover:text-white')}>
+      <Icon className="size-3.5 shrink-0" />
+      <span className={VERTICAL ? 'truncate' : 'hidden sm:inline'}>{label}</span>
     </button>
   );
 }
+const Sep = () => <span className={VERTICAL ? 'my-0.5 h-px w-full bg-white/10' : 'mx-0.5 h-5 w-px bg-white/10'} />;
 
 export function ObjectToolbar({ pf, projectId, apply, timeline }: { pf: PreviewFrame; projectId: string; apply: Apply; timeline: Timeline }) {
   const { selecting, sel, popover, tracking, tightness, set } = useObjectUi();
   const actions = useObjectActions(projectId, apply);
   const { clip, obj } = findObject(timeline, sel);
   const onClip = Boolean(clip && pf.clip && clip.id === pf.clip.id);
+  VERTICAL = Boolean(pf.vertical);
+  PANEL = pf.vertical ? pf.panel : undefined;
   if (!obj || !clip || !onClip) {
     if (!selecting) return null;
     return (
-      <div className="pointer-events-auto flex items-center gap-2 rounded-xl border border-iris-400/40 bg-ink-900/95 px-3 py-1.5 text-xs text-fog-200 shadow-xl">
-        <Crosshair className="size-3.5 text-iris-300" /> Click an object in the picture. <span className="hidden text-fog-400 md:inline">Shift adds · Alt removes · Esc stops</span>
-        <button type="button" onClick={() => set({ selecting: false })} className="ml-1 rounded-md px-1.5 py-0.5 text-fog-400 hover:bg-white/[0.06] hover:text-white">Done</button>
+      <div className={cn('pointer-events-auto flex gap-2 rounded-xl border border-iris-400/40 bg-ink-900/95 px-3 py-1.5 text-xs text-fog-200 shadow-xl', VERTICAL ? 'w-[156px] flex-col items-start' : 'items-center')}>
+        <span className="flex items-center gap-2"><Crosshair className="size-3.5 shrink-0 text-iris-300" /> Click an object in the picture.</span>
+        <span className={cn('text-fog-400', !VERTICAL && 'hidden md:inline')}>Shift adds · Alt removes · Esc stops</span>
+        <button type="button" onClick={() => set({ selecting: false })} className={cn('rounded-md px-1.5 py-0.5 text-fog-400 hover:bg-white/[0.06] hover:text-white', !VERTICAL && 'ml-1')}>Done</button>
       </div>
     );
   }
@@ -379,26 +470,28 @@ export function ObjectToolbar({ pf, projectId, apply, timeline }: { pf: PreviewF
   const len = Math.max(0, obj.endSec - obj.startSec);
 
   return (
-    <div className="pointer-events-auto relative" data-testid="object-toolbar">
-      <div className="flex max-w-full flex-wrap items-center gap-0.5 rounded-xl border hairline bg-ink-900/95 p-1 shadow-xl backdrop-blur">
-        <span className="flex items-center gap-1.5 px-2 text-xs font-medium text-white">
-          <span className="size-3 rounded-full border border-white/40" style={{ background: recolor?.to ?? obj.color ?? '#888' }} />
+    <div className={cn('pointer-events-auto relative', VERTICAL && 'flex max-h-full min-h-0 flex-col')} data-testid="object-toolbar">
+      <div className={cn('rounded-xl border hairline bg-ink-900/95 p-1 shadow-xl backdrop-blur', VERTICAL ? 'flex min-h-0 w-[156px] flex-col items-stretch gap-0.5 overflow-y-auto' : 'flex max-w-full flex-wrap items-center gap-0.5')}>
+        <span className={cn('flex items-center gap-1.5 px-2 text-xs font-medium text-white', VERTICAL && 'py-1')}>
+          <span className="size-3 shrink-0 rounded-full border border-white/40" style={{ background: recolor?.to ?? obj.color ?? '#888' }} />
           <span className="max-w-[9rem] truncate">{obj.name}</span>
         </span>
-        <span className="mx-0.5 h-5 w-px bg-white/10" />
+        <Sep />
         <TBtn icon={Palette} label="Colour" active={popover === 'color' || Boolean(recolor)} onClick={() => toggle('color')} />
         <TBtn icon={SunMedium} label="Adjust" active={popover === 'adjust' || Boolean(adjust)} onClick={() => toggle('adjust')} />
         <TBtn icon={Droplet} label="Blur" active={popover === 'blur' || Boolean(spatial)} onClick={() => toggle('blur')} />
         <TBtn icon={Sparkles} label="AI" active={popover === 'ai'} onClick={() => toggle('ai')} title="Remove, replace or fix with AI (paid — price shown first)" />
-        <span className="mx-0.5 h-5 w-px bg-white/10" />
-        <button type="button" onClick={() => toggle('scope')} className={cn('flex h-8 items-center gap-1 rounded-lg px-2 text-xs', popover === 'scope' ? 'bg-white/12 text-white' : 'text-fog-200 hover:bg-white/[0.07]')} title="Which seconds this edit changes">
+        <Sep />
+        <button type="button" onClick={() => toggle('scope')} className={cn('flex items-center gap-1 rounded-lg px-2 text-xs', VERTICAL ? 'flex-wrap py-1.5 text-left' : 'h-8', popover === 'scope' ? 'bg-white/12 text-white' : 'text-fog-200 hover:bg-white/[0.07]')} title="Which seconds this edit changes">
           <span className="text-fog-400">For</span> {scopeLabel} <span className="text-fog-500">· {obj.scope === 'frame' ? '1 frame' : `${len.toFixed(1)} s`}</span>
         </button>
         <TBtn icon={tracking === obj.id ? Loader2 : Crosshair} label={obj.mask.track ? 'Re-track' : 'Track'} onClick={() => void actions.track(clip, obj)} disabled={Boolean(tracking)} title="Follow the object while it moves (free)" />
         <TBtn icon={Wand2} label="Refine" active={popover === 'refine'} onClick={() => toggle('refine')} />
-        <span className="mx-0.5 h-5 w-px bg-white/10" />
-        <button type="button" aria-label="Delete selection" title="Delete this selection and its effects" onClick={() => actions.remove(clip.id, obj.id)} className="grid size-8 place-items-center rounded-lg text-fog-400 hover:bg-white/[0.07] hover:text-signal-red"><Trash2 className="size-3.5" /></button>
-        <button type="button" aria-label="Done" title="Done (Esc)" onClick={() => set({ sel: null, popover: null, selecting: false })} className="grid size-8 place-items-center rounded-lg text-fog-300 hover:bg-white/[0.07] hover:text-white"><Check className="size-4" /></button>
+        <Sep />
+        <span className={cn('flex', VERTICAL ? 'justify-between' : 'gap-0.5')}>
+          <button type="button" aria-label="Delete selection" title="Delete this selection and its effects" onClick={() => actions.remove(clip.id, obj.id)} className="grid size-8 place-items-center rounded-lg text-fog-400 hover:bg-white/[0.07] hover:text-signal-red"><Trash2 className="size-3.5" /></button>
+          <button type="button" aria-label="Done" title="Done (Esc)" onClick={() => set({ sel: null, popover: null, selecting: false })} className="grid size-8 place-items-center rounded-lg text-fog-300 hover:bg-white/[0.07] hover:text-white"><Check className="size-4" /></button>
+        </span>
       </div>
 
       {popover === 'color' && (
@@ -517,6 +610,12 @@ export function ObjectToolbar({ pf, projectId, apply, timeline }: { pf: PreviewF
             <li><b className="text-white">Shift + click</b> adds a part, <b className="text-white">Alt + click</b> removes one.</li>
             <li><b className="text-white">Drag the outline</b> to move it (on a tracked object: corrects the tracking from that frame).</li>
           </ul>
+          {obj.adapt && (
+            <label className="mt-2 flex items-start gap-2 text-fog-300" title="On every frame the object is found again by its colour and edges, so the effect covers it exactly when it turns or changes shape. Off: the outline as drawn moves with the tracking.">
+              <input type="checkbox" checked={obj.adapt.on} onChange={(e) => updateObject(apply, clip.id, obj.id, (o) => (o.adapt ? { ...o, adapt: { ...o.adapt, on: e.target.checked } } : o))} className="mt-0.5 accent-iris-500" />
+              <span>Follow shape changes <span className="block text-[10px] text-fog-500">Finds the object again on every frame — for things that turn or move their arms.</span></span>
+            </label>
+          )}
           <label className="mt-2 flex items-center gap-2 text-fog-300"><input type="checkbox" checked={obj.mask.invert} onChange={(e) => updateObject(apply, clip.id, obj.id, (o) => ({ ...o, mask: { ...o.mask, invert: e.target.checked } }))} className="accent-iris-500" /> Everything except the object</label>
         </Pop>
       )}

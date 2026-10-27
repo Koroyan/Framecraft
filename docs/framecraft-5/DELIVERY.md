@@ -41,6 +41,13 @@ Custom · Track · Refine**. Choosing an effect for more than a moment tracks th
 (free). Unsure frames are marked red on the clip; drag the outline there to correct, and tracking
 continues from that frame. Shift-click adds a part, Alt-click removes one.
 
+**Objects that turn or change shape.** A click-selected object is found again on every frame by its
+colour and edges, starting from points inside it that the tracker moves along, so the colour covers
+its real shape when it turns (a figurine rotating from side view to front view) and the dashed outline
+hugs what is really changed. Shift-click on a lit or shaded side adds that colour as part of the same
+object; *Refine › Follow shape changes* switches it off. Preview (in a background worker, so playback
+stays smooth) and export run the same function on the same frames.
+
 **Ask.** The assistant (Ctrl+J) docks right, bottom or floats; it knows the selected clip, object and
 range ("make *this* darker"). Everyday requests are understood instantly on the device (no AI call, no
 credits) and come back as **Preview / Keep / Cancel** changes; anything that changes pixels with AI
@@ -62,17 +69,22 @@ side, scrubbed together) with Accept / Reject — without leaving the timeline.
 | Task G — 1366, 1920, tablet 820: no sideways scroll, preview ≥ usable size, panels never overlap, assistant fits | Playwright › G; screenshots G-* |
 | Task H — speed change, blurred object, title, assistant hidden, workspace switch, reload: all saved, versions kept | Playwright › H; screenshot H |
 | Instant assistant (EN / KA / RU), ripple delete, object maths, smart select, intent hub | `packages/shared` tests (40) |
+| Objects that change shape: a blob turning from wide to tall is exported blue in its new shape (the drawn outline alone misses it); a same-coloured strip leading out of the picture is not coloured; two clicked colours form one object | server `object-edit.test.ts` › shape-changing object (exported pixels); `packages/shared` tests (4) |
+| Real footage (user's figurine turning, 6 s, white coat → blue) | Checked frame by frame on the server render and in the browser preview: the coat stays blue as it turns; before this change only a stripe of it did and blue leaked onto white cars |
 
 Test totals at delivery: shared 40 ✓ · server 147 ✓ (1 skipped manual) · Playwright 10 ✓ (5 skipped
 by design: they need test-fixture mode and would otherwise spend real credits) · typecheck and lint clean.
+After the shape-following update: shared 45 ✓ · server 150 ✓ (1 skipped) · Playwright 10 ✓ (5 skipped by
+design) · typecheck, lint and production build clean.
 
 ## 5. Code map (new or rebuilt)
 
 - `packages/shared/src/objects.ts` — object edits (selection, time scope, effects), transforms, colour function (incl. colourising grey/black objects), track merge.
-- `packages/shared/src/segment.ts` — click-to-select (minimax geodesic in CIELAB + edges, automatic edge threshold, marching-squares outline).
+- `packages/shared/src/segment.ts` — click-to-select (minimax geodesic in CIELAB + edges, automatic edge threshold, marching-squares outline); `adaptiveMask` finds a selected object again on another frame (grown from tracked interior points, cut where it would run out of the search window into background).
+- `apps/web/src/lib/adapt.worker.ts` — the preview's per-frame object search off the main thread.
 - `packages/shared/src/quick.ts` · `edit.ts` — instant assistant and the new plan operations (object, look, volume, cut range…), `rippleDelete`.
 - `packages/shared/src/intent.ts` — "what do you want to make" suggestion.
-- `apps/server/src/media/object-fx.ts` — export of object edits (per-frame mask video + FFmpeg compositing); `tracker.ts` — scale search, reliability span, flat-patch guard.
+- `apps/server/src/media/object-fx.ts` — export of object edits (per-frame mask video + FFmpeg compositing; shape-following objects are found again in the decoded source frames); `tracker.ts` — median-flow point tracking (pyramidal Lucas–Kanade, forward–backward check) seeded inside the selection outline, with template re-acquisition when points are lost.
 - `apps/server/src/editing/versions.ts` — `ensureClipShot` (own footage → shot); routes `POST /api/projects/:id/shots/from-clip`, `GET /api/shots/:id/regenerate/estimate`.
 - `apps/web/src/app/app/editor/[id]/page.tsx` — the workspace; `components/editor/{preview,inspector,assistant,object-tool,storyboard,review,editor-dialogs}.tsx`; `lib/{editor-ui,assistant,object-ui,plan-describe,shot-context}.ts`.
 - `apps/web/src/components/editor/grade-canvas.tsx` — WebGL preview now crops exactly like the export and draws object effects.
@@ -81,7 +93,8 @@ by design: they need test-fixture mode and would otherwise spend real credits) �
 ## 6. Still incomplete (honest)
 
 - **Selection is colour/edge based, not a segmentation model.** Excellent for objects that differ from their surroundings (clothes, products, signs); busy textures need Refine (Shift/Alt-click, edge slider). A SAM-style model can plug into the same place later (it needs a model download or a paid API — not done without approval).
-- **Tracking follows position and size**, not rotation or perspective; the outline shape does not deform. Recolour stays precise anyway because only the object's colour inside the moving window changes.
+- **Shape following is colour based.** It covers an object that turns or deforms as long as it differs from its surroundings. A same-coloured background touching it with almost no edge can still be partly included (a white rail behind a white coat). Very bright highlights or deep shade may need one Shift-click to add that shade. A white syringe held against a white coat is the same colour, so it is included until removed with Alt-click, which removes the clicked region as drawn (moving with the track).
+- **Drawn rectangles, brush strokes and inverted selections** move and scale with the track but do not change shape.
 - Not built: timeline multi-select, speed ramps, keyframe curves for object effects, GIF stickers, a sound-effects library, solo/lock for the video lane, layer grouping.
 - Assistant conversations are stored in the browser (per project), not synced between devices.
 - Blur, pixelate and feathering in the *preview* are close approximations; colour is exact (same LUT as export).

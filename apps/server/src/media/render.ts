@@ -65,7 +65,7 @@ export async function renderTimeline({ timeline, resolve, output, onProgress }: 
         effects: async (srcInfo) => [
           ...(await lookFilters(c.adjust, { dir, key: `c${i}`, width: dims.width, height: dims.height, fps: timeline.fps, durationSec: srcInfo.durationSec, srcWidth: srcInfo.width, srcHeight: srcInfo.height, inSec: c.inSec, speed: c.speed || 1, customLut: c.adjust?.lut ? await loadLut(c.adjust.lut.assetId) : null })),
           // Selected objects (recolour / adjust / blur / pixelate inside a tracked mask), same maths as the preview.
-          ...(await objectFilters(c.objects, { dir, key: `c${i}`, width: dims.width, height: dims.height, fps: timeline.fps, durationSec: srcInfo.durationSec, srcWidth: srcInfo.width, srcHeight: srcInfo.height, inSec: c.inSec, outSec: c.outSec, speed: c.freezeSec ? 1 : c.speed || 1, reverse: c.reverse, freeze: Boolean(c.freezeSec), reframe: c.reframe?.points })),
+          ...(await objectFilters(c.objects, { dir, key: `c${i}`, width: dims.width, height: dims.height, fps: timeline.fps, durationSec: srcInfo.durationSec, srcWidth: srcInfo.width, srcHeight: srcInfo.height, inSec: c.inSec, outSec: c.outSec, speed: c.freezeSec ? 1 : c.speed || 1, reverse: c.reverse, freeze: Boolean(c.freezeSec), reframe: c.reframe?.points, source: src })),
           ...cameraFilters(c.camera, dims.width, dims.height, timeline.fps),
         ],
       });

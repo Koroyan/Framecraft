@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { applyReplace, buildLut, gradeFunction, gradeSchema, maskIsEmpty, maskTransformAt, needsLut, objectActiveAt, objectColorFunction, parseCube, spatialEffect, type EditMask, type GradeSettings, type Lut3d, type ObjectEdit } from '@framecraft/shared';
+import { useFoundOutlines } from '@/lib/object-ui';
+import { adaptedMaskAt, adapts, applyReplace, maskOutlines, buildLut, gradeFunction, gradeSchema, maskIsEmpty, maskTransformAt, needsLut, objectActiveAt, objectColorFunction, parseCube, spatialEffect, type AdaptedMask, type EditMask, type GradeSettings, type Lut3d, type ObjectEdit } from '@framecraft/shared';
 
 /*
  * Live colour preview: draws the playing <video> through the same 3D LUT the export uses
@@ -74,8 +75,26 @@ function lutTexture(gl: WebGL2RenderingContext, lut: Lut3d, tex: WebGLTexture | 
   return t;
 }
 
-/** Draw a mask (normalised, source coordinates) where its track puts it at source time t, feathered. */
-export function drawMask(c: HTMLCanvasElement, mask: EditMask, t: number) {
+/** An object's shape found on a frame, ready to draw (white = object). */
+export type FoundShape = { a: AdaptedMask; canvas: HTMLCanvasElement };
+
+export function foundShape(a: AdaptedMask): FoundShape {
+  const c = document.createElement('canvas');
+  c.width = a.width;
+  c.height = a.height;
+  const g = c.getContext('2d')!;
+  const img = g.createImageData(a.width, a.height);
+  for (let i = 0; i < a.mask.length; i++) if (a.mask[i]) img.data.fill(255, i * 4, i * 4 + 4);
+  g.putImageData(img, 0, 0);
+  return { a, canvas: c };
+}
+
+/**
+ * Draw a mask (normalised, source coordinates) where its track puts it at source time t, feathered.
+ * `shape` (the object found on a frame) stands for the added polygons; if it was found on a slightly
+ * different frame it is moved by the track in between.
+ */
+export function drawMask(c: HTMLCanvasElement, mask: EditMask, t: number, shape?: FoundShape | null) {
   const g = c.getContext('2d')!;
   const W = c.width;
   const H = c.height;
@@ -100,7 +119,23 @@ export function drawMask(c: HTMLCanvasElement, mask: EditMask, t: number) {
     else g.rect(r.x * W, r.y * H, r.w * W, r.h * H);
     g.fill();
   }
+  let drawn = false;
   for (const p of mask.polygons) {
+    if (shape && !p.subtract) {
+      if (drawn) continue;
+      drawn = true;
+      const ta = maskTransformAt(mask, shape.a.t);
+      const k = tr.s / (ta.s || 1);
+      g.save();
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.translate((tr.cx + tr.dx) * W, (tr.cy + tr.dy) * H);
+      g.scale(k, k);
+      g.translate(-(ta.cx + ta.dx) * W, -(ta.cy + ta.dy) * H);
+      const { a } = shape;
+      g.drawImage(shape.canvas, (a.x0 / a.frameWidth) * W, (a.y0 / a.frameHeight) * H, (a.width / a.frameWidth) * W, (a.height / a.frameHeight) * H);
+      g.restore();
+      continue;
+    }
     paint(p.subtract);
     g.beginPath();
     p.points.forEach(([x, y], i) => (i ? g.lineTo(x * W, y * H) : g.moveTo(x * W, y * H)));
@@ -133,6 +168,29 @@ export function coverCrop(vw: number, vh: number, cw: number, ch: number, object
 }
 
 type Slot = { lut: WebGLTexture | null; mask: WebGLTexture; canvas: HTMLCanvasElement };
+/** Last shape found for an object (re-found when the frame changes; at most ~14×/s while playing). */
+type Found = { id: string; key: string; t: number; at: number; shape: FoundShape | null };
+/** A frame handed to the worker and not answered yet. */
+type Job = { key: string; since: number };
+
+/** The video's current frame, `res` pixels wide (null when its pixels can't be read). */
+function readFrame(v: HTMLVideoElement, res: number, cv: HTMLCanvasElement) {
+  const vw = v.videoWidth;
+  const vh = v.videoHeight;
+  if (!vw || !vh) return null;
+  const h = Math.max(2, Math.round((res * vh) / vw));
+  if (cv.width !== res || cv.height !== h) {
+    cv.width = res;
+    cv.height = h;
+  }
+  const g = cv.getContext('2d', { willReadFrequently: true })!;
+  try {
+    g.drawImage(v, 0, 0, res, h);
+    return { data: g.getImageData(0, 0, res, h).data, width: res, height: h };
+  } catch {
+    return null;
+  }
+}
 
 const UNITS: Record<string, number> = { uVideo: 0, uLut: 1 };
 for (let i = 0; i < REPS; i++) {
@@ -148,7 +206,7 @@ export function GradeCanvas({ video, adjust, lutUrl, srcTime, objectPosition, ob
   const canvas = useRef<HTMLCanvasElement>(null);
   const [supported, setSupported] = useState(true);
   const [custom, setCustom] = useState<Lut3d | null>(null);
-  const state = useRef<{ gl: WebGL2RenderingContext; prog: WebGLProgram; vtex: WebGLTexture; lut: WebGLTexture | null; reps: Slot[]; objs: Slot[]; repMasks: EditMask[]; objList: ObjectEdit[]; dummy3d: WebGLTexture; dummy2d: WebGLTexture } | null>(null);
+  const state = useRef<{ gl: WebGL2RenderingContext; prog: WebGLProgram; vtex: WebGLTexture; lut: WebGLTexture | null; reps: Slot[]; objs: Slot[]; repMasks: EditMask[]; objList: ObjectEdit[]; dummy3d: WebGLTexture; dummy2d: WebGLTexture; found: (Found | undefined)[]; grab: HTMLCanvasElement; worker: Worker | null; jobs: (Job | undefined)[]; seq: number } | null>(null);
   const g = gradeSchema.parse(adjust ?? {});
   const masked = (g.replace ?? []).filter((r) => r.mask && !maskIsEmpty(r.mask)).slice(0, REPS);
   const objList = (objects ?? []).filter((o) => o.enabled && o.effects.length && !maskIsEmpty(o.mask)).slice(0, OBJS);
@@ -202,7 +260,23 @@ export function GradeCanvas({ video, adjust, lutUrl, srcTime, objectPosition, ob
     gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA8, 1, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
     const dummy2d = tex2d();
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
-    state.current = { gl, prog, vtex: tex2d(), lut: null, reps: Array.from({ length: REPS }, slot), objs: Array.from({ length: OBJS }, slot), repMasks: [], objList: [], dummy3d, dummy2d };
+    // Objects that follow shape changes are found again off the main thread (smooth playback).
+    let worker: Worker | null = null;
+    try {
+      worker = new Worker(new URL('../../lib/adapt.worker.ts', import.meta.url), { type: 'module' });
+    } catch {
+      worker = null; // found on the main thread instead
+    }
+    const st: NonNullable<typeof state.current> = { gl, prog, vtex: tex2d(), lut: null, reps: Array.from({ length: REPS }, slot), objs: Array.from({ length: OBJS }, slot), repMasks: [], objList: [], dummy3d, dummy2d, found: [], grab: document.createElement('canvas'), worker, jobs: [], seq: 0 };
+    state.current = st;
+    worker?.addEventListener('message', (e: MessageEvent<{ slot: number; key: string; t: number; shape: AdaptedMask | null; outline: [number, number][][] }>) => {
+      const { slot: i, key, t, shape, outline } = e.data;
+      if (st.jobs[i]?.key === key) st.jobs[i] = undefined;
+      const id = key.slice(0, key.indexOf('|'));
+      st.found[i] = { id, key, t, at: performance.now(), shape: shape ? foundShape(shape) : null };
+      useFoundOutlines.getState().put(id, shape && outline.length ? { t, polys: outline } : null);
+    });
+    return () => worker?.terminate();
   }, []);
 
   // (Re)bake LUTs when the grade or the objects change (debounced so slider drags stay smooth).
@@ -229,7 +303,7 @@ export function GradeCanvas({ video, adjust, lutUrl, srcTime, objectPosition, ob
   useEffect(() => {
     if (state.current) state.current.objList = objList;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(objList.map((o) => [o.mask, o.startSec, o.endSec, o.enabled]))]);
+  }, [JSON.stringify(objList.map((o) => [o.mask, o.startSec, o.endSec, o.enabled, o.adapt]))]);
 
   useEffect(() => {
     if (!active) return;
@@ -268,6 +342,35 @@ export function GradeCanvas({ video, adjust, lutUrl, srcTime, objectPosition, ob
       gl.uniform1f(U('uLutOn'), lutOn ? 1 : 0);
       bind(UNITS.uLut, gl.TEXTURE_3D, lutOn ? s.lut! : s.dummy3d);
       const t = live.current.srcTime ? live.current.srcTime() : v.currentTime;
+      // Objects that follow shape changes: find them again on this frame (in the worker; while
+      // playing at most ~14×/s — in between, the last shape is moved along by the track).
+      let frame: ReturnType<typeof readFrame> | undefined;
+      const findShape = (o: ObjectEdit, i: number): FoundShape | null => {
+        if (!adapts(o) || !o.adapt) return null;
+        const key = `${o.id}|${JSON.stringify([o.adapt, o.mask.polygons, o.mask.track?.points.length, o.mask.track?.points[0], o.atSec])}`;
+        const f = s.found[i];
+        const now = performance.now();
+        const same = f && f.key === key ? f : undefined;
+        const fresh = same && Math.abs(same.t - t) < 0.004;
+        const busy = s.jobs[i] && now - s.jobs[i]!.since < 1500;
+        if (!fresh && !busy && (!same || v.paused || now - same.at >= 70)) {
+          if (frame === undefined || (frame && frame.width !== o.adapt.res)) frame = readFrame(v, o.adapt.res, s.grab);
+          if (!frame) s.found[i] = { id: o.id, key, t, at: now, shape: null };
+          else if (s.worker) {
+            const data = frame.data.slice();
+            s.jobs[i] = { key, since: now };
+            s.worker.postMessage({ id: ++s.seq, slot: i, key, t, obj: { mask: o.mask, adapt: o.adapt }, frame: { data, width: frame.width, height: frame.height } }, [data.buffer]);
+          } else {
+            const a = adaptedMaskAt(o, frame, t);
+            s.found[i] = { id: o.id, key, t, at: now, shape: a ? foundShape(a) : null };
+            const outline = a ? maskOutlines(a.mask, a.width, a.height).map((poly) => poly.map(([x, y]) => [(a.x0 + x) / a.frameWidth, (a.y0 + y) / a.frameHeight] as [number, number])) : [];
+            useFoundOutlines.getState().put(o.id, a && outline.length ? { t, polys: outline } : null);
+          }
+        }
+        // Until the answer arrives, the object's previous shape (same object) is better than none.
+        const show = s.found[i];
+        return show && show.id === o.id ? show.shape : null;
+      };
       const maskSize = (cv: HTMLCanvasElement) => {
         cv.width = 480;
         cv.height = Math.max(2, Math.round((480 * (v.videoHeight || 9)) / (v.videoWidth || 16)));
@@ -307,7 +410,7 @@ export function GradeCanvas({ video, adjust, lutUrl, srcTime, objectPosition, ob
             gl.uniform2f(U(`uOPar${i}`), block / rect.width, block / rect.height);
           } else gl.uniform1f(U(`uOSp${i}`), 0);
           maskSize(slot.canvas);
-          drawMask(slot.canvas, o.mask, t);
+          drawMask(slot.canvas, o.mask, t, findShape(o, i));
         }
         bindSlot(slot, UNITS[`uOL${i}`]!, UNITS[`uOM${i}`]!, on);
       }
@@ -318,17 +421,17 @@ export function GradeCanvas({ video, adjust, lutUrl, srcTime, objectPosition, ob
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, key]);
 
-  if (!active) return null;
   // Never pretend: without WebGL2 the picture here shows no colour/object effects, the export does.
-  if (!supported)
-    return <span className="pointer-events-none absolute bottom-2 left-2 rounded-full bg-black/75 px-2 py-0.5 text-[10px] text-white">Colour preview needs WebGL — the export applies it exactly</span>;
+  if (!supported) return active ? <span className="pointer-events-none absolute bottom-2 left-2 rounded-full bg-black/75 px-2 py-0.5 text-[10px] text-white">Colour preview needs WebGL — the export applies it exactly</span> : null;
+  // The canvas always exists (hidden while there is nothing to draw), so its WebGL context is ready
+  // the moment a first colour or object effect is added — not only after a reload.
   return (
     <canvas
       ref={canvas}
       aria-hidden
       data-testid="grade-canvas"
-      className="pointer-events-none absolute inset-0 size-full"
-      style={{ filter: [g.blur ? `blur(${(g.blur * 0.5).toFixed(1)}px)` : '', g.glow ? `brightness(${1 + g.glow * 0.12}) saturate(${1 + g.glow * 0.1})` : ''].filter(Boolean).join(' ') || undefined }}
+      className={active ? 'pointer-events-none absolute inset-0 size-full' : 'hidden'}
+      style={active ? { filter: [g.blur ? `blur(${(g.blur * 0.5).toFixed(1)}px)` : '', g.glow ? `brightness(${1 + g.glow * 0.12}) saturate(${1 + g.glow * 0.1})` : ''].filter(Boolean).join(' ') || undefined } : undefined}
     />
   );
 }

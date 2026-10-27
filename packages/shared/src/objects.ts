@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { editMaskSchema, type EditMask } from './masks';
 import { applyReplace, gradeFunction, hexToRgb, hslToRgb, rgbToHex, rgbToHsl, type GradeSettings } from './grade';
 import { motionAt } from './layers';
+import { adaptiveMask, fillPolygon, type AdaptiveMask, type ImageLike } from './segment';
 
 /*
  * Object edits: "this jacket, from 1.2 s to 4.0 s, blue". An object is a selection (drawn or
@@ -42,6 +43,30 @@ export const OBJECT_SCOPES = [
 ] as const;
 export type ObjectScope = (typeof OBJECT_SCOPES)[number]['key'];
 
+/** One clicked part of an object: its colour and points on it (at `atSec`, moved by the track). */
+export const adaptPartSchema = z.object({
+  seeds: z.array(z.tuple([z.number().min(-0.5).max(1.5), z.number().min(-0.5).max(1.5)])).min(1).max(24),
+  /** Its colour (CIELAB) and how much lightness counts. */
+  lab: z.tuple([z.number(), z.number(), z.number()]),
+  wL: z.number().min(0).max(1),
+  /** Edge threshold of the click — measured at a frame `res` pixels wide. */
+  threshold: z.number().min(0.5).max(80),
+});
+export type AdaptPart = z.infer<typeof adaptPartSchema>;
+
+/**
+ * How a click-selected object is found again on every frame, so the edit follows its real shape when
+ * it turns or deforms (the outline as drawn only moves and scales with the track). It replaces the
+ * selection's added parts; subtracted parts stay as drawn. Shift + click adds a part (e.g. the side
+ * of a coat that is in the light).
+ */
+export const objectAdaptSchema = z.object({
+  on: z.boolean().default(true),
+  parts: z.array(adaptPartSchema).min(1).max(6),
+  res: z.number().int().min(64).max(1920),
+});
+export type ObjectAdapt = z.infer<typeof objectAdaptSchema>;
+
 export const objectEditSchema = z.object({
   id: z.string().min(1).max(40),
   name: z.string().min(1).max(60).default('Object'),
@@ -56,6 +81,8 @@ export const objectEditSchema = z.object({
   effects: z.array(objectEffectSchema).max(4).default([]),
   /** Average colour of the selected pixels (swatch and recolour source). */
   color: hex.optional(),
+  /** Follow shape changes (click selections): see objectAdaptSchema. */
+  adapt: objectAdaptSchema.optional(),
   enabled: z.boolean().default(true),
 });
 export type ObjectEdit = z.infer<typeof objectEditSchema>;
@@ -86,6 +113,73 @@ export function maskTransformAt(m: EditMask, t: number) {
 }
 
 export const applyTransform = (tr: { dx: number; dy: number; s: number; cx: number; cy: number }, x: number, y: number): [number, number] => [tr.cx + (x - tr.cx) * tr.s + tr.dx, tr.cy + (y - tr.cy) * tr.s + tr.dy];
+
+export type AdaptedMask = AdaptiveMask & { frameWidth: number; frameHeight: number; t: number };
+
+const polyArea = (pts: [number, number][]) => {
+  let a = 0;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) a += (pts[j]![0] + pts[i]![0]) * (pts[j]![1] - pts[i]![1]);
+  return Math.abs(a / 2);
+};
+
+/** Does this object re-find its shape on every frame? */
+export const adapts = (o: Pick<ObjectEdit, 'adapt' | 'mask'>) => Boolean(o.adapt?.on && o.adapt.parts.length && o.mask.polygons.some((p) => !p.subtract) && !o.mask.invert);
+
+/**
+ * The object's real shape at source second t, found in `img` (the source frame scaled to
+ * `adapt.res` pixels wide) — the same function in the browser preview and in the export. It stands
+ * for the selection's added polygons. Null when it can't be found there; the drawn outline (moved
+ * by the track) is used instead.
+ */
+export function adaptedMaskAt(o: Pick<ObjectEdit, 'adapt' | 'mask'>, img: ImageLike, t: number): AdaptedMask | null {
+  const a = o.adapt;
+  if (!a || !adapts(o)) return null;
+  const W = img.width;
+  const H = img.height;
+  const tr = maskTransformAt(o.mask, t);
+  const toPx = ([x, y]: [number, number]) => {
+    const [px, py] = applyTransform(tr, x, y);
+    return [px * W, py * H] as [number, number];
+  };
+  const polys = o.mask.polygons.filter((p) => !p.subtract).map((p) => p.points.map(toPx));
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const pts of polys)
+    for (const [x, y] of pts) {
+      x0 = Math.min(x0, x);
+      y0 = Math.min(y0, y);
+      x1 = Math.max(x1, x);
+      y1 = Math.max(y1, y);
+    }
+  const groups = a.parts.map((p) => ({ seeds: p.seeds.map(toPx), ref: { L: p.lab[0], A: p.lab[1], B: p.lab[2], wL: p.wL }, threshold: p.threshold }));
+  const side = Math.max(x1 - x0, y1 - y0);
+  // Where the object can plausibly reach. A side of the picture it is nowhere near counts as
+  // background too: a region running out there is the road or a wall, not the object.
+  const near = 0.3 * side;
+  const open = { left: x0 - near >= 1, top: y0 - near >= 1, right: x1 + near <= W - 1, bottom: y1 + near <= H - 1 };
+  // Room to change shape: a turning object can get a good deal wider or taller.
+  const search = (k: number) => adaptiveMask(img, { window: { x0: x0 - k * side, y0: y0 - k * side, x1: x1 + k * side, y1: y1 + k * side }, groups, open });
+  let r = search(0.3);
+  // Cut at the window's side: the object may simply have grown or turned wider — look again in a
+  // window twice as roomy; whatever still runs out of that one is background.
+  if (r?.cut) r = search(0.65) ?? r;
+  if (!r) return null;
+  const expected = polys.reduce((sum, pts) => sum + polyArea(pts), 0);
+  if (r.area < expected * 0.1) return null;
+  if (r.area > expected * 2.2) {
+    // Ran into a similar-coloured background: keep only what is near where the object should be.
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    const guard = new Uint8Array(r.width * r.height);
+    for (const pts of polys) fillPolygon(guard, r.width, r.height, pts.map(([x, y]) => [cx + (x - cx) * 1.3 - r.x0, cy + (y - cy) * 1.3 - r.y0]), 1);
+    let area = 0;
+    for (let i = 0; i < guard.length; i++) {
+      if (!guard[i]) r.mask[i] = 0;
+      area += r.mask[i]!;
+    }
+    r.area = area;
+    if (!area) return null;
+  }
+  return { ...r, frameWidth: W, frameHeight: H, t };
+}
 
 /** Is the object edit active at this source second? (A "frame" edit lasts one frame either side.) */
 export function objectActiveAt(o: Pick<ObjectEdit, 'startSec' | 'endSec' | 'enabled'>, srcT: number, frame = 1 / 30): boolean {
@@ -141,7 +235,9 @@ function colorizeNeutral(e: Extract<ObjectEffect, { type: 'recolor' }>) {
   const soft = Math.max(0.02, e.softness * width);
   return (px: [number, number, number]): [number, number, number] => {
     const [, s, l] = rgbToHsl(...px);
-    const d = Math.abs(l - fl);
+    // A light material only gets lighter where light hits it (and a dark one darker in shade):
+    // those shades are the same object, so the window is open on that side.
+    const d = (fl >= 0.5 && l > fl) || (fl <= 0.25 && l < fl) ? 0 : Math.abs(l - fl);
     let w = d <= width ? 1 : d >= width + soft ? 0 : 1 - (d - width) / soft;
     w *= clamp01((Math.max(0.28, fs + 0.18) - s) / 0.1); // leave clearly coloured pixels alone
     w *= e.strength;

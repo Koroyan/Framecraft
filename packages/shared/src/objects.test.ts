@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { applyPlanOp, rippleDelete } from './edit';
-import { applyTransform, lostSpans, maskTransformAt, mergeTrack, objectActiveAt, objectColorFunction, objectEditSchema } from './objects';
+import { adaptedMaskAt, adapts, applyTransform, lostSpans, maskTransformAt, mergeTrack, objectActiveAt, objectColorFunction, objectEditSchema } from './objects';
 import { quickPlan } from './quick';
-import { prepareFrame, regionAt, selectFrom, smartSelect } from './segment';
+import { interiorPoints, maskOutlines, prepareFrame, regionAt, selectFrom, smartSelect } from './segment';
 import { timelineSchema, type Timeline } from './schemas';
 import { hexToRgb, rgbToHsl } from './grade';
 
@@ -221,5 +221,102 @@ describe('several selected clips', () => {
     const r = quickPlan('make them warmer', { clipId: 'a', clipIndex: 0, clipIds: ['a', 'b'] })!;
     expect(r.ops).toEqual([{ op: 'clip_adjust', clipIds: ['a', 'b'], delta: { temperature: 0.2 } }]);
     expect(quickPlan('black and white', { clipId: 'a', clipIds: ['a', 'b'] })!.ops).toEqual([{ op: 'look', clipIds: ['a', 'b'], key: 'bw' }]);
+  });
+});
+
+// ------------------------------------------------------------------ shape-following objects
+
+/** Grey wall; an orange ellipse (rx, ry) at (cx, cy); optional same-orange band from the left edge. */
+function blobFrame(o: { rx: number; ry: number; cx?: number; cy?: number; band?: boolean; lower?: string }, w = 240, h = 240) {
+  const cx = o.cx ?? 120;
+  const cy = o.cy ?? 120;
+  const data = new Uint8ClampedArray(w * h * 4);
+  let seed = 3;
+  const noise = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648 - 0.5) * 6;
+  const lower = o.lower ? hexToRgb(o.lower).map((v) => v * 255) : null;
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const inside = ((x - cx) / o.rx) ** 2 + ((y - cy) / o.ry) ** 2 <= 1;
+      const inBand = o.band && y >= cy - 4 && y < cy + 4 && x < cx;
+      let c = [128, 130, 134];
+      if (inBand && !inside) c = [212, 108, 24]; // a slightly darker orange: within the colour tolerance
+      if (inside) c = lower && y > cy ? lower : [232, 120, 30];
+      data[i] = c[0]! + noise();
+      data[i + 1] = c[1]! + noise();
+      data[i + 2] = c[2]! + noise();
+      data[i + 3] = 255;
+    }
+  return { data, width: w, height: h };
+}
+
+/** Click at (x, y) on a frame: the selection and how to find it again (as the editor does). */
+function clickPart(img: ReturnType<typeof blobFrame>, x: number, y: number) {
+  const p = prepareFrame(img);
+  const sel = selectFrom(p, x, y);
+  const region = regionAt(p, sel, sel.auto)!;
+  const part = { seeds: interiorPoints(region.mask, img.width, img.height, 12), lab: [sel.ref.L, sel.ref.A, sel.ref.B] as [number, number, number], wL: sel.ref.wL, threshold: sel.auto };
+  return { region, part };
+}
+
+const inMask = (a: NonNullable<ReturnType<typeof adaptedMaskAt>>, x: number, y: number) => {
+  const px = x - a.x0;
+  const py = y - a.y0;
+  return px >= 0 && py >= 0 && px < a.width && py < a.height && a.mask[py * a.width + px] === 1;
+};
+
+describe('objects that follow shape changes', () => {
+  it('finds the object again when its shape changes', () => {
+    const { region, part } = clickPart(blobFrame({ rx: 40, ry: 24 }), 120, 120);
+    const obj = { mask: { rects: [], strokes: [], polygons: [{ points: region.polygon, subtract: false }], feather: 0, invert: false }, adapt: { on: true, parts: [part], res: 240 } };
+    expect(adapts(obj)).toBe(true);
+    // Later it is tall and narrow (it turned): the drawn outline would miss the top and bottom.
+    const a = adaptedMaskAt(obj, blobFrame({ rx: 22, ry: 44 }), 1)!;
+    expect(a).not.toBeNull();
+    expect(inMask(a, 120, 120)).toBe(true);
+    expect(inMask(a, 120, 158)).toBe(true); // inside the new shape, outside the old one
+    expect(inMask(a, 120, 84)).toBe(true);
+    expect(inMask(a, 152, 120)).toBe(false); // inside the old shape only
+    const truth = Math.PI * 22 * 44;
+    expect(a.area / truth).toBeGreaterThan(0.85);
+    expect(a.area / truth).toBeLessThan(1.25);
+    // Its outline, for the dashed selection line.
+    const lines = maskOutlines(a.mask, a.width, a.height);
+    expect(lines.length).toBe(1);
+    expect(lines[0]!.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('does not run into a same-coloured strip that leads out of the picture', () => {
+    const { region, part } = clickPart(blobFrame({ rx: 30, ry: 30 }), 120, 120);
+    const obj = { mask: { rects: [], strokes: [], polygons: [{ points: region.polygon, subtract: false }], feather: 0, invert: false }, adapt: { on: true, parts: [part], res: 240 } };
+    const a = adaptedMaskAt(obj, blobFrame({ rx: 30, ry: 30, band: true }), 1)!;
+    expect(inMask(a, 120, 120)).toBe(true);
+    expect(inMask(a, 30, 120)).toBe(false);
+    expect(inMask(a, 70, 120)).toBe(false);
+  });
+
+  it('a second clicked part with its own colour is found together with the first', () => {
+    const img = blobFrame({ rx: 36, ry: 36, lower: '#7C3AED' });
+    const top = clickPart(img, 120, 104);
+    const bottom = clickPart(img, 120, 136);
+    const obj = {
+      mask: { rects: [], strokes: [], polygons: [{ points: top.region.polygon, subtract: false }, { points: bottom.region.polygon, subtract: false }], feather: 0, invert: false },
+      adapt: { on: true, parts: [top.part, bottom.part], res: 240 },
+    };
+    const a = adaptedMaskAt(obj, blobFrame({ rx: 30, ry: 44, lower: '#7C3AED' }), 1)!;
+    expect(inMask(a, 120, 84)).toBe(true);
+    expect(inMask(a, 120, 156)).toBe(true);
+    expect(inMask(a, 60, 120)).toBe(false);
+  });
+
+  it('turned off, or with nothing matching, it falls back to the drawn outline', () => {
+    const { region, part } = clickPart(blobFrame({ rx: 40, ry: 24 }), 120, 120);
+    const mask = { rects: [], strokes: [], polygons: [{ points: region.polygon, subtract: false }], feather: 0, invert: false };
+    expect(adapts({ mask, adapt: { on: false, parts: [part], res: 240 } })).toBe(false);
+    // An all-grey frame: the object is gone.
+    expect(adaptedMaskAt({ mask, adapt: { on: true, parts: [part], res: 240 } }, blobFrame({ rx: 0.1, ry: 0.1 }), 1)).toBeNull();
+    // Saved edits keep it.
+    const parsed = objectEditSchema.parse({ id: 'o', mask, atSec: 0, startSec: 0, endSec: 1, adapt: { parts: [part], res: 240 } });
+    expect(parsed.adapt?.on).toBe(true);
   });
 });

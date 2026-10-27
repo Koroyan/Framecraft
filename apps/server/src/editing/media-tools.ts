@@ -95,7 +95,7 @@ export async function rasterLayer(ctx: AppContext, user: SessionLike, input: Lay
 }
 
 /** Track a box through a video asset (source seconds). */
-export async function trackInAsset(ctx: AppContext, user: SessionLike, assetId: string, o: { box: TrackBox; atSec: number; startSec: number; endSec: number; smoothing?: number }) {
+export async function trackInAsset(ctx: AppContext, user: SessionLike, assetId: string, o: { box: TrackBox; atSec: number; startSec: number; endSec: number; smoothing?: number; region?: [number, number][] }) {
   const a = await getOwnedAsset(ctx, user.id, assetId);
   if (a.mediaType !== 'video') throw badRequest('Tracking needs a video');
   if (o.endSec - o.startSec > 120) throw badRequest('Track at most 2 minutes at a time');

@@ -396,7 +396,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
   const timelineEl = (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="mb-2 flex shrink-0 flex-wrap items-center justify-between gap-2">
+      <div className="mb-1 flex shrink-0 flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm font-medium text-white">
           Timeline <span className="font-normal text-fog-400">· {seconds(total)}</span>
           {range && (
@@ -523,6 +523,9 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     />
   );
 
+  // The timeline never takes more height than its lanes need — on short screens the rest goes to the preview.
+  const lanes = new Set(timeline.layers.map((l) => l.track)).size + 2 + (timeline.audio.some((a) => a.kind === 'voice') ? 1 : 0) + (timeline.subtitles.length ? 1 : 0) + (timeline.overlays.length ? 1 : 0) + (timeline.texts.length ? 1 : 0);
+  const timelineNeed = 104 + lanes * 42;
   const resize = (key: 'leftWidth' | 'inspectorWidth' | 'timelineHeight', sign: 1 | -1) => {
     let base = 0;
     return {
@@ -619,7 +622,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                   )}
                 </div>
                 <ResizeHandle axis="y" label="Resize the timeline" {...resize('timelineHeight', -1)} />
-                <section aria-label="Timeline" className="min-h-[140px] shrink overflow-hidden rounded-2xl border hairline bg-ink-900/40 p-3" style={{ height: `min(${layout.timelineHeight}px, 42dvh)` }}>{timelineEl}</section>
+                <section aria-label="Timeline" className="min-h-[140px] shrink overflow-hidden rounded-2xl border hairline bg-ink-900/40 px-3 py-2" style={{ height: `min(${Math.min(layout.timelineHeight, timelineNeed)}px, 42dvh)` }}>{timelineEl}</section>
               </>
             ) : (
               <div className="space-y-2">

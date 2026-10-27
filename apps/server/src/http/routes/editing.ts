@@ -141,7 +141,7 @@ export async function editingRoutes(app: FastifyInstance, ctx: AppContext) {
     return ensureClipShot(ctx, u, id, parse(z.object({ assetId: z.string().uuid(), label: z.string().max(200).optional() }), req.body));
   });
 
-  const trackBody = z.object({ box: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), w: z.number().min(0.005).max(1), h: z.number().min(0.005).max(1) }), atSec: z.number().min(0), startSec: z.number().min(0), endSec: z.number().min(0.05), smoothing: z.number().min(0).max(1).optional() });
+  const trackBody = z.object({ box: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), w: z.number().min(0.005).max(1), h: z.number().min(0.005).max(1) }), atSec: z.number().min(0), startSec: z.number().min(0), endSec: z.number().min(0.05), smoothing: z.number().min(0).max(1).optional(), region: z.array(z.tuple([z.number().min(-0.5).max(1.5), z.number().min(-0.5).max(1.5)])).min(3).max(400).optional() });
   app.post('/api/assets/:id/track', async (req) => {
     const u = requireUser(req);
     const { id } = parse(idParam, req.params);

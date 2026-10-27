@@ -1,7 +1,8 @@
+import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { applyTransform, buildLut, lutToCube, maskIsEmpty, maskTransformAt, objectActiveAt, objectColorFunction, reframeAt, spatialEffect, type EditMask, type ObjectEdit } from '@framecraft/shared';
-import { ffmpeg } from './ffmpeg';
+import { adaptedMaskAt, adapts, applyTransform, buildLut, fillPolygon, lutToCube, maskIsEmpty, maskTransformAt, objectActiveAt, objectColorFunction, reframeAt, spatialEffect, type AdaptedMask, type EditMask, type ObjectEdit } from '@framecraft/shared';
+import { ffmpeg, ffmpegPath } from './ffmpeg';
 
 /*
  * Object edits in the export. Each object becomes a mask *video* drawn here frame by frame — at
@@ -15,36 +16,11 @@ const n = (v: number) => (Math.round(v * 100000) / 100000).toString();
 
 type Map2 = (x: number, y: number) => [number, number];
 
-/** Even-odd scanline fill of a polygon given in mask pixels. */
-function fillPolygon(buf: Uint8Array, w: number, h: number, pts: [number, number][], value: number) {
-  if (pts.length < 3) return;
-  let y0 = h, y1 = 0;
-  for (const [, y] of pts) {
-    y0 = Math.min(y0, y);
-    y1 = Math.max(y1, y);
-  }
-  const ys = Math.max(0, Math.floor(y0));
-  const ye = Math.min(h - 1, Math.ceil(y1));
-  const xs: number[] = [];
-  for (let y = ys; y <= ye; y++) {
-    const cy = y + 0.5;
-    xs.length = 0;
-    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-      const [xi, yi] = pts[i]!;
-      const [xj, yj] = pts[j]!;
-      if (yi > cy !== yj > cy) xs.push(xi + ((cy - yi) * (xj - xi)) / (yj - yi));
-    }
-    xs.sort((a, b) => a - b);
-    for (let k = 0; k + 1 < xs.length; k += 2) {
-      const a = Math.max(0, Math.ceil(xs[k]! - 0.5));
-      const b = Math.min(w - 1, Math.floor(xs[k + 1]! - 0.5));
-      if (b >= a) buf.fill(value, y * w + a, y * w + b + 1);
-    }
-  }
-}
-
-/** Rasterise a selection into `buf` (mask pixels), every point passed through `map`. */
-export function rasterizeMask(buf: Uint8Array, w: number, h: number, mask: EditMask, map: Map2) {
+/**
+ * Rasterise a selection into `buf` (mask pixels), every point passed through `map`. `found`, when
+ * given, paints the added polygons instead (the object's shape found on this very frame).
+ */
+export function rasterizeMask(buf: Uint8Array, w: number, h: number, mask: EditMask, map: Map2, found?: () => void) {
   for (const r of mask.rects) {
     let pts: [number, number][];
     if (r.ellipse) {
@@ -53,7 +29,15 @@ export function rasterizeMask(buf: Uint8Array, w: number, h: number, mask: EditM
     } else pts = [map(r.x, r.y), map(r.x + r.w, r.y), map(r.x + r.w, r.y + r.h), map(r.x, r.y + r.h)];
     fillPolygon(buf, w, h, pts, r.subtract ? 0 : 255);
   }
-  for (const p of mask.polygons) fillPolygon(buf, w, h, p.points.map(([x, y]) => map(x, y)), p.subtract ? 0 : 255);
+  let painted = false;
+  for (const p of mask.polygons) {
+    if (found && !p.subtract) {
+      if (!painted) found();
+      painted = true;
+      continue;
+    }
+    fillPolygon(buf, w, h, p.points.map(([x, y]) => map(x, y)), p.subtract ? 0 : 255);
+  }
   for (const s of mask.strokes) {
     const pts = s.points.map(([x, y]) => map(x, y));
     const [ax, ay] = map(s.points[0]![0], s.points[0]![1]);
@@ -101,7 +85,63 @@ export type ObjectFxOptions = {
   reverse?: boolean;
   freeze?: boolean;
   reframe?: { t: number; x: number; y: number }[];
+  /** The clip's source file: objects that follow shape changes are found again in its frames. */
+  source?: string;
 };
+
+/** A shape found on the frame (frame pixels) painted into mask pixels; `toMask` / `fromMask` map normalised source <-> mask. */
+function paintAdapted(buf: Uint8Array, mw: number, mh: number, a: AdaptedMask, toMask: Map2, fromMask: Map2) {
+  const [ax0, ay0] = toMask(a.x0 / a.frameWidth, a.y0 / a.frameHeight);
+  const [ax1, ay1] = toMask((a.x0 + a.width) / a.frameWidth, (a.y0 + a.height) / a.frameHeight);
+  for (let y = Math.max(0, Math.floor(ay0)); y < Math.min(mh, Math.ceil(ay1)); y++)
+    for (let x = Math.max(0, Math.floor(ax0)); x < Math.min(mw, Math.ceil(ax1)); x++) {
+      const [sx, sy] = fromMask(x + 0.5, y + 0.5);
+      const px = Math.floor(sx * a.frameWidth) - a.x0;
+      const py = Math.floor(sy * a.frameHeight) - a.y0;
+      if (px >= 0 && py >= 0 && px < a.width && py < a.height && a.mask[py * a.width + px]) buf[y * mw + x] = 255;
+    }
+}
+
+/** Frames of a video decoded one at a time (RGB) - never all held in memory. */
+function frameReader(file: string, o: { startSec: number; durationSec: number; fps: number; width: number; height: number }) {
+  const size = o.width * o.height * 3;
+  const args = ['-v', 'error', '-ss', n(o.startSec), '-t', n(Math.max(1 / o.fps, o.durationSec)), '-i', file, '-an', '-vf', `fps=${n(o.fps)},scale=${o.width}:${o.height}:flags=bilinear`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'];
+  const child = spawn(ffmpegPath(), args, { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+  child.on('error', () => undefined);
+  const it = child.stdout[Symbol.asyncIterator]() as AsyncIterator<Buffer>;
+  let rest: Buffer | null = null;
+  let ended = false;
+  let last: Uint8Array | null = null;
+  return {
+    /** The next frame; the last one again once the video ends; null if nothing could be decoded. */
+    async next(): Promise<Uint8Array | null> {
+      if (ended) return last;
+      const frame = new Uint8Array(size);
+      let filled = 0;
+      while (filled < size) {
+        let chunk = rest;
+        rest = null;
+        if (!chunk) {
+          const r = await it.next().catch((): IteratorResult<Buffer> => ({ done: true, value: undefined }));
+          if (r.done) {
+            ended = true;
+            return last;
+          }
+          chunk = r.value;
+        }
+        const take = Math.min(size - filled, chunk.length);
+        frame.set(chunk.subarray(0, take), filled);
+        filled += take;
+        if (take < chunk.length) rest = chunk.subarray(take);
+      }
+      last = frame;
+      return frame;
+    },
+    close() {
+      if (child.exitCode === null) child.kill();
+    },
+  };
+}
 
 /** Source second shown at output time t of the normalised clip (same mapping as normalizeClip). */
 export function sourceTimeAt(o: Pick<ObjectFxOptions, 'inSec' | 'outSec' | 'speed' | 'reverse' | 'freeze'>, t: number): number {
@@ -122,10 +162,16 @@ export async function writeObjectMaskVideo(obj: ObjectEdit, o: ObjectFxOptions, 
   const raw = path.join(o.dir, `${path.basename(file)}.raw`);
   const handle = await fsp.open(raw, 'w');
   const buf = new Uint8Array(mw * mh);
+  // Objects that follow shape changes are found again in every source frame (same function as the preview).
+  const fw = obj.adapt?.res ?? 0;
+  const fh = Math.max(2, Math.round((fw * o.srcHeight) / Math.max(1, o.srcWidth)));
+  const reader = adapts(obj) && o.source && !o.reverse ? frameReader(o.source, { startSec: o.inSec, durationSec: o.freeze ? 1 / o.fps : o.durationSec * o.speed, fps: o.fps * (o.freeze ? 1 : o.speed), width: fw, height: fh }) : null;
   try {
     for (let f = 0; f < frames; f++) {
       buf.fill(0);
       const srcT = sourceTimeAt(o, f / o.fps);
+      // Decode in step with the output, also while the object is inactive.
+      const img = reader ? await reader.next() : null;
       if (objectActiveAt(obj, srcT, 1 / o.fps)) {
         const tr = maskTransformAt(obj.mask, srcT);
         let offX = (sw - o.width) / 2;
@@ -135,14 +181,25 @@ export async function writeObjectMaskVideo(obj: ObjectEdit, o: ObjectFxOptions, 
           offX = Math.min(Math.max(0, c.x * sw - o.width / 2), Math.max(0, sw - o.width));
           offY = Math.min(Math.max(0, c.y * sh - o.height / 2), Math.max(0, sh - o.height));
         }
-        rasterizeMask(buf, mw, mh, obj.mask, (x, y) => {
-          const [tx, ty] = applyTransform(tr, x, y);
-          return [((tx * sw - offX) / o.width) * mw, ((ty * sh - offY) / o.height) * mh];
-        });
+        const toMask: Map2 = (x, y) => [((x * sw - offX) / o.width) * mw, ((y * sh - offY) / o.height) * mh];
+        const fromMask: Map2 = (x, y) => [((x / mw) * o.width + offX) / sw, ((y / mh) * o.height + offY) / sh];
+        const adapted = img ? adaptedMaskAt(obj, { data: img, width: fw, height: fh, channels: 3 }, srcT) : null;
+        rasterizeMask(
+          buf,
+          mw,
+          mh,
+          obj.mask,
+          (x, y) => {
+            const [tx, ty] = applyTransform(tr, x, y);
+            return toMask(tx, ty);
+          },
+          adapted ? () => paintAdapted(buf, mw, mh, adapted, toMask, fromMask) : undefined,
+        );
       }
       await handle.write(buf);
     }
   } finally {
+    reader?.close();
     await handle.close();
   }
   await ffmpeg(['-f', 'rawvideo', '-pix_fmt', 'gray', '-s', `${mw}x${mh}`, '-r', String(o.fps), '-i', raw, '-c:v', 'ffv1', '-pix_fmt', 'gray', file], { timeoutMs: 10 * 60_000, cwd: o.dir });

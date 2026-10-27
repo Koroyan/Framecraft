@@ -131,6 +131,10 @@ export type PreviewFrame = {
   objectPosition?: string;
   /** Frame size on screen (CSS px). */
   size: { w: number; h: number };
+  /** Contextual toolbars go in a column beside a portrait frame (no height taken from the picture). */
+  vertical?: boolean;
+  /** With `vertical`: where panels open right of the picture, so they never cover it (px from the toolbar's left). */
+  panel?: { left: number; width: number };
 };
 
 export type PreviewProps = {
@@ -304,12 +308,22 @@ export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, s
   const objectPosition = clip?.reframe && v?.videoWidth ? (() => { const pos = coverPosition({ w: v.videoWidth, h: v.videoHeight }, { w: aw, h: ah }, reframeAt(clip.reframe!.points, localTime)); return `${pos.x}% ${pos.y}%`; })() : undefined;
   const pf: PreviewFrame = { clipIndex: index, clip, asset, srcTime: localTime, video, frame, playing, objectPosition, size };
 
-  const tb = toolbar?.(pf);
+  // Portrait frame with room beside it: toolbars become a side column instead of a row above.
+  const [vertical, setVertical] = useState(false);
+  const side = (boxW - size.w) / 2;
+  useEffect(() => {
+    const want = aw < ah && side >= (vertical ? 150 : 172);
+    if (want !== vertical) setVertical(want);
+  }, [side, aw, ah, vertical]);
+  // Panels open in the free space right of a portrait picture when it is wide enough.
+  const panel = vertical && side - 12 >= 196 ? { left: Math.round(side + size.w + 8), width: Math.round(Math.min(300, side - 12)) } : undefined;
+  const tb = toolbar?.({ ...pf, vertical, panel });
   const compact = boxW < 520;
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {tb && <div className="relative z-20 flex shrink-0 justify-center px-1 pb-2">{tb}</div>}
+      {tb && !vertical && <div className="relative z-20 flex shrink-0 justify-center px-1 pb-2">{tb}</div>}
       <div ref={box} className="relative min-h-0 flex-1">
+        {tb && vertical && <div className="absolute inset-y-0 left-0 z-20 flex flex-col">{tb}</div>}
         <div
           ref={frame}
           data-testid="preview-frame"
