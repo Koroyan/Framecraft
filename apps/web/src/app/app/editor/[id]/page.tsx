@@ -2,16 +2,17 @@
 
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, CheckCheck, ChevronsLeft, Crosshair, Download, Film, History, Keyboard, LayoutGrid, Network, Plus, Redo2, Save, Undo2, Upload } from 'lucide-react';
+import { Bot, CheckCheck, ChevronsLeft, Copy, Crosshair, Download, Film, History, Keyboard, LayoutGrid, Network, Plus, Redo2, Save, Scissors, Snowflake, Trash2, Undo2, Upload } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { rippleDelete, swapShotVersion, timelineDuration, type Timeline } from '@framecraft/shared';
 import { api, ApiError, endpoints, type Asset, type Project } from '@/lib/api';
-import { clipStarts, newId, splitClip, useEditor } from '@/lib/editor-store';
+import { clipStarts, newId, splitAtPlayhead, useEditor } from '@/lib/editor-store';
 import { clampTo, LIMITS, useEditorUi } from '@/lib/editor-ui';
 import { useObjectUi } from '@/lib/object-ui';
 import { useAssistant, type AssistantContext } from '@/lib/assistant';
 import { useShotContext } from '@/lib/shot-context';
+import { useEditorChrome } from '@/components/editor-chrome';
 import { Button, Dialog, Skeleton, buttonVariants } from '@/components/ui';
 import { useUploader } from '@/components/studio/upload';
 import { MultiTrack } from '@/components/editor/multitrack';
@@ -67,6 +68,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
   const layout = useEditorUi();
   const wide = useMediaQuery('(min-width: 1024px)');
   const roomy = useMediaQuery('(min-width: 1500px)');
+  const chrome = useEditorChrome();
   // A right-docked assistant on a narrow screen folds the tool panel away by default — but a click
   // on the tool rail opens it anyway (until the assistant is moved or closed).
   const crowded = layout.assistantOpen && layout.assistantDock === 'right' && !roomy;
@@ -177,7 +179,6 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       const st = useEditor.getState();
       const t = st.timeline;
       if (!t) return;
-      const starts0 = clipStarts(t);
       const ci = t.clips.findIndex((c) => c.id === st.selected);
       const total = timelineDuration(t);
       if (!(e.ctrlKey || e.metaKey)) {
@@ -197,9 +198,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         } else if (e.key.toLowerCase() === 'o') {
           const p0 = playheadRef.current;
           setRange((r) => ({ start: r && r.start < p0 - 0.1 ? r.start : Math.max(0, p0 - 1), end: p0 }));
-        } else if (e.key.toLowerCase() === 's' && ci >= 0) {
-          const c = t.clips[ci]!;
-          st.apply((x) => splitClip(x, c.id, c.inSec + (playheadRef.current - (starts0[ci] ?? 0)) * (c.speed || 1)));
+        } else if (e.key.toLowerCase() === 's') {
+          st.apply((x) => splitAtPlayhead(x, playheadRef.current, st.selected));
         } else if (e.key === 'Delete' || e.key === 'Backspace') {
           const r = rangeRef.current;
           if (r && r.end - r.start > 0.05) {
@@ -401,27 +401,50 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     />
   );
 
+  const timelineTitle = (
+    <span className="flex shrink-0 items-center gap-2 text-sm font-medium text-white">
+      Timeline <span className="font-normal text-fog-400">· {seconds(total)}</span>
+      {range && (
+        <span className="flex items-center gap-1 rounded-md bg-iris-500/20 px-2 py-0.5 text-[11px] font-normal text-iris-100" data-testid="range-chip">
+          Marked {seconds(range.start)}–{seconds(range.end)} ({(range.end - range.start).toFixed(1)} s)
+          <button type="button" className="ml-1 text-iris-200 hover:text-white" onClick={() => { apply((x) => ({ ...x, ...rippleCut(x, range) })); setRange(null); toast.success('Cut and closed the gap — Ctrl+Z undoes it'); }}>Cut</button>
+          <button type="button" aria-label="Clear marked range" className="ml-1 text-iris-200 hover:text-white" onClick={() => setRange(null)}>✕</button>
+        </span>
+      )}
+    </span>
+  );
+  // The everyday clip actions sit right above the clips (as in phone and desktop editors), not at the
+  // bottom of the inspector.
+  const selIdx = timeline.clips.findIndex((c) => c.id === selected);
+  const clipTools = selIdx >= 0 && (
+    <span className="flex items-center gap-0.5 border-r hairline pr-1.5" aria-label="Selected clip">
+      <Button size="icon" variant="ghost" className="size-7" aria-label="Split at the playhead" title="Split at the playhead (S)" onClick={() => apply((x) => splitAtPlayhead(x, playhead, selected))}><Scissors /></Button>
+      <Button size="icon" variant="ghost" className="size-7" aria-label="Duplicate clip" title="Duplicate (Ctrl+D)" onClick={() => apply((x) => { const c = x.clips[selIdx]!; x.clips.splice(selIdx + 1, 0, { ...c, id: newId('clip'), transition: undefined }); return x; })}><Copy /></Button>
+      <Button size="icon" variant="ghost" className="size-7" aria-label="Freeze frame" title="Freeze the frame at the playhead for 2 s" onClick={() => apply((x) => { const c = x.clips[selIdx]!; const at = Math.min(c.outSec - 0.05, c.inSec + (playhead - (clipStarts(x)[selIdx] ?? 0)) * (c.speed || 1)); x.clips.splice(selIdx + 1, 0, { ...c, id: newId('clip'), inSec: Math.max(0, at), outSec: Math.max(at + 0.1, c.outSec), freezeSec: 2, transition: undefined, camera: undefined, objects: undefined }); return x; })}><Snowflake /></Button>
+      <Button size="icon" variant="ghost" className="size-7 hover:text-signal-red" aria-label="Delete clip" title="Delete (Del)" disabled={timeline.clips.length < 2} onClick={() => { apply((x) => ({ ...x, clips: x.clips.filter((c) => c.id !== selected) })); select(null); }}><Trash2 /></Button>
+    </span>
+  );
+  const timelineActions = (
+    <span className="flex items-center gap-1.5">
+      {clipTools}
+      <Button size="sm" variant="secondary" className="h-7" onClick={() => setLibraryFor('clip')}><Plus /> Clip</Button>
+      <Button size="sm" variant="ghost" className="h-7" onClick={async () => { const a = await videoUp.pick(); if (a) { addAssetAsClip(a); void assetsQ.refetch(); } }}><Upload /> <span className="max-lg:hidden">Upload video</span></Button>
+    </span>
+  );
   const timelineEl = (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="mb-1 flex shrink-0 flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-sm font-medium text-white">
-          Timeline <span className="font-normal text-fog-400">· {seconds(total)}</span>
-          {range && (
-            <span className="flex items-center gap-1 rounded-md bg-iris-500/20 px-2 py-0.5 text-[11px] font-normal text-iris-100" data-testid="range-chip">
-              Marked {seconds(range.start)}–{seconds(range.end)} ({(range.end - range.start).toFixed(1)} s)
-              <button type="button" className="ml-1 text-iris-200 hover:text-white" onClick={() => { apply((x) => ({ ...x, ...rippleCut(x, range) })); setRange(null); toast.success('Cut and closed the gap — Ctrl+Z undoes it'); }}>Cut</button>
-              <button type="button" aria-label="Clear marked range" className="ml-1 text-iris-200 hover:text-white" onClick={() => setRange(null)}>✕</button>
-            </span>
-          )}
+      {/* With clips, the title and buttons share the timeline's own header row (one row, not two). */}
+      {!timeline.clips.length && (
+        <div className="mb-1 flex shrink-0 flex-wrap items-center justify-between gap-2">
+          {timelineTitle}
+          {timelineActions}
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          <Button size="sm" variant="secondary" onClick={() => setLibraryFor('clip')}><Plus /> Clip</Button>
-          <Button size="sm" variant="ghost" onClick={async () => { const a = await videoUp.pick(); if (a) { addAssetAsClip(a); void assetsQ.refetch(); } }}><Upload /> Upload video</Button>
-        </div>
-      </div>
+      )}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {timeline.clips.length ? (
           <MultiTrack
+            title={timelineTitle}
+            actions={timelineActions}
             timeline={timeline}
             assets={assets}
             playhead={playhead}
@@ -539,7 +562,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
   // The timeline never takes more height than its lanes need — on short screens the rest goes to the preview.
   const lanes = new Set(timeline.layers.map((l) => l.track)).size + 2 + (timeline.audio.some((a) => a.kind === 'voice') ? 1 : 0) + (timeline.subtitles.length ? 1 : 0) + (timeline.overlays.length ? 1 : 0) + (timeline.texts.length ? 1 : 0);
-  const timelineNeed = 104 + lanes * 42;
+  const timelineNeed = 80 + lanes * 42;
   const resize = (key: 'leftWidth' | 'inspectorWidth' | 'timelineHeight', sign: 1 | -1) => {
     let base = 0;
     return {
@@ -552,7 +575,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
   };
 
   return (
-    <div className={cn('mx-auto flex max-w-[2200px] flex-col gap-2', wide && 'h-[calc(100dvh-4rem)] min-h-[460px]')}>
+    <div className={cn('mx-auto flex max-w-[2200px] flex-col gap-2', wide && 'h-[calc(100dvh-1rem)] min-h-[460px]')}>
       {audioUp.element}
       {videoUp.element}
       {logoUp.element}
@@ -560,7 +583,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       {/* Top bar */}
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
-          <Link href={project.kind === 'movie' ? `/app/movie/${id}` : project.kind === 'edit' ? '/app/edit' : `/app/projects/${id}`} aria-label="Back" className="grid size-8 place-items-center rounded-lg text-fog-400 hover:bg-white/[0.06] hover:text-white">
+          {chrome.home && <span className="shrink-0 pr-1">{chrome.home}</span>}
+          <Link href={project.kind === 'movie' ? `/app/movie/${id}` : project.kind === 'edit' ? '/app/edit' : `/app/projects/${id}`} aria-label="Back" title="Back to the project" className="grid size-8 place-items-center rounded-lg text-fog-400 hover:bg-white/[0.06] hover:text-white">
             <ChevronsLeft className="size-4" />
           </Link>
           <h1 className="max-w-[32ch] truncate text-sm font-semibold text-white" title={project.title}>{project.title}</h1>
@@ -593,6 +617,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             {!layout.assistantOpen && unread > 0 && <span className="absolute -right-1 -top-1 grid size-4 place-items-center rounded-full bg-iris-500 text-[9px] font-semibold text-white">{unread}</span>}
           </Button>
           <Button size="sm" onClick={() => setExportOpen(true)}><Download /> Export</Button>
+          {chrome.tools && <span className="ml-1 flex items-center gap-1.5 border-l hairline pl-2">{chrome.tools}</span>}
         </div>
       </div>
 

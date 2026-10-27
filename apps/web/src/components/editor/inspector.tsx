@@ -1,12 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowLeft, ArrowRight, AudioLines, ChevronsRight, Copy, Crosshair, Film, ImagePlus, Layers, MousePointerClick, Music, Mic, Pause, Plus, RotateCcw, Scissors, Settings2, Sparkles, Trash2, Type } from 'lucide-react';
+import { ArrowLeft, ArrowRight, AudioLines, ChevronsRight, Crosshair, Film, ImagePlus, Layers, MousePointerClick, Music, Mic, Plus, RotateCcw, Scissors, Settings2, Sparkles, Trash2, Type } from 'lucide-react';
 import { toast } from 'sonner';
 import { applyPlanOp, clipDuration, describeEffects, LOOKS, type Timeline } from '@framecraft/shared';
 import { TRANSITION_LABEL, TRANSITIONS } from '@/lib/transitions';
 import { api, ApiError, type Asset } from '@/lib/api';
-import { clipStarts, moveClip, newId, splitClip, useEditor } from '@/lib/editor-store';
+import { clipStarts, moveClip, newId, useEditor } from '@/lib/editor-store';
 import { useObjectUi } from '@/lib/object-ui';
 import { Badge, Button, Dialog, Field, Input, NativeSelect, Segmented, Spinner, Switch } from '@/components/ui';
 import { ColorPro } from '@/components/editor/color-pro';
@@ -166,7 +166,6 @@ function ClipPanel(p: InspectorProps) {
   const sel = t.clips[selIndex]!;
   const asset = p.assets.get(sel.assetId);
   const max = asset?.durationMs ? asset.durationMs / 1000 : sel.outSec;
-  const starts = clipStarts(t);
   const set = (fn: (c: Timeline['clips'][number]) => void) =>
     p.apply((tl) => {
       fn(tl.clips[selIndex]!);
@@ -192,17 +191,8 @@ function ClipPanel(p: InspectorProps) {
       </div>
 
       {tab === 'edit' && (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {asset?.isFixture && <Badge tone="amber">test fixture — not AI</Badge>}
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Starts at (source s)">
-              <Input type="number" step={0.05} min={0} max={sel.outSec - 0.2} value={Math.round(sel.inSec * 100) / 100} onChange={(e) => set((c) => (c.inSec = Math.min(Math.max(0, Number(e.target.value)), c.outSec - 0.2)))} className="h-9" />
-            </Field>
-            <Field label="Ends at (source s)">
-              <Input type="number" step={0.05} min={sel.inSec + 0.2} max={max} value={Math.round(sel.outSec * 100) / 100} onChange={(e) => set((c) => (c.outSec = Math.min(max, Math.max(Number(e.target.value), c.inSec + 0.2))))} className="h-9" />
-            </Field>
-          </div>
-          <p className="-mt-2 text-[11px] text-fog-500">Tip: drag the clip’s edges on the timeline to trim.</p>
           <Field label={`Speed · ${sel.speed}×`} hint={sel.freezeSec ? 'Freeze frames hold one frame.' : `Lasts ${seconds(clipDuration(sel))} on the timeline.`}>
             <div className="flex gap-1">
               {SPEEDS.map((s) => (
@@ -234,10 +224,17 @@ function ClipPanel(p: InspectorProps) {
           </Field>
           <label className="flex items-center justify-between text-sm text-fog-200">Play backwards <Switch checked={sel.reverse} onCheckedChange={(v) => set((c) => (c.reverse = v))} label="Reverse clip" /></label>
           <div className="grid grid-cols-2 gap-2">
-            <Button size="sm" variant="secondary" onClick={() => p.apply((tl) => splitClip(tl, sel.id, sel.inSec + (p.playhead - (starts[selIndex] ?? 0)) * (sel.speed || 1)))}><Scissors /> Split (S)</Button>
+            <Field label="Starts at · s">
+              <Input type="number" step={0.05} min={0} max={sel.outSec - 0.2} value={Math.round(sel.inSec * 100) / 100} onChange={(e) => set((c) => (c.inSec = Math.min(Math.max(0, Number(e.target.value)), c.outSec - 0.2)))} className="h-9" />
+            </Field>
+            <Field label="Ends at · s">
+              <Input type="number" step={0.05} min={sel.inSec + 0.2} max={max} value={Math.round(sel.outSec * 100) / 100} onChange={(e) => set((c) => (c.outSec = Math.min(max, Math.max(Number(e.target.value), c.inSec + 0.2))))} className="h-9" />
+            </Field>
+          </div>
+          <p className="-mt-2 text-[11px] text-fog-500">Seconds in the original video. Or drag the clip’s edges on the timeline.</p>
+          {/* Split, duplicate, freeze and delete are in the toolbar above the timeline. */}
+          <div className="grid grid-cols-3 gap-2">
             <Button size="sm" variant="secondary" onClick={() => p.onLibrary('replace')}><RotateCcw /> Replace</Button>
-            <Button size="sm" variant="secondary" onClick={() => p.apply((tl) => { const c = tl.clips[selIndex]!; const at = Math.min(c.outSec - 0.05, c.inSec + (p.playhead - (starts[selIndex] ?? 0)) * (c.speed || 1)); tl.clips.splice(selIndex + 1, 0, { ...c, id: newId('clip'), inSec: Math.max(0, at), outSec: Math.max(at + 0.1, c.outSec), freezeSec: 2, transition: undefined, camera: undefined, objects: undefined }); return tl; })}><Pause /> Freeze frame</Button>
-            <Button size="sm" variant="secondary" onClick={() => p.apply((tl) => { const c = tl.clips[selIndex]!; tl.clips.splice(selIndex + 1, 0, { ...c, id: newId('clip'), transition: undefined }); return tl; })}><Copy /> Duplicate</Button>
             <Button size="sm" variant="ghost" onClick={() => p.apply((tl) => moveClip(tl, sel.id, -1))} disabled={selIndex === 0}><ArrowLeft /> Earlier</Button>
             <Button size="sm" variant="ghost" onClick={() => p.apply((tl) => moveClip(tl, sel.id, 1))} disabled={selIndex === t.clips.length - 1}>Later <ArrowRight /></Button>
           </div>

@@ -65,7 +65,12 @@ export function MultiTrack({
   selectedAudio,
   onSelectAudio,
   onAudioTiming,
+  title,
+  actions,
 }: {
+  /** Shown at the start / end of the timeline's single header row (saves a row of height). */
+  title?: React.ReactNode;
+  actions?: React.ReactNode;
   timeline: Timeline;
   assets: Map<string, Asset>;
   playhead: number;
@@ -141,15 +146,19 @@ export function MultiTrack({
 
   return (
     <div>
-      <div className="mb-1 flex h-6 items-center justify-between gap-2 text-xs text-fog-400">
-        <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-fog-500">
-          <span tabIndex={0} title="Shift + drag on the ruler (or I / O) marks a range · drag clip edges to trim · Shift-click selects several clips" className="grid size-4 shrink-0 cursor-help place-items-center rounded-full border border-white/15 text-[9px]">?</span>
-          <span className="truncate max-xl:hidden">Shift-drag the ruler marks a range · drag clip edges to trim · Shift-click selects several</span>
+      <div className="mb-1 flex min-h-8 flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs text-fog-400">
+        <span className="flex min-w-0 items-center gap-2">
+          {title}
+          <span tabIndex={0} title="Shift + drag on the ruler (or I / O) marks a range · drag clip edges to trim · Shift-click selects several clips" className="grid size-4 shrink-0 cursor-help place-items-center rounded-full border border-white/15 text-[9px] text-fog-500">?</span>
+          <span className="truncate text-[11px] text-fog-500 max-2xl:hidden">Shift-drag the ruler marks a range · drag clip edges to trim · Shift-click selects several</span>
         </span>
+        <span className="flex items-center gap-1">
         <span className="flex items-center gap-0.5">
           <button type="button" aria-label="Zoom out" onClick={() => setPps(Math.max(4, scale / 1.6))} className="grid size-6 place-items-center rounded-md hover:bg-white/[0.06] hover:text-white"><Minus className="size-3.5" /></button>
           <button type="button" onClick={() => setPps(null)} className={cn('rounded-md px-1.5 py-0.5 hover:bg-white/[0.06] hover:text-white', pps === null && 'text-white')}>Fit</button>
           <button type="button" aria-label="Zoom in" onClick={() => setPps(Math.min(400, scale * 1.6))} className="grid size-6 place-items-center rounded-md hover:bg-white/[0.06] hover:text-white"><Plus className="size-3.5" /></button>
+        </span>
+        {actions}
         </span>
       </div>
       <div className="flex gap-2">

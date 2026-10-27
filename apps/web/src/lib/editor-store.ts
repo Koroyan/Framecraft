@@ -88,6 +88,21 @@ export function splitClip(t: Timeline, clipId: string, atSourceSec: number): Tim
   return t;
 }
 
+/**
+ * Split at the playhead (timeline seconds): the preferred (selected) clip if the playhead is inside
+ * it, otherwise whichever clip is under the playhead — never a silent no-op because the selection
+ * is elsewhere.
+ */
+export function splitAtPlayhead(t: Timeline, playhead: number, preferId?: string | null): Timeline {
+  const starts = clipStarts(t);
+  const inside = (k: number) => k >= 0 && k < t.clips.length && playhead > (starts[k] ?? 0) + 0.05 && playhead < (starts[k] ?? 0) + clipLen(t.clips[k]!) - 0.05;
+  let i = t.clips.findIndex((c) => c.id === preferId);
+  if (!inside(i)) i = t.clips.map((_, k) => k).filter(inside).pop() ?? -1;
+  if (i < 0) return t;
+  const c = t.clips[i]!;
+  return splitClip(t, c.id, c.inSec + (playhead - (starts[i] ?? 0)) * (c.freezeSec ? 0 : c.speed || 1));
+}
+
 export function moveClip(t: Timeline, clipId: string, dir: -1 | 1): Timeline {
   const i = t.clips.findIndex((c) => c.id === clipId);
   const j = i + dir;

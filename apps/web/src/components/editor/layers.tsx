@@ -234,7 +234,7 @@ export function LayersPanel({ timeline, apply, playhead, selectedId, setSelected
           return (
             <div key={i} className="rounded-lg bg-white/[0.02] p-1.5">
               <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-fog-400">
-                Track V{i + 1}
+                Layer track {i}
                 <span className="flex gap-1">
                   <button type="button" aria-label={m.hidden ? 'Show track' : 'Hide track'} onClick={() => setMeta(i, { hidden: !m.hidden })}>{m.hidden ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}</button>
                   <button type="button" aria-label={m.locked ? 'Unlock track' : 'Lock track'} onClick={() => setMeta(i, { locked: !m.locked })}>{m.locked ? <Lock className="size-3.5" /> : <Unlock className="size-3.5" />}</button>

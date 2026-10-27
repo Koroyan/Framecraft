@@ -28,6 +28,7 @@ import {
   Search,
   Image as ImageIcon,
 } from 'lucide-react';
+import { EditorChrome } from '@/components/editor-chrome';
 import { CommandPalette, type PaletteItem } from '@/components/command-palette';
 import { api, ApiError } from '@/lib/api';
 import { toast } from 'sonner';
@@ -192,23 +193,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     router.push('/');
   };
 
-  // The editor is a full-screen workspace (like desktop and mobile video editors).
+  // The editor is a full-screen workspace (like desktop and mobile video editors) with a single
+  // header row of its own: the shell's home link and tools go into it.
   if (/^\/app\/editor\/[^/]+$/.test(path))
     return (
       <div className="flex min-h-dvh flex-col">
         <CommandPalette items={PALETTE} />
-        <header className="sticky top-0 z-30 flex h-12 items-center justify-between gap-3 border-b hairline bg-ink-950/85 px-3 backdrop-blur-xl">
-          <div className="flex items-center gap-3">
-            <Link href="/app" aria-label="Home"><Logo small /></Link>
-            <Link href="/app/projects" className="text-xs text-fog-400 hover:text-white">Projects</Link>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <SearchButton compact />
-            {data.wallet && <CreditPill balance={data.wallet.balance} reserved={data.wallet.reserved} />}
-            <Notifications />
-          </div>
-        </header>
-        <main className="flex-1 px-3 py-2">{children}</main>
+        <EditorChrome.Provider
+          value={{
+            home: <Link href="/app" aria-label="Home" title="Home"><Logo small /></Link>,
+            tools: (
+              <>
+                <SearchButton compact />
+                {data.wallet && <CreditPill balance={data.wallet.balance} reserved={data.wallet.reserved} />}
+                <Notifications />
+              </>
+            ),
+          }}
+        >
+          <main className="flex-1 px-3 py-2">{children}</main>
+        </EditorChrome.Provider>
       </div>
     );
 

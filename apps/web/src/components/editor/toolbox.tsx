@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { AudioLines, Bot, Captions, ChevronsLeft, ChevronsRight, Crosshair, Film, Image as ImageIcon, Mic, MousePointerClick, Music, Palette, Plus, Shapes, Sparkles, Type, Wand2 } from 'lucide-react';
+import { AudioLines, Bot, Captions, ChevronsLeft, ChevronsRight, Crosshair, Film, Image as ImageIcon, Mic, MousePointerClick, Music, Palette, Plus, Shapes, Sparkles, Type, Wand2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { LOOKS, layerSchema, snapClipsToBeats, type LayerInput, type Timeline } from '@framecraft/shared';
 import { lookActive, lookSwatch } from '@/lib/looks';
@@ -115,7 +115,7 @@ export function EditorToolbox(p: {
                   className="group relative overflow-hidden rounded-lg border hairline text-left hover:border-iris-400/60"
                 >
                   <img src={a.thumbnailUrl ?? a.url} alt="" className="aspect-[3/4] w-full object-cover" loading="lazy" />
-                  <span className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/80 px-1.5 pb-1 pt-3 text-[10px] text-white">{a.mediaType === 'video' && a.durationMs ? `${seconds(a.durationMs / 1000)} · ` : ''}{a.originalName ?? a.kind}</span>
+                  <span className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/80 px-1.5 pb-1 pt-3 text-[10px] text-white">{a.mediaType === 'video' && a.durationMs ? `${seconds(a.durationMs / 1000)} · ` : ''}{mediaLabel(a)}</span>
                   <span className="absolute right-1 top-1 hidden rounded-full bg-iris-500 p-0.5 text-white group-hover:block"><Plus className="size-3" /></span>
                 </button>
               ))}
@@ -156,7 +156,7 @@ export function EditorToolbox(p: {
           </div>
         )}
 
-        {tab === 'captions' && <CaptionsTab timeline={timeline} apply={apply} transcribe={p.transcribe} />}
+        {tab === 'captions' && <CaptionsTab timeline={timeline} apply={apply} transcribe={p.transcribe} playhead={playhead} />}
 
         {tab === 'filters' && <FiltersTab timeline={timeline} apply={apply} selectedClipId={p.selectedClipId} />}
 
@@ -260,6 +260,12 @@ function AudioTab(p: Parameters<typeof EditorToolbox>[0] & { list: Asset[] }) {
   );
 }
 
+/** What a media tile is called: its file name, or what it is (an export, an AI shot, a photo reference). */
+function mediaLabel(a: Asset) {
+  if (a.originalName) return a.originalName;
+  return a.kind === 'render' ? 'Exported video' : a.kind === 'generated' ? (a.mediaType === 'image' ? 'AI image' : 'AI video') : a.kind === 'reference' ? 'Reference' : a.mediaType === 'image' ? 'Photo' : 'Video';
+}
+
 /** A name people can tell apart: the file name, or what was generated and when. */
 function audioLabel(a: Asset) {
   if (a.originalName) return a.originalName;
@@ -269,7 +275,7 @@ function audioLabel(a: Asset) {
   return Number.isNaN(d.getTime()) ? what : `${what} · ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
 }
 
-function CaptionsTab({ timeline, apply, transcribe }: { timeline: Timeline; apply: Apply; transcribe: React.ReactNode }) {
+function CaptionsTab({ timeline, apply, transcribe, playhead }: { timeline: Timeline; apply: Apply; transcribe: React.ReactNode; playhead: number }) {
   const [style, setStyle] = useState(CAPTION_STYLES[0]!.key);
   const subs = timeline.subtitles;
   const styled = timeline.layers.filter((l) => l.name === 'Caption (auto)').length;
@@ -291,6 +297,39 @@ function CaptionsTab({ timeline, apply, transcribe }: { timeline: Timeline; appl
       <p className="text-[11px] text-fog-400">Auto captions from the speech, then TikTok-style word-by-word captions in one click.</p>
       {transcribe}
       <div className="text-[11px] text-fog-300">{subs.length} caption line{subs.length === 1 ? '' : 's'}{styled ? ` · ${styled} styled` : ''}</div>
+      {/* Your own lines (free): typed, timed at the playhead, edited here. */}
+      {subs.length > 0 && (
+        <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
+          {[...subs].sort((a, b) => a.startSec - b.startSec).map((c) => (
+            <div key={c.id} className="flex items-center gap-1.5">
+              <span className="w-10 shrink-0 text-right text-[10px] tabular-nums text-fog-500">{c.startSec.toFixed(1)}s</span>
+              <input
+                aria-label="Caption text"
+                value={c.text}
+                maxLength={200}
+                onChange={(e) => apply((t) => ({ ...t, subtitles: t.subtitles.map((x) => (x.id === c.id ? { ...x, text: e.target.value || ' ' } : x)) }))}
+                className="min-w-0 flex-1 rounded-md border hairline bg-transparent px-2 py-1 text-xs text-fog-100 focus:border-iris-400 focus:outline-none"
+              />
+              <button type="button" aria-label="Delete caption line" title="Delete this line" onClick={() => apply((t) => ({ ...t, subtitles: t.subtitles.filter((x) => x.id !== c.id) }))} className="grid size-6 shrink-0 place-items-center rounded-md text-fog-500 hover:bg-white/[0.06] hover:text-signal-red"><X className="size-3.5" /></button>
+            </div>
+          ))}
+        </div>
+      )}
+      <Button
+        size="sm"
+        variant="secondary"
+        onClick={() =>
+          apply((t) => {
+            // Starts at the playhead (never after it, so it shows right away) and ends at the next line
+            // (or 2 s later), so lines never overlap.
+            const start = Math.floor(playhead * 10) / 10;
+            const next = t.subtitles.filter((x) => x.startSec > start + 0.05).reduce((m, x) => Math.min(m, x.startSec), Infinity);
+            return { ...t, burnSubtitles: styled ? t.burnSubtitles : true, subtitles: [...t.subtitles, { id: newId('sub'), startSec: start, endSec: Math.max(start + 0.4, Math.min(start + 2, next)), text: 'Your caption' }] };
+          })
+        }
+      >
+        <Plus /> Add a line at the playhead
+      </Button>
       <div className="grid grid-cols-3 gap-1.5">
         {CAPTION_STYLES.map((s) => (
           <button key={s.key} type="button" onClick={() => setStyle(s.key)} className={cn('rounded-lg border px-1 py-2 text-center text-[11px]', style === s.key ? 'border-iris-400 bg-iris-500/15 text-white' : 'hairline text-fog-300')}>

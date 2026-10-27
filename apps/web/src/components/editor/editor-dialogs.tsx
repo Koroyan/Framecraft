@@ -6,6 +6,7 @@ import { AudioLines, Captions, Download } from 'lucide-react';
 import { toast } from 'sonner';
 import { LANGUAGES, timelineDuration, type Timeline } from '@framecraft/shared';
 import { api, ApiError, type Asset } from '@/lib/api';
+import { clipStarts } from '@/lib/editor-store';
 import { useJob } from '@/lib/hooks';
 import { Button, Card, Dialog, Field, NativeSelect, Textarea, buttonVariants } from '@/components/ui';
 import { ProgressBar } from '@/components/studio/progress';
@@ -135,40 +136,78 @@ export function TtsDialog({ open, onOpenChange, projectId, onDone }: { open: boo
 
 export function TranscribeButton({ projectId, timeline, assets, onCues }: { projectId: string; timeline: Timeline; assets: Map<string, Asset>; onCues: (c: { startSec: number; endSec: number; text: string }[]) => void }) {
   const [jobId, setJobId] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
   const q = useQuery({
     queryKey: ['transcript', jobId],
     queryFn: () => api<{ status: string; transcript: { cues: { startSec: number; endSec: number; text: string }[] } | null }>(`/api/audio/${jobId}/transcript`),
     enabled: Boolean(jobId),
     refetchInterval: (qq) => (qq.state.data?.status === 'completed' || qq.state.data?.status === 'failed' ? false : 3000),
   });
+  // What is transcribed: the voice-over if there is one, else an AI clip, else the first clip — and
+  // how its seconds map onto the timeline (position, trim, speed).
+  const voice = timeline.audio.find((a) => a.kind === 'voice');
+  const clipIndex = voice ? -1 : Math.max(0, timeline.clips.findIndex((c) => assets.get(c.assetId)?.source?.aiGenerated));
+  const clip = voice ? undefined : timeline.clips[clipIndex];
+  const source = voice?.assetId ?? clip?.assetId;
+  const sourceName = voice ? 'the voice-over' : clip ? `clip ${clipIndex + 1}${assets.get(clip.assetId)?.originalName ? ` · ${assets.get(clip.assetId)!.originalName}` : ''}` : '';
+  const toTimeline = (cues: { startSec: number; endSec: number; text: string }[]) => {
+    if (voice) return cues.map((c) => ({ ...c, startSec: voice.startSec + c.startSec - voice.inSec, endSec: voice.startSec + c.endSec - voice.inSec })).filter((c) => c.endSec > voice.startSec);
+    if (!clip) return cues;
+    const at = clipStarts(timeline)[clipIndex] ?? 0;
+    const sp = clip.speed || 1;
+    return cues
+      .filter((c) => c.endSec > clip.inSec && c.startSec < clip.outSec)
+      .map((c) => ({ ...c, startSec: at + (Math.max(c.startSec, clip.inSec) - clip.inSec) / sp, endSec: at + (Math.min(c.endSec, clip.outSec) - clip.inSec) / sp }));
+  };
+  const estimate = useQuery({
+    queryKey: ['transcribe-estimate', source],
+    queryFn: () => api<{ estimate: { credits: number; available: boolean } }>('/api/audio/estimate', { body: { kind: 'transcribe', assetId: source, projectId } }),
+    enabled: asking && Boolean(source),
+  });
   const handled = useRef<string | null>(null);
   useEffect(() => {
+    if (q.data?.status === 'failed' && handled.current !== jobId) {
+      handled.current = jobId;
+      setJobId(null);
+      toast.error('Transcription failed — nothing was changed');
+    }
     if (q.data?.status === 'completed' && q.data.transcript && handled.current !== jobId) {
       handled.current = jobId;
-      onCues(q.data.transcript.cues);
       setJobId(null);
-      toast.success('Subtitles created from speech');
+      const cues = toTimeline(q.data.transcript.cues);
+      if (!cues.length) return void toast.message(`No speech found in ${sourceName}.`);
+      onCues(cues);
+      toast.success(`${cues.length} caption line${cues.length === 1 ? '' : 's'} created from speech`);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q.data, onCues, jobId]);
-  const source = timeline.audio.find((a) => a.kind === 'voice')?.assetId ?? timeline.clips.find((c) => assets.get(c.assetId)?.source?.aiGenerated)?.assetId ?? timeline.clips[0]?.assetId;
+  const start = async () => {
+    setAsking(false);
+    try {
+      const r = await api<{ job: { id: string } }>('/api/audio', { body: { kind: 'transcribe', assetId: source, projectId, idempotencyKey: newKey() } });
+      setJobId(r.job.id);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Transcription unavailable');
+    }
+  };
+  const est = estimate.data?.estimate;
   return (
-    <Button
-      size="sm"
-      variant="outline"
-      className="w-full"
-      disabled={!source || Boolean(jobId)}
-      loading={Boolean(jobId)}
-      onClick={async () => {
-        try {
-          const r = await api<{ job: { id: string } }>('/api/audio', { body: { kind: 'transcribe', assetId: source, projectId, idempotencyKey: newKey() } });
-          setJobId(r.job.id);
-        } catch (e) {
-          toast.error(e instanceof ApiError ? e.message : 'Transcription unavailable');
-        }
-      }}
-    >
-      <Captions /> Auto-subtitles from speech
-    </Button>
+    <div className="space-y-2">
+      <Button size="sm" variant="outline" className="w-full" disabled={!source || Boolean(jobId)} loading={Boolean(jobId)} onClick={() => setAsking((v) => !v)} aria-expanded={asking}>
+        <Captions /> Auto-subtitles from speech
+      </Button>
+      {/* A paid step (speech recognition): what is transcribed and the price first, then a click. */}
+      {asking && source && (
+        <div className="rounded-xl border hairline bg-white/[0.03] p-2.5 text-xs text-fog-300">
+          <p>Turns the speech in <b className="text-white">{sourceName}</b> into caption lines on the timeline.</p>
+          <p className="mt-1 text-fog-400">{estimate.isLoading ? 'Checking the price…' : est ? (est.available ? `≈ ${est.credits} credit${est.credits === 1 ? '' : 's'} · AI speech recognition` : 'Speech recognition is not available right now.') : 'Price unavailable.'}</p>
+          <div className="mt-2 flex gap-1.5">
+            <Button size="sm" className="h-7" disabled={!est?.available} onClick={start}>Transcribe</Button>
+            <Button size="sm" variant="ghost" className="h-7" onClick={() => setAsking(false)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
