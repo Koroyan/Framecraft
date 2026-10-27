@@ -68,6 +68,7 @@ side, scrubbed together) with Accept / Reject — without leaving the timeline.
 | Task F — Ad Studio: ads open on the storyboard (cards show the real frames), edit workspace, export path unchanged | Checked in the browser (read-only on an existing ad); server suite green |
 | Task G — 1366, 1920, tablet 820: no sideways scroll, preview ≥ usable size, panels never overlap, assistant fits | Playwright › G; screenshots G-* |
 | Task H — speed change, blurred object, title, assistant hidden, workspace switch, reload: all saved, versions kept | Playwright › H; screenshot H |
+| Simple editor at 1280×600 — split, 2× speed, black-and-white filter, a bold yellow "Sale -30%" text, saved; Pro tools opens the studio; export dialog | Playwright › S |
 | Instant assistant (EN / KA / RU), ripple delete, object maths, smart select, intent hub | `packages/shared` tests (40) |
 | Objects that change shape: a blob turning from wide to tall is exported blue in its new shape (the drawn outline alone misses it); a same-coloured strip leading out of the picture is not coloured; two clicked colours form one object | server `object-edit.test.ts` › shape-changing object (exported pixels); `packages/shared` tests (4) |
 | Real footage (user's figurine turning, 6 s, white coat → blue) | Checked frame by frame on the server render and in the browser preview: the coat stays blue as it turns; before this change only a stripe of it did and blue leaked onto white cars |
@@ -76,6 +77,8 @@ Test totals at delivery: shared 40 ✓ · server 147 ✓ (1 skipped manual) · P
 by design: they need test-fixture mode and would otherwise spend real credits) · typecheck and lint clean.
 After the shape-following update: shared 45 ✓ · server 150 ✓ (1 skipped) · Playwright 10 ✓ (5 skipped by
 design) · typecheck, lint and production build clean.
+After the simple editor (2026-10-28): shared 45 ✓ · server 152 ✓ (1 skipped) · Playwright 11 ✓ (5 skipped
+by design) · typecheck, lint and production build clean.
 
 ### Hands-on UI test of the Edit workspace (2026-10-27, evening)
 
@@ -111,6 +114,25 @@ Checked on a 1280×585 browser viewport (the owner's laptop):
 - **Captions**: lines can be typed and edited by hand (free); automatic subtitles show what is
   transcribed and the price and wait for a click (they used to run — and charge — on one click);
   their times now follow the clip's position, trim and speed; "no speech found" is said plainly.
+
+### Simple editor by default (2026-10-28)
+
+The full studio was too busy for everyday edits. Own videos now open in a **simple editor**; *Pro tools*
+in the header switches to the full studio (remembered per browser). AI films and ads keep the studio.
+
+- **A big picture, one toolbar, the timeline.** Toolbar left: Video, Upload, Text, Music, Captions,
+  Format. Middle: frame step, play, time, full screen. Right: tools for what is selected — a clip:
+  Split, Speed, Sound, Filter, Transition, Duplicate, Delete; a text: Edit, Duplicate, Delete; music:
+  Volume, Delete. At 1280×585 the picture grew from 84×151 to 124×222 px (9:16).
+- **Panels open beside the picture**, never over the header or the timeline, so a change is seen while
+  it is made. A panel belongs to the clip or text it was opened for and closes when another one is
+  selected; Esc closes it.
+- **Text** goes on a free lane (never on top of another text) and opens for typing at once; timeline
+  lanes are named (Text, Stickers, Pictures …).
+- Kept for Pro tools: workspace tabs, object selection and tracking, colour grading, layers, camera,
+  AI edits, versions and the assistant.
+- Server tests write their scratch files into one folder per run, removed at the end. A full Playwright
+  run had failed only because the disk was full, partly from folders earlier test runs left behind.
 
 ## 5. Code map (new or rebuilt)
 
