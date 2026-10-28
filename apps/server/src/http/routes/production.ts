@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { movieBriefSchema, renderRequestSchema, timelineSchema } from '@framecraft/shared';
+import { cartoonBriefSchema, movieBriefSchema, renderRequestSchema, timelineSchema } from '@framecraft/shared';
+import { createCartoon } from '../../movie/cartoon';
 import type { AppContext } from '../../context';
 import { parse, requireUser } from '../app';
 import { addShot, createMovie, deleteShot, estimateMovie, chooseVoiceTake, generateMovie, getMovie, redubMovie, estimateShotRegeneration, regenerateShot, reorderScenes, reorderShots, storyboardMovie, updateShot } from '../../movie/movie';
@@ -44,6 +45,13 @@ export async function productionRoutes(app: FastifyInstance, ctx: AppContext) {
     const u = requireUser(req);
     const body = parse(z.object({ brief: z.unknown(), idempotencyKey: z.string().min(8) }), req.body);
     return reply.status(201).send(await createMovie(ctx, u, body.brief, body.idempotencyKey));
+  });
+
+  // Create a Cartoon: an original-style film planned by the AI Director (editable in the storyboard and graph).
+  app.post('/api/cartoons', async (req, reply) => {
+    const u = requireUser(req);
+    const body = parse(z.object({ brief: cartoonBriefSchema, idempotencyKey: z.string().min(8) }), req.body);
+    return reply.status(201).send(await createCartoon(ctx, u, body.brief, body.idempotencyKey));
   });
 
   app.get('/api/movies/:id', async (req) => {

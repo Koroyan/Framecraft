@@ -13,3 +13,5 @@ export * from './objects';
 export * from './segment';
 export * from './quick';
 export * from './intent';
+export * from './director';
+export * from './cartoon';

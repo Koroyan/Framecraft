@@ -6,7 +6,7 @@ import type { AspectRatio } from './constants';
  * Georgian and Russian keywords.
  */
 
-export type CreateFlow = 'ai' | 'animate' | 'edit' | 'ad' | 'film';
+export type CreateFlow = 'ai' | 'animate' | 'edit' | 'ad' | 'film' | 'cartoon';
 
 export type CreateIntent = {
   flow: CreateFlow;
@@ -18,6 +18,7 @@ export type CreateIntent = {
 };
 
 const RX = {
+  cartoon: /(cartoon|animated|animation|\banime\b|mascot|მულტ|ანიმაცი|ანიმირებ|მასკოტ|мульт|анимац|анимирован|маскот)/,
   ad: /(\bads?\b|advert|commercial|promo|product|brand|sale|shop|store|რეკლამ|პროდუქტ|ბრენდ|აქცი|მაღაზი|реклам|продукт|бренд|акци|магазин)/,
   film: /(film|movie|story|short film|episode|scene|character|ფილმ|ისტორი|მოთხრობ|სცენ|პერსონაჟ|фильм|истори|сюжет|сцен|персонаж)/,
   animate: /(animate|bring .* to life|this (photo|picture|image)|my (photo|picture|image)|from (a|my|this) (photo|picture|image)|გააცოცხლე|ფოტო|სურათ|оживи|фото|картинк|изображени)/,
@@ -49,6 +50,9 @@ export function guessIntent(text: string): CreateIntent | null {
   if (RX.edit.test(s)) {
     flow = 'edit';
     reasons.push('you want to edit your own footage');
+  } else if (RX.cartoon.test(s)) {
+    flow = 'cartoon';
+    reasons.push(RX.ad.test(s) ? 'it is an animated story for a brand' : 'it is an animated cartoon');
   } else if (RX.animate.test(s) && !RX.film.test(s)) {
     flow = 'animate';
     reasons.push('you want to bring an image to life');
@@ -65,10 +69,10 @@ export function guessIntent(text: string): CreateIntent | null {
   else if (RX.wide.test(s)) aspect = '16:9';
   else if (RX.square.test(s)) aspect = '1:1';
   else if (RX.feed.test(s)) aspect = '4:5';
-  else aspect = flow === 'film' ? '16:9' : '9:16';
+  else aspect = flow === 'film' || flow === 'cartoon' ? '16:9' : '9:16';
   reasons.push(aspect === '9:16' ? 'vertical (TikTok, Reels, Shorts)' : aspect === '16:9' ? 'landscape (YouTube)' : aspect === '1:1' ? 'square' : '4:5 feed');
 
-  const durationSec = durationIn(s) ?? (flow === 'ad' ? 20 : flow === 'film' ? 60 : flow === 'ai' || flow === 'animate' ? 8 : undefined);
+  const durationSec = durationIn(s) ?? (flow === 'ad' ? 20 : flow === 'film' ? 60 : flow === 'cartoon' ? 45 : flow === 'ai' || flow === 'animate' ? 8 : undefined);
   if (durationSec) reasons.push(`${durationSec} s`);
   const style = RX.cinematic.test(s) ? 'cinematic' : RX.luxury.test(s) ? 'luxury' : RX.energetic.test(s) ? 'energetic' : undefined;
   if (style) reasons.push(`${style} style`);

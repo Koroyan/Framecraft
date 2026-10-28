@@ -9,6 +9,8 @@ import { activateShotVersion, ensureClipShot, ownedShot, projectShots, renameSho
 import { acceptAiEdit, aiEditRequestSchema, createAiEdit, estimateAiEdit, rejectAiEdit } from '../../editing/ai-edit';
 import { addComment, commentInputSchema, COMMENT_STATUSES, deleteComment, grabFrame, updateComment } from '../../editing/comments';
 import { copilotPlan, copilotRequestSchema } from '../../editing/copilot';
+import { directorRequestSchema } from '@framecraft/shared';
+import { applyDirectorOps, applyRequestSchema, directorPlan, estimateDirectorOps, estimateRequestSchema, runDirectorOp, runRequestSchema } from '../../director/story';
 import { assetUrl } from '../../services/assets';
 import { notFound } from '../../lib/errors';
 import { filmstrip, importLut, rasterLayer, trackInAsset, waveform } from '../../editing/media-tools';
@@ -29,7 +31,7 @@ export async function editingRoutes(app: FastifyInstance, ctx: AppContext) {
   app.put('/api/projects/:id/graph', async (req) => {
     const u = requireUser(req);
     const { id } = parse(idParam, req.params);
-    const body = parse(z.object({ positions: z.record(z.string().max(80), z.object({ x: z.number(), y: z.number() })).default({}), collapsed: z.array(z.string().max(80)).max(200).default([]) }), req.body);
+    const body = parse(z.object({ positions: z.record(z.string().max(80), z.object({ x: z.number(), y: z.number() })).optional(), collapsed: z.array(z.string().max(80)).max(200).optional(), removed: z.array(z.string().uuid()).max(500).optional() }), req.body);
     await saveGraphLayout(ctx, u, id, body);
     return { ok: true };
   });
@@ -163,6 +165,32 @@ export async function editingRoutes(app: FastifyInstance, ctx: AppContext) {
   });
 
   // ---------------------------------------------------------------- assistant
+
+  // AI Director in the story graph / storyboard: plan (proposes only), apply free steps, price and run paid ones.
+  app.post('/api/projects/:id/director', aiLimit, async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(idParam, req.params);
+    return directorPlan(ctx, u, id, parse(directorRequestSchema, req.body));
+  });
+
+  app.post('/api/projects/:id/director/apply', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(idParam, req.params);
+    return applyDirectorOps(ctx, u, id, parse(applyRequestSchema, req.body));
+  });
+
+  app.post('/api/projects/:id/director/estimate', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(idParam, req.params);
+    return estimateDirectorOps(ctx, u, id, parse(estimateRequestSchema, req.body).ops);
+  });
+
+  app.post('/api/projects/:id/director/run', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(idParam, req.params);
+    const r = await runDirectorOp(ctx, u, id, parse(runRequestSchema, req.body));
+    return { jobs: await Promise.all(r.jobs.map((j) => toPublicJob(ctx, j))) };
+  });
 
   app.post('/api/projects/:id/copilot', aiLimit, async (req) => {
     const u = requireUser(req);

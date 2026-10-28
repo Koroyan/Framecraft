@@ -13,13 +13,14 @@ import {
   estimateSchema,
   locationSchema,
   socialCopyRequestSchema,
+  stillLook,
   updateProjectSchema,
   videoSpecSchema,
 } from '@framecraft/shared';
 import type { AppContext } from '../../context';
 import { liveProviders } from '../../context';
 import { parse, requireUser } from '../app';
-import { assets, characterReferences, characters, consents, generationJobs, locationReferences, locations, notifications, projects, savedPrompts, templates, userSettings } from '../../db/schema';
+import { assets, characterReferences, characters, consents, generationJobs, locationReferences, locations, notifications, projects, savedPrompts, shots, templates, userSettings } from '../../db/schema';
 import { cancelGeneration, createGeneration, estimateGeneration, getOwnedJob, listJobs, providerJobsFor, retryGeneration, toPublicJob } from '../../generation/service';
 import { loadRoutableModels, toPublicModel } from '../../services/registry';
 import { ALLOWED_UPLOADS, assetUrl, downloadAssetToTemp, getOwnedAsset, prepOf, sniffMime, storeAsset, tmpFile } from '../../services/assets';
@@ -31,7 +32,7 @@ import { badRequest, notFound } from '../../lib/errors';
 import { audit } from '../../services/common';
 import { TERMS_VERSION } from '../../auth/auth';
 import { enqueue } from '../../queue/queue';
-import { createImageJob } from '../../images/images';
+import { createImageJob, estimateImage } from '../../images/images';
 
 const uuid = z.object({ id: z.string().uuid() });
 
@@ -350,7 +351,17 @@ export async function studioRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/api/characters', async (req) => {
     const u = requireUser(req);
     const rows = await ctx.db.select().from(characters).where(eq(characters.userId, u.id)).orderBy(desc(characters.updatedAt));
-    return { characters: await withRefs(rows, 'character') };
+    // Where each character is used (Character Bible): changing their look affects these shots.
+    const used = await ctx.db
+      .select({ projectId: shots.projectId, characterIds: shots.characterIds, generated: shots.currentAssetId })
+      .from(shots)
+      .innerJoin(projects, eq(projects.id, shots.projectId))
+      .where(and(eq(projects.userId, u.id), isNull(projects.deletedAt)));
+    const usage = (id: string) => {
+      const mine = used.filter((s) => s.characterIds.includes(id));
+      return { shots: mine.length, generated: mine.filter((s) => s.generated).length, projects: new Set(mine.map((s) => s.projectId)).size };
+    };
+    return { characters: (await withRefs(rows, 'character')).map((c) => ({ ...c, usage: usage(c.id) })) };
   });
 
   const saveCharacter = async (userId: string, body: z.infer<typeof characterSchema>, id?: string) => {
@@ -394,6 +405,16 @@ export async function studioRoutes(app: FastifyInstance, ctx: AppContext) {
     return { ok: true };
   });
 
+  // A reference sheet is a paid image: its price is asked first.
+  app.get('/api/characters/:id/sheet/estimate', async (req) => {
+    const u = requireUser(req);
+    const { id } = parse(uuid, req.params);
+    const [c] = await ctx.db.select({ id: characters.id }).from(characters).where(and(eq(characters.id, id), eq(characters.userId, u.id)));
+    if (!c) throw notFound('Character');
+    const img = await estimateImage(ctx, false);
+    return { available: img.available, credits: img.credits };
+  });
+
   app.post('/api/characters/:id/sheet', async (req) => {
     const u = requireUser(req);
     const { id } = parse(uuid, req.params);
@@ -401,8 +422,10 @@ export async function studioRoutes(app: FastifyInstance, ctx: AppContext) {
     const [c] = await ctx.db.select().from(characters).where(and(eq(characters.id, id), eq(characters.userId, u.id)));
     if (!c) throw notFound('Character');
     const look = Object.values(c.appearance).filter(Boolean).join(', ');
+    const meta = c.styleMeta as Record<string, string | undefined>;
     const job = await createImageJob(ctx, u, {
-      prompt: `Character reference sheet, full body and close-up portrait, neutral background, consistent design: ${c.name}. ${c.description}. ${look}. Wearing ${c.clothing}.`,
+      // Front, side and back plus a few expressions, in the character's own style — one design to reuse in every shot.
+      prompt: `Character reference sheet in ${stillLook(meta.style)} style: front view, side view and back view, plus close-ups with three expressions (happy, surprised, sad), plain neutral background, the same design in every view: ${c.name}. ${c.description}. ${look}. Wearing ${c.clothing}.${meta.palette ? ` Colour palette: ${meta.palette}.` : ''}${meta.proportions ? ` Proportions: ${meta.proportions}.` : ''} No text.`.slice(0, 1800),
       aspectRatio: '1:1',
       purpose: 'character',
       characterId: c.id,

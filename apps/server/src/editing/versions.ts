@@ -1,8 +1,8 @@
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { swapShotVersion, timelineSchema } from '@framecraft/shared';
 import type { AppContext } from '../context';
 import type { Db } from '../db/client';
-import { assets, editOperations, projectVersions, projects, scenes, shotComments, shotVersions, shots } from '../db/schema';
+import { assets, characterReferences, characters, editOperations, locations, projectVersions, projects, scenes, shotComments, shotVersions, shots } from '../db/schema';
 import { assetUrl, getOwnedAsset } from '../services/assets';
 import { badRequest, notFound } from '../lib/errors';
 import type { SessionLike } from '../generation/service';
@@ -69,14 +69,22 @@ export async function syncShotVersions(ctx: AppContext, projectId: string): Prom
 
 /** Every shot of the project with its versions, comments and AI edit operations (for the editor). */
 export async function projectShots(ctx: AppContext, user: SessionLike, projectId: string) {
-  await ownedProject(ctx, user, projectId);
+  const project = await ownedProject(ctx, user, projectId);
   await syncShotVersions(ctx, projectId);
   const sceneRows = await ctx.db.select().from(scenes).where(eq(scenes.projectId, projectId)).orderBy(asc(scenes.index));
   const shotRows = await ctx.db.select().from(shots).where(eq(shots.projectId, projectId));
   const versions = await ctx.db.select().from(shotVersions).where(eq(shotVersions.projectId, projectId)).orderBy(asc(shotVersions.number));
   const ops = await ctx.db.select().from(editOperations).where(eq(editOperations.projectId, projectId)).orderBy(asc(editOperations.createdAt));
   const comments = await ctx.db.select().from(shotComments).where(eq(shotComments.projectId, projectId)).orderBy(asc(shotComments.createdAt));
-  const assetIds = [...new Set([...versions.map((v) => v.assetId), ...shotRows.flatMap((s) => (s.storyboardAssetId ? [s.storyboardAssetId] : []))])];
+  // The cast: this project's characters and any saved character a shot uses (Character Bible).
+  const castIds = [...new Set(shotRows.flatMap((s) => s.characterIds))];
+  const castRows = await ctx.db
+    .select()
+    .from(characters)
+    .where(and(eq(characters.userId, project.userId), castIds.length ? or(eq(characters.projectId, projectId), inArray(characters.id, castIds)) : eq(characters.projectId, projectId)));
+  const castRefs = castRows.length ? await ctx.db.select().from(characterReferences).where(inArray(characterReferences.characterId, castRows.map((c) => c.id))) : [];
+  const placeRows = await ctx.db.select({ id: locations.id, name: locations.name }).from(locations).where(eq(locations.projectId, projectId));
+  const assetIds = [...new Set([...versions.map((v) => v.assetId), ...shotRows.flatMap((s) => (s.storyboardAssetId ? [s.storyboardAssetId] : [])), ...castRefs.map((r) => r.assetId)])];
   const assetRows = assetIds.length ? await ctx.db.select().from(assets).where(inArray(assets.id, assetIds)) : [];
   const thumbIds = assetRows.flatMap((a) => (a.thumbnailAssetId ? [a.thumbnailAssetId] : []));
   const thumbRows = thumbIds.length ? await ctx.db.select().from(assets).where(inArray(assets.id, thumbIds)) : [];
@@ -87,11 +95,21 @@ export async function projectShots(ctx: AppContext, user: SessionLike, projectId
   }
   const sceneIndex = new Map(sceneRows.map((s, i) => [s.id, i]));
   const ordered = [...shotRows].sort((a, b) => (sceneIndex.get(a.sceneId)! - sceneIndex.get(b.sceneId)!) || a.index - b.index);
+  const settings = project.settings as { brief?: { style?: string }; graph?: { removed?: string[] } };
   return {
-    scenes: sceneRows.map((s) => ({ id: s.id, index: s.index, title: s.title })),
+    kind: project.kind,
+    style: settings.brief?.style ?? null,
+    /** Generated shots the user took out of the movie (they are not put back automatically). */
+    removed: settings.graph?.removed ?? [],
+    scenes: sceneRows.map((s) => ({ id: s.id, index: s.index, title: s.title, synopsis: s.synopsis, place: placeRows.find((l) => l.id === s.locationId)?.name ?? null })),
+    characters: castRows.map((c) => {
+      const ref = castRefs.filter((r) => r.characterId === c.id).sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary))[0];
+      return { id: c.id, name: c.name, description: c.description, clothing: c.clothing, appearance: c.appearance, voice: c.voice, styleMeta: c.styleMeta, imageUrl: ref ? (media.get(ref.assetId)?.url ?? null) : null, inProject: c.projectId === projectId };
+    }),
     shots: ordered.map((s, i) => ({
       id: s.id,
       number: i + 1,
+      index: s.index,
       sceneId: s.sceneId,
       description: s.description,
       prompt: s.prompt,
@@ -99,8 +117,14 @@ export async function projectShots(ctx: AppContext, user: SessionLike, projectId
       shotType: s.shotType,
       durationSec: s.durationSec,
       status: s.status,
+      approved: s.approved,
+      characterIds: s.characterIds,
+      dialogue: s.dialogue,
+      sfx: s.sfx,
+      continuityFlags: s.continuityFlags,
       activeVersionId: s.activeVersionId,
       storyboardUrl: s.storyboardAssetId ? (media.get(s.storyboardAssetId)?.url ?? null) : null,
+      storyboardIsFixture: s.storyboardAssetId ? (media.get(s.storyboardAssetId)?.isFixture ?? false) : false,
       versions: versions.filter((v) => v.shotId === s.id).map((v) => ({ ...v, media: media.get(v.assetId) ?? null })),
       operations: ops.filter((o) => o.shotId === s.id),
       comments: comments.filter((c) => c.shotId === s.id),
@@ -141,9 +165,12 @@ export async function renameShotVersion(ctx: AppContext, user: SessionLike, vers
 }
 
 /** Story-graph layout (node positions, collapsed scenes) — presentation only, stored on the project. */
-export async function saveGraphLayout(ctx: AppContext, user: SessionLike, projectId: string, layout: { positions: Record<string, { x: number; y: number }>; collapsed: string[] }) {
+/** Save the story graph's layout; only the parts given change (positions, collapsed scenes, shots out of the movie). */
+export async function saveGraphLayout(ctx: AppContext, user: SessionLike, projectId: string, layout: { positions?: Record<string, { x: number; y: number }>; collapsed?: string[]; removed?: string[] }) {
   const p = await ownedProject(ctx, user, projectId);
-  await ctx.db.update(projects).set({ settings: { ...(p.settings as Record<string, unknown>), graph: layout } }).where(and(eq(projects.id, projectId)));
+  const prev = (p.settings as { graph?: Record<string, unknown> }).graph ?? {};
+  const next = Object.fromEntries(Object.entries(layout).filter(([, v]) => v !== undefined));
+  await ctx.db.update(projects).set({ settings: { ...(p.settings as Record<string, unknown>), graph: { ...prev, ...next } } }).where(and(eq(projects.id, projectId)));
 }
 
 /**

@@ -82,7 +82,7 @@ export const STYLE_PRESETS = [
   { key: 'cinematic', label: 'Cinematic', prompt: 'cinematic film look, shallow depth of field, anamorphic lens, rich contrast, film grain' },
   { key: 'photoreal', label: 'Photoreal', prompt: 'photorealistic, natural lighting, true-to-life textures, documentary realism' },
   { key: 'anime', label: 'Anime', prompt: 'high quality anime style, clean line art, vibrant cel shading' },
-  { key: '3d', label: '3D Animation', prompt: 'stylized 3D animation, soft global illumination, Pixar-like rendering' },
+  { key: '3d', label: '3D Animation', prompt: 'stylized 3D animation, soft global illumination, appealing rounded character design' },
   { key: 'commercial', label: 'Commercial', prompt: 'premium commercial look, studio lighting, crisp product detail, glossy reflections' },
   { key: 'vintage', label: 'Vintage Film', prompt: '16mm vintage film stock, warm halation, gentle grain, soft vignette' },
   { key: 'neon', label: 'Neon Noir', prompt: 'neon-lit night scene, moody noir atmosphere, wet reflective surfaces, cyan and magenta highlights' },

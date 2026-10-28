@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
-import { ASPECT_DIMENSIONS, movieBriefSchema, type AspectRatio, type MovieBrief, type VideoSpecInput, type TimelineInput } from '@framecraft/shared';
+import { ASPECT_DIMENSIONS, movieBriefSchema, stillLook, type AspectRatio, type MovieBrief, type VideoSpecInput, type TimelineInput } from '@framecraft/shared';
 import type { AppContext } from '../context';
 import type { Db } from '../db/client';
 import fsp from 'node:fs/promises';
@@ -66,7 +66,10 @@ export async function runMoviePlan(ctx: AppContext, qj: QueueJob) {
       const images = ctx.director.llmAvailable ? await referenceImagesForLlm(ctx, job.userId, brief) : [];
       plan = await ctx.director.screenplay(brief, images);
     }
-    await persistPlan(ctx.db, job.userId, job.projectId!, plan, plan.source, brief, { replace: Boolean(revision) || replan });
+    const [proj] = await ctx.db.select({ settings: projects.settings }).from(projects).where(eq(projects.id, job.projectId!));
+    const castIds = (proj?.settings as { cartoon?: { characterIds?: string[] } } | undefined)?.cartoon?.characterIds ?? [];
+    const cast = castIds.length ? await ctx.db.select({ id: characters.id, name: characters.name }).from(characters).where(and(inArray(characters.id, castIds), eq(characters.userId, job.userId))) : [];
+    await persistPlan(ctx.db, job.userId, job.projectId!, plan, plan.source, brief, { replace: Boolean(revision) || replan, cast });
     if (replan) await ctx.db.update(projects).set({ settings: sql`${projects.settings} || ${JSON.stringify({ brief })}::jsonb`, aspectRatio: brief.aspectRatio, updatedAt: new Date() }).where(eq(projects.id, job.projectId!));
     await ctx.db
       .update(generationJobs)
@@ -150,7 +153,7 @@ export async function planFromDb(db: Db, projectId: string, brief: MovieBrief): 
 }
 
 /** Replace the project's scenes/shots with a plan. `replace` also replaces its characters & locations (re-plans). */
-export async function persistPlan(db: Db, userId: string, projectId: string, plan: MoviePlan, source: string, brief?: MovieBrief, opts: { replace?: boolean } = {}) {
+export async function persistPlan(db: Db, userId: string, projectId: string, plan: MoviePlan, source: string, brief?: MovieBrief, opts: { replace?: boolean; cast?: { id: string; name: string }[] } = {}) {
   const tokenAsset = new Map((brief?.references ?? []).map((r) => [r.token, r.assetId]));
   const assetsFor = (tokens: string[] | undefined) => [...new Set((tokens ?? []).map((t) => tokenAsset.get(t)).filter(Boolean) as string[])];
   await db.transaction(async (tx) => {
@@ -161,7 +164,18 @@ export async function persistPlan(db: Db, userId: string, projectId: string, pla
       await t.delete(locations).where(eq(locations.projectId, projectId));
     }
     const charIds = new Map<string, string>();
+    const same = (a: string, b: string) => {
+      const x = a.trim().toLowerCase();
+      const y = b.trim().toLowerCase();
+      return x === y || x.split(/\s+/).includes(y) || y.split(/\s+/).includes(x);
+    };
     for (const c of plan.characters) {
+      // A saved character (Character Bible) is cast as itself: its approved look and references carry over.
+      const own = opts.cast?.find((x) => same(c.name, x.name));
+      if (own) {
+        charIds.set(c.key, own.id);
+        continue;
+      }
       const [row] = await t
         .insert(characters)
         .values({ userId, projectId, name: c.name, description: c.description, appearance: { distinguishing: c.appearance }, clothing: c.clothing, voice: { style: c.voiceStyle, ...(c.gender && c.gender !== 'unknown' ? { gender: c.gender } : {}) } })
@@ -397,8 +411,8 @@ async function keyframeRefs(db: Db, shot: Shot, locationRefs: string[] = []): Pr
   return [...new Set([...byChar, ...locationRefs.slice(0, 2), ...shot.referenceAssetIds])].slice(0, 10);
 }
 
-function keyframePrompt(shot: Shot, aspect: string) {
-  return `${shot.prompt}\n\nOne photorealistic cinematic still: the first frame of this ${aspect} shot. Keep every person, place and object exactly consistent with the reference images. No text, captions or logos.`.slice(0, 1000);
+function keyframePrompt(shot: Shot, aspect: string, style?: string) {
+  return `${shot.prompt}\n\nOne ${stillLook(style)} still: the first frame of this ${aspect} shot. Keep every person, place and object exactly consistent with the reference images. No text, captions or logos.`.slice(0, 1000);
 }
 
 async function startKeyframes(ctx: AppContext, user: SessionLike, project: typeof projects.$inferSelect, list: Shot[], key: string, parentJobId?: string) {
@@ -406,7 +420,7 @@ async function startKeyframes(ctx: AppContext, user: SessionLike, project: typeo
   const jobs = [];
   for (const sh of list) {
     const referenceAssetIds = await keyframeRefs(ctx.db, sh, locRefs.get(sh.sceneId));
-    jobs.push(await createImageJob(ctx, user, { prompt: keyframePrompt(sh, project.aspectRatio), aspectRatio: project.aspectRatio as AspectRatio, purpose: 'storyboard', projectId: project.id, shotId: sh.id, referenceAssetIds, idempotencyKey: `${key}:${sh.id}` }, { parentJobId }));
+    jobs.push(await createImageJob(ctx, user, { prompt: keyframePrompt(sh, project.aspectRatio, (project.settings as { brief?: { style?: string } }).brief?.style), aspectRatio: project.aspectRatio as AspectRatio, purpose: 'storyboard', projectId: project.id, shotId: sh.id, referenceAssetIds, idempotencyKey: `${key}:${sh.id}` }, { parentJobId }));
   }
   return jobs;
 }
@@ -764,6 +778,13 @@ export async function storyboardMovie(ctx: AppContext, user: SessionLike, projec
   // The same keyframes the film uses: drawn with the characters', location's and objects' photos.
   const movie = await getMovie(ctx, user, projectId);
   const list = movie.scenes.flatMap((sc) => sc.shots).filter((sh) => !sh.storyboardAssetId && !isLogoShot(sh));
+  return startKeyframes(ctx, user, movie.project, list, idempotencyKey);
+}
+
+/** Storyboard frames for chosen shots only (the AI Director's "draw this shot"). */
+export async function storyboardShots(ctx: AppContext, user: SessionLike, projectId: string, shotIds: string[], idempotencyKey: string) {
+  const movie = await getMovie(ctx, user, projectId);
+  const list = movie.scenes.flatMap((sc) => sc.shots).filter((sh) => shotIds.includes(sh.id) && !isLogoShot(sh));
   return startKeyframes(ctx, user, movie.project, list, idempotencyKey);
 }
 

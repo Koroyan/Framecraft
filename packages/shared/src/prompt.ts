@@ -1,4 +1,5 @@
 import { CAMERA_PRESETS, COLOR_GRADES, FILM_STYLES, LENSES, LIGHTING_PRESETS, STYLE_PRESETS } from './constants';
+import { CARTOON_STYLES } from './cartoon';
 
 type Directives = {
   style?: string;
@@ -30,7 +31,7 @@ export function directivesToText(d: Directives, opts: { includeCamera?: boolean 
   if (lens) parts.push(lens);
   const light = lookup(LIGHTING_PRESETS, d.lighting);
   if (light) parts.push(light);
-  const style = lookup(STYLE_PRESETS, d.style);
+  const style = lookup(STYLE_PRESETS, d.style) || lookup(CARTOON_STYLES, d.style);
   if (style) parts.push(style);
   const film = lookup(FILM_STYLES, d.filmStyle);
   if (film) parts.push(film);
