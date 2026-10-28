@@ -93,6 +93,8 @@ export type Character = {
   voice: Record<string, string | undefined>;
   references: { assetId: string; isPrimary: boolean; url: string; isFixture: boolean }[];
   likenessConsentAt: string | null;
+  /** Where the character is used (Character Bible). */
+  usage?: { shots: number; generated: number; projects: number };
 };
 
 export type Location = { id: string; name: string; description: string; references: { assetId: string; url: string }[] };

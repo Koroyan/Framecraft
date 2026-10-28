@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import { quickPlan, type EditMask } from '@framecraft/shared';
+import { describeDirectorOp, isPaidDirectorOp, quickDirect, quickPlan, type DirectorItem, type DirectorOp, type DirectorQuickContext, type DirectorReply, type DirectorScope, type EditMask } from '@framecraft/shared';
 import { api, ApiError } from '@/lib/api';
 import type { CopilotReply, PlanItem } from '@/lib/studio';
 
@@ -41,10 +41,42 @@ export type ChatMessage = {
   /** Human summary of the selection the request used. */
   scope?: string;
   error?: boolean;
+  /** An AI Director plan for the story (graph / storyboard): what it targets, and what became of it. */
+  director?: {
+    scope: DirectorScope;
+    items: DirectorItem[];
+    offline?: boolean;
+    /** Shots created when the free steps were applied (new1 → id). */
+    created?: Record<string, string>;
+    /** Steps that put the story back as it was. */
+    undo?: DirectorOp[];
+    undone?: boolean;
+  };
 };
 
-type Thread = { msgs: ChatMessage[]; draft: string; useSelection: boolean };
+/** One target of the AI Director: the whole project, a scene, a shot or a connection. */
+export const directorKey = (s: DirectorScope) => (s.kind === 'project' ? 'project' : s.kind === 'scene' ? `scene:${s.sceneId}` : s.kind === 'shot' ? `shot:${s.shotId}` : `edge:${s.fromShotId ?? 'start'}:${s.toShotId ?? 'end'}`);
+
+type Thread = {
+  msgs: ChatMessage[];
+  draft: string;
+  useSelection: boolean;
+  /** Unsent words per Director target (they survive closing, collapsing and reloads). */
+  drafts?: Record<string, string>;
+  /** What the AI Director node is talking about right now. */
+  scope?: DirectorScope;
+  scopeLabel?: string;
+};
 const EMPTY: Thread = { msgs: [], draft: '', useSelection: true };
+
+export type DirectorSend = {
+  scope: DirectorScope;
+  scopeLabel: string;
+  quick: DirectorQuickContext;
+  names: Parameters<typeof describeDirectorOp>[1];
+  timeline: unknown;
+  visible: boolean;
+};
 
 type State = {
   threads: Record<string, Thread>;
@@ -58,6 +90,13 @@ type State = {
   clear: (projectId: string) => void;
   markRead: (projectId: string) => void;
   send: (projectId: string, message: string, o: { context: AssistantContext; timeline: unknown; visible: boolean; contextLabel?: string }) => Promise<void>;
+  setDirectorDraft: (projectId: string, key: string, draft: string) => void;
+  setDirectorScope: (projectId: string, scope: DirectorScope, label: string) => void;
+  patchMessage: (projectId: string, msgId: string, fn: (m: ChatMessage) => ChatMessage) => void;
+  /** Ask the AI Director about the story: instant on the device when it can, otherwise the AI planner. */
+  sendDirector: (projectId: string, message: string, o: DirectorSend) => Promise<void>;
+  /** Record a request made with an AI action (drag-and-drop or a card button) and its ready-made plan. */
+  pushDirectorPlan: (projectId: string, request: string, reply: string, director: NonNullable<ChatMessage['director']>, scopeText: string) => void;
 };
 
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -103,13 +142,49 @@ export const useAssistant = create<State>()(
           patch(projectId, (t) => ({
             ...t,
             msgs: t.msgs.map((m) => {
-              if (m.id !== msgId || !m.plan) return m;
-              const states = m.states ? [...m.states] : m.plan.map(() => 'proposed' as ItemState);
+              const items = m.plan ?? m.director?.items;
+              if (m.id !== msgId || !items) return m;
+              const states = m.states ? [...m.states] : items.map(() => 'proposed' as ItemState);
               idx.forEach((i) => (states[i] = s));
               return { ...m, states };
             }),
           })),
         clear: (projectId) => patch(projectId, (t) => ({ ...t, msgs: [] })),
+        setDirectorDraft: (projectId, key, draft) => patch(projectId, (t) => ({ ...t, drafts: { ...t.drafts, [key]: draft } })),
+        setDirectorScope: (projectId, scope, label) => patch(projectId, (t) => ({ ...t, scope, scopeLabel: label })),
+        pushDirectorPlan: (projectId, request, text, director, scopeText) => {
+          push(projectId, { id: uid(), role: 'user', text: request, at: Date.now(), scope: scopeText });
+          push(projectId, { id: uid(), role: 'assistant', text, at: Date.now(), local: true, scope: scopeText, director, states: director.items.map(() => 'proposed') });
+        },
+        patchMessage: (projectId, msgId, fn) => patch(projectId, (t) => ({ ...t, msgs: t.msgs.map((m) => (m.id === msgId ? fn(m) : m)) })),
+        sendDirector: async (projectId, message, o) => {
+          const text = message.trim();
+          if (!text || get().busy[projectId]) return;
+          const key = directorKey(o.scope);
+          patch(projectId, (t) => ({ ...t, drafts: { ...t.drafts, [key]: '' } }));
+          push(projectId, { id: uid(), role: 'user', text, at: Date.now(), scope: o.scopeLabel });
+          const reply = (m: Omit<ChatMessage, 'id' | 'role' | 'at'>) => {
+            push(projectId, { id: uid(), role: 'assistant', at: Date.now(), ...m, states: m.director?.items.map(() => 'proposed') });
+            if (!o.visible) set({ unread: { ...get().unread, [projectId]: (get().unread[projectId] ?? 0) + 1 } });
+          };
+          // 1) Common story requests are understood here: free, instant, no AI call.
+          const quick = quickDirect(text, o.quick);
+          if (quick) {
+            reply({ text: quick.reply, local: true, scope: o.scopeLabel, director: { scope: o.scope, items: quick.ops.map((op) => ({ op, paid: isPaidDirectorOp(op), summary: describeDirectorOp(op, o.names) })) } });
+            return;
+          }
+          // 2) Everything else goes to the AI Director (it proposes; nothing runs without you).
+          set({ busy: { ...get().busy, [projectId]: true } });
+          try {
+            const history = (get().threads[projectId] ?? EMPTY).msgs.slice(-9, -1).map((m) => ({ role: m.role, text: m.text.slice(0, 1500) }));
+            const r = await api<DirectorReply>(`/api/projects/${projectId}/director`, { body: { message: text, scope: o.scope, timeline: o.timeline, history } });
+            reply({ text: r.reply, scope: o.scopeLabel, director: { scope: o.scope, items: r.items, offline: r.offline } });
+          } catch (e) {
+            reply({ text: e instanceof ApiError ? e.message : 'The AI Director is unavailable right now. Every change can still be made on the cards.', error: true });
+          } finally {
+            set({ busy: { ...get().busy, [projectId]: false } });
+          }
+        },
         markRead: (projectId) => set({ unread: { ...get().unread, [projectId]: 0 } }),
         send: async (projectId, message, o) => {
           const text = message.trim();

@@ -9,7 +9,8 @@ import { describeContext, useAssistant, type AssistantContext, type ChatMessage 
 import { newId, useEditor } from '@/lib/editor-store';
 import { clampTo, LIMITS, useEditorUi, type AssistantDock } from '@/lib/editor-ui';
 import { describeOp, opScope } from '@/lib/plan-describe';
-import type { PlanItem } from '@/lib/studio';
+import { useStudio, type PlanItem } from '@/lib/studio';
+import { DirectorPlan } from './director-chat';
 import { Button, Dialog, Spinner } from '@/components/ui';
 import { cn, newKey } from '@/lib/utils';
 
@@ -43,6 +44,8 @@ function AssistantBody({ projectId, timeline, apply, context, onEditStarted, vis
   const thread = useAssistant((s) => s.threads[projectId]);
   const busy = useAssistant((s) => Boolean(s.busy[projectId]));
   const { send, setDraft, setStates, setUseSelection } = useAssistant.getState();
+  // One conversation per project: plans the AI Director made on the story graph show here too.
+  const studioQ = useStudio(projectId);
   const msgs = thread?.msgs ?? [];
   const draft = thread?.draft ?? '';
   const useSelection = thread?.useSelection ?? true;
@@ -151,6 +154,7 @@ function AssistantBody({ projectId, timeline, apply, context, onEditStarted, vis
                 <div className="whitespace-pre-wrap">{m.text}</div>
                 {m.local && <div className="mt-0.5 text-[10px] text-fog-500">Understood instantly — no AI call, no credits</div>}
                 {m.plan && m.plan.length > 0 && <PlanList m={m} timeline={timeline} running={running} onPreview={preview} onApply={applyNow} onCancel={cancel} onAi={(i) => setConfirm({ msg: m, i })} />}
+                {m.director && <DirectorPlan deps={{ projectId, studio: studioQ.data, timeline, apply, refetch: () => studioQ.refetch() }} msg={m} />}
               </div>
             )}
           </div>

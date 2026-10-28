@@ -18,6 +18,8 @@ import { useUploader } from '@/components/studio/upload';
 import { MultiTrack } from '@/components/editor/multitrack';
 import { SimpleEditor } from '@/components/editor/simple-editor';
 import { StoryGraph } from '@/components/editor/story-graph';
+import { DirectorPanel } from '@/components/editor/director-chat';
+import { useAutoInsertShots } from '@/lib/director';
 import { Storyboard } from '@/components/editor/storyboard';
 import { ShotEditor } from '@/components/editor/shot-editor';
 import { EditorToolbox } from '@/components/editor/toolbox';
@@ -91,7 +93,28 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
   const [exportOpen, setExportOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [workspace, setWorkspace] = useState<Workspace>('edit');
-  const [storyView, setStoryView] = useState<'board' | 'graph'>('board');
+  const [storyView, setStoryViewRaw] = useState<'board' | 'graph'>('board');
+  // The storyboard or the graph — whichever you used last (per browser).
+  useEffect(() => {
+    try {
+      if (localStorage.getItem('fc-story-view') === 'graph') setStoryViewRaw('graph');
+    } catch {
+      /* private mode */
+    }
+  }, []);
+  const setStoryView = (v: 'board' | 'graph') => {
+    setStoryViewRaw(v);
+    try {
+      localStorage.setItem('fc-story-view', v);
+    } catch {
+      /* private mode */
+    }
+  };
+  // The AI Director lives on the graph canvas; docked, it sits beside the canvas instead of the preview.
+  const [directorDocked, setDirectorDocked] = useState(false);
+  const [storySide, setStorySide] = useState<'preview' | 'director'>('preview');
+  // The graph gets the whole width; the preview opens beside it on request (cards play inline).
+  const [graphSide, setGraphSide] = useState(false);
   const [shotClip, setShotClip] = useState<string | null>(null);
   const [compareInit, setCompareInit] = useState<string | null>(null);
   const [selectedLayer, setSelectedLayerRaw] = useState<string | null>(null);
@@ -245,8 +268,9 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
   useEffect(() => {
     if (!hasTimeline) return;
     const t = useEditor.getState().timeline;
-    const generated = t?.clips.some((c) => c.shotId) && (tq.data?.project.kind === 'movie' || tq.data?.project.kind === 'ad');
-    setWorkspace(generated ? 'story' : 'edit');
+    // Films, cartoons and ads open on the story (planned shots included); your own videos on the timeline.
+    const film = tq.data?.project.kind === 'movie' || tq.data?.project.kind === 'ad';
+    setWorkspace(film ? 'story' : 'edit');
     const shotId = new URLSearchParams(window.location.search).get('shot');
     const c = shotId && t?.clips.find((x) => x.shotId === shotId);
     if (c) {
@@ -257,11 +281,13 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
   }, [hasTimeline]);
 
   // The simple editor is the default for your own videos; AI films and ads keep the full studio.
-  const aiProject = Boolean(timeline?.clips.some((c) => c.shotId) && (tq.data?.project.kind === 'movie' || tq.data?.project.kind === 'ad'));
+  const aiProject = tq.data?.project.kind === 'movie' || tq.data?.project.kind === 'ad';
   const simple = layout.simple && !aiProject;
   useEffect(() => {
     if (simple) setWorkspace('edit');
   }, [simple]);
+  // A shot generated from the story graph joins the movie where the script puts it.
+  useAutoInsertShots(studioQ.data, timeline, apply);
 
   const openShot = useCallback(
     (clipId: string, compare: string | null = null) => {
@@ -782,17 +808,64 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                 <div className="flex items-center gap-0.5 rounded-lg border hairline p-0.5 text-[11px]">
                   <button type="button" onClick={() => setStoryView('board')} className={cn('flex items-center gap-1 rounded-md px-2 py-1', storyView === 'board' ? 'bg-white/10 text-white' : 'text-fog-400')}><LayoutGrid className="size-3" /> Storyboard</button>
                   <button type="button" onClick={() => setStoryView('graph')} className={cn('flex items-center gap-1 rounded-md px-2 py-1', storyView === 'graph' ? 'bg-white/10 text-white' : 'text-fog-400')}><Network className="size-3" /> Graph</button>
-                </div>
-              </div>
-              <div className={cn('grid min-h-0 gap-2 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]', wide && 'flex-1')}>
-                <div className={cn('min-h-[420px] overflow-hidden rounded-2xl border hairline bg-ink-900/40', wide && 'min-h-0')}>
-                  {storyView === 'board' ? (
-                    <Storyboard timeline={timeline} assets={assets} studio={studio} apply={apply} selectedClipId={selected} playhead={playhead} onPlay={playFrom} onOpenShot={(cid) => openShot(cid)} onAdd={() => setLibraryFor('clip')} />
-                  ) : (
-                    <StoryGraph projectId={id} timeline={timeline} studio={studio} assets={assets} selectedClipId={selected} savedLayout={graphLayout} apply={apply} onSelectClip={playFrom} onPlayFrom={playFrom} onOpenShot={openShot} onUseVersion={activateVersion} onCompare={compareFromGraph} onSaveLayout={saveLayout} />
+                  {storyView === 'graph' && !directorDocked && (
+                    <button type="button" aria-pressed={graphSide} onClick={() => setGraphSide((v) => !v)} className={cn('ml-1 flex items-center gap-1 rounded-md px-2 py-1', graphSide ? 'bg-white/10 text-white' : 'text-fog-400 hover:text-white')}>Preview</button>
                   )}
                 </div>
-                <div className="min-h-[360px] rounded-2xl border hairline bg-ink-900/40 p-2">{previewEl}</div>
+              </div>
+              <div className={cn('grid min-h-0 gap-2', (storyView === 'board' || graphSide || directorDocked) && 'xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]', wide && 'flex-1')}>
+                <div className={cn('min-h-[420px] overflow-hidden rounded-2xl border hairline bg-ink-900/40', wide && 'min-h-0')}>
+                  {storyView === 'board' ? (
+                    <Storyboard projectId={id} timeline={timeline} assets={assets} studio={studio} apply={apply} refetch={() => studioQ.refetch()} selectedClipId={selected} playhead={playhead} onPlay={playFrom} onOpenShot={(cid) => openShot(cid)} onAdd={() => setLibraryFor('clip')} />
+                  ) : (
+                    <StoryGraph
+                      projectId={id}
+                      timeline={timeline}
+                      studio={studio}
+                      assets={assets}
+                      selectedClipId={selected}
+                      savedLayout={graphLayout}
+                      apply={apply}
+                      refetch={() => studioQ.refetch()}
+                      onSelectClip={playFrom}
+                      onPlayFrom={playFrom}
+                      onOpenShot={openShot}
+                      onUseVersion={activateVersion}
+                      onCompare={compareFromGraph}
+                      onSaveLayout={saveLayout}
+                      directorDocked={directorDocked}
+                      onPlayMovie={() => {
+                        const first = timeline.clips[0];
+                        if (!first) return;
+                        setGraphSide(true);
+                        playFrom(first.id);
+                        setTimeout(() => window.dispatchEvent(new Event('fc-editor-toggle-play')), 400);
+                      }}
+                      onDockDirector={() => {
+                        setDirectorDocked(true);
+                        setStorySide('director');
+                      }}
+                    />
+                  )}
+                </div>
+                {(storyView === 'board' || graphSide || directorDocked) && (
+                <div className="flex min-h-[360px] flex-col rounded-2xl border hairline bg-ink-900/40 p-2">
+                  {directorDocked && storyView === 'graph' && (
+                    <div className="mb-2 flex items-center gap-0.5 self-start rounded-lg border hairline p-0.5 text-[11px]" role="tablist" aria-label="Beside the canvas">
+                      <button type="button" role="tab" aria-selected={storySide === 'director'} onClick={() => setStorySide('director')} className={cn('rounded-md px-2 py-1', storySide === 'director' ? 'bg-white/10 text-white' : 'text-fog-400')}>AI Director</button>
+                      <button type="button" role="tab" aria-selected={storySide === 'preview'} onClick={() => setStorySide('preview')} className={cn('rounded-md px-2 py-1', storySide === 'preview' ? 'bg-white/10 text-white' : 'text-fog-400')}>Preview</button>
+                      <button type="button" onClick={() => setDirectorDocked(false)} className="rounded-md px-2 py-1 text-fog-400 hover:text-white" title="Put the AI Director back on the canvas">Undock</button>
+                    </div>
+                  )}
+                  {directorDocked && storyView === 'graph' && storySide === 'director' ? (
+                    <div className="min-h-0 flex-1 overflow-hidden rounded-xl border hairline bg-ink-900/70">
+                      <DirectorPanel deps={{ projectId: id, studio, timeline, apply, refetch: () => studioQ.refetch() }} />
+                    </div>
+                  ) : (
+                    <div className="min-h-0 flex-1">{previewEl}</div>
+                  )}
+                </div>
+                )}
               </div>
             </div>
           )}

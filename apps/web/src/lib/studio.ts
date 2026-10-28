@@ -53,10 +53,32 @@ export type ShotComment = {
   operationId: string | null;
   createdAt: string;
 };
+export type StudioCharacter = {
+  id: string;
+  name: string;
+  description: string;
+  clothing: string;
+  appearance: Record<string, string | undefined>;
+  voice: Record<string, string | undefined>;
+  styleMeta: Record<string, string>;
+  /** The approved (primary) reference image. */
+  imageUrl: string | null;
+  /** Made for this project (otherwise a saved character it uses). */
+  inProject: boolean;
+};
 export type StudioShot = {
   id: string;
   number: number;
+  /** Place inside its scene (script order). */
+  index: number;
   sceneId: string;
+  approved: boolean;
+  characterIds: string[];
+  dialogue: { speaker: string; line: string; characterId?: string }[];
+  sfx: string | null;
+  continuityFlags: { kind: string; message: string; severity: 'info' | 'warn' }[];
+  /** The storyboard frame is a labelled placeholder (test mode), not an AI image. */
+  storyboardIsFixture: boolean;
   description: string;
   prompt: string;
   camera: string | null;
@@ -69,7 +91,15 @@ export type StudioShot = {
   operations: EditOperation[];
   comments: ShotComment[];
 };
-export type StudioData = { scenes: { id: string; index: number; title: string }[]; shots: StudioShot[] };
+export type StudioData = {
+  kind: string;
+  style: string | null;
+  /** Generated shots the user took out of the movie (not put back automatically). */
+  removed: string[];
+  scenes: { id: string; index: number; title: string; synopsis: string; place: string | null }[];
+  characters: StudioCharacter[];
+  shots: StudioShot[];
+};
 
 export type EditEstimate = {
   available: boolean;
@@ -94,7 +124,8 @@ export function useStudio(projectId: string) {
   return useQuery({
     queryKey: ['studio', projectId],
     queryFn: () => api<StudioData>(`/api/projects/${projectId}/shots`),
-    refetchInterval: (q) => (q.state.data?.shots.some((s) => s.operations.some((o) => o.status === 'processing' || o.status === 'queued')) ? 3000 : false),
+    // Poll while something is being made (AI edits, generations), so the graph updates by itself.
+    refetchInterval: (q) => (q.state.data?.shots.some((s) => s.status === 'queued' || s.status === 'generating' || s.operations.some((o) => o.status === 'processing' || o.status === 'queued')) ? 3000 : false),
   });
 }
 

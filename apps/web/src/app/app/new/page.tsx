@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Clapperboard, ImagePlay, Megaphone, Scissors, Sparkles, Wand2 } from 'lucide-react';
+import { ArrowRight, Clapperboard, ImagePlay, Megaphone, Scissors, Smile, Sparkles, Wand2 } from 'lucide-react';
 import { guessIntent, type CreateFlow } from '@framecraft/shared';
 import { FLOW_LABEL as LABEL, hrefFor } from '@/lib/create-flow';
 import { Button } from '@/components/ui';
@@ -14,10 +14,11 @@ const FLOWS: { key: CreateFlow; icon: typeof Wand2; title: string; text: string;
   { key: 'animate', icon: ImagePlay, title: 'Animate an image', text: 'Bring a photo to life with motion.', needs: 'One image', cost: 'Paid · price shown first' },
   { key: 'edit', icon: Scissors, title: 'Edit my video', text: 'Trim, text, music, colour, objects.', needs: 'Your clips', cost: 'Free editing' },
   { key: 'ad', icon: Megaphone, title: 'Create an advertisement', text: 'Your product, your footage, a real ad.', needs: 'Product videos or photos', cost: 'Paid parts priced first' },
+  { key: 'cartoon', icon: Smile, title: 'Create a cartoon', text: 'Characters, story and animation from one sentence.', needs: 'An idea', cost: 'Plan free · video priced first' },
   { key: 'film', icon: Clapperboard, title: 'Create a film', text: 'Story, characters, scenes and shots.', needs: 'An idea', cost: 'Paid · plan first' },
 ];
 
-/** New video: describe it (we suggest the right start) or pick one of five clear starting points. */
+/** New video: describe it (we suggest the right start) or pick one of six clear starting points. */
 export default function NewVideoPage() {
   const router = useRouter();
   const [idea, setIdea] = useState('');
@@ -70,7 +71,7 @@ export default function NewVideoPage() {
 
       <div>
         <div className="mb-2 text-sm font-medium text-white">Or start here</div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {FLOWS.map((f) => (
             <Link key={f.key} href={hrefFor(f.key, idea.trim(), intent)} className={cn('group flex flex-col rounded-2xl border hairline bg-ink-900/60 p-4 transition hover:border-iris-400/60 hover:bg-ink-900', intent?.flow === f.key && 'border-iris-400/60')}>
               <f.icon className="size-6 text-iris-300" />

@@ -199,10 +199,14 @@ export function Tip({ content, children }: { content: React.ReactNode; children:
 }
 
 export function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  // A single control is labelled by the field's label (screen readers, and clicking the label focuses it).
+  const auto = React.useId();
+  const single = React.Children.count(children) === 1 && React.isValidElement<{ id?: string }>(children) ? children : null;
+  const id = single ? (single.props.id ?? auto) : undefined;
   return (
     <div>
-      <Label>{label}</Label>
-      {children}
+      <Label htmlFor={id}>{label}</Label>
+      {single ? React.cloneElement(single, { id }) : children}
       {hint && <p className="mt-1.5 text-xs text-fog-400">{hint}</p>}
     </div>
   );

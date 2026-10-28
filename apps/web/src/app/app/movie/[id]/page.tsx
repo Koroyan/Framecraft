@@ -466,9 +466,10 @@ export default function DirectorMode({ params }: { params: Promise<{ id: string 
         description={d.project.plan?.logline}
         actions={
           <>
-            {ready > 0 && (
+            {!planning && totalSec > 0 && (
+              // Scenes and shots as cards and a graph, with the AI Director beside every shot.
               <Link href={`/app/editor/${id}`} className={buttonVariants({ variant: 'secondary' })}>
-                <Film /> Editor
+                <Film /> {ready > 0 ? 'Editor & story graph' : 'Story graph & AI Director'}
               </Link>
             )}
             <Button onClick={() => { setTab('budget'); void loadEstimate(); }} disabled={Boolean(planning)}>
