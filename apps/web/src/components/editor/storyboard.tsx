@@ -177,6 +177,13 @@ export function Storyboard({ projectId, timeline, assets, studio, apply, refetch
                   <button type="button" onClick={() => setAsk({ key: `scene:${scene.id}`, scope: { kind: 'scene', sceneId: scene.id } })} className="ml-auto flex shrink-0 items-center gap-1 rounded-lg bg-iris-500/15 px-2 py-1 text-[11px] text-iris-100 hover:bg-iris-500/30"><Sparkles className="size-3" /> Ask AI</button>
                 </div>
               )}
+              {!scene && groups.some((x) => x.sceneId) && (
+                <div className="mb-3 flex items-center gap-2.5">
+                  <span className="rounded-lg border hairline px-2 py-0.5 text-[10px] font-semibold tracking-[0.12em] text-fog-400">CLIPS</span>
+                  <span className="text-sm text-fog-300">Not in a scene yet</span>
+                  <span className="text-[11px] tabular-nums text-fog-500">{clock(from)}–{clock(from + len)} · {seconds(len)}</span>
+                </div>
+              )}
               {ask?.key === `scene:${scene?.id}` && (
                 <div className="mb-2">
                   <AskCard deps={deps} scope={ask.scope} onClose={() => setAsk(null)} />
