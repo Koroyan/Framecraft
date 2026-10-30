@@ -83,7 +83,8 @@ export async function projectShots(ctx: AppContext, user: SessionLike, projectId
     .from(characters)
     .where(and(eq(characters.userId, project.userId), castIds.length ? or(eq(characters.projectId, projectId), inArray(characters.id, castIds)) : eq(characters.projectId, projectId)));
   const castRefs = castRows.length ? await ctx.db.select().from(characterReferences).where(inArray(characterReferences.characterId, castRows.map((c) => c.id))) : [];
-  const placeRows = await ctx.db.select({ id: locations.id, name: locations.name }).from(locations).where(eq(locations.projectId, projectId));
+  const placeIds = [...new Set(sceneRows.flatMap((s) => (s.locationId ? [s.locationId] : [])))];
+  const placeRows = placeIds.length ? await ctx.db.select({ id: locations.id, name: locations.name }).from(locations).where(inArray(locations.id, placeIds)) : [];
   const assetIds = [...new Set([...versions.map((v) => v.assetId), ...shotRows.flatMap((s) => (s.storyboardAssetId ? [s.storyboardAssetId] : [])), ...castRefs.map((r) => r.assetId)])];
   const assetRows = assetIds.length ? await ctx.db.select().from(assets).where(inArray(assets.id, assetIds)) : [];
   const thumbIds = assetRows.flatMap((a) => (a.thumbnailAssetId ? [a.thumbnailAssetId] : []));
@@ -101,7 +102,7 @@ export async function projectShots(ctx: AppContext, user: SessionLike, projectId
     style: settings.brief?.style ?? null,
     /** Generated shots the user took out of the movie (they are not put back automatically). */
     removed: settings.graph?.removed ?? [],
-    scenes: sceneRows.map((s) => ({ id: s.id, index: s.index, title: s.title, synopsis: s.synopsis, place: placeRows.find((l) => l.id === s.locationId)?.name ?? null })),
+    scenes: sceneRows.map((s) => ({ id: s.id, index: s.index, title: s.title, synopsis: s.synopsis, locationId: s.locationId, place: placeRows.find((l) => l.id === s.locationId)?.name ?? null })),
     characters: castRows.map((c) => {
       const ref = castRefs.filter((r) => r.characterId === c.id).sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary))[0];
       return { id: c.id, name: c.name, description: c.description, clothing: c.clothing, appearance: c.appearance, voice: c.voice, styleMeta: c.styleMeta, imageUrl: ref ? (media.get(ref.assetId)?.url ?? null) : null, inProject: c.projectId === projectId };

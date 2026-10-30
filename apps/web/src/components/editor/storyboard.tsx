@@ -11,6 +11,7 @@ import { directorNames, scopeLabel, shotState, storyModel } from '@/lib/director
 import { activeVersion, type StudioData } from '@/lib/studio';
 import { cn, seconds } from '@/lib/utils';
 import { AskCard, type DirectorDeps } from './director-chat';
+import { PlacePicker } from './graph/details';
 
 /*
  * Simple storyboard: the film as cards in the order it plays, grouped by scene, with the shots that
@@ -304,6 +305,11 @@ export function Storyboard({ projectId, timeline, assets, studio, apply, refetch
             <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-fog-400">Shot prompt</div>
             <p className="mt-1.5 line-clamp-6 text-xs leading-relaxed text-fog-200">{pickShot.prompt || pickShot.description}</p>
             <button type="button" onClick={improve} className="mt-2 flex items-center gap-1 text-[11px] text-iris-300 hover:text-white"><Wand2 className="size-3" /> Improve prompt</button>
+          </div>
+        )}
+        {pickShot && studio?.scenes.some((x) => x.id === pickShot.sceneId) && (
+          <div className="mt-3">
+            <PlacePicker deps={deps} sceneId={pickShot.sceneId} />
           </div>
         )}
         {pickShot && (pickShot.characterIds.length > 0 || pickShot.camera) && (

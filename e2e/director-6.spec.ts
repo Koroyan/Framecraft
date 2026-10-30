@@ -233,3 +233,37 @@ test('M — Character Bible: a brand mascot with personality and palette', async
   const { characters } = await call<{ characters: { name: string; styleMeta: Record<string, string> }[] }>(page, 'GET', '/api/characters');
   expect(characters.find((c) => c.name === 'Cakey')!.styleMeta).toMatchObject({ kind: 'mascot', personality: 'cheerful, a little clumsy', style: 'cartoon_mascot' });
 });
+
+test('L — a saved location becomes the place of a scene, from the storyboard', async ({ page }) => {
+  const id = await storyProject(page);
+  const { location } = await call<{ location: { id: string } }>(page, 'POST', '/api/locations', { name: 'Moonlight Bakery', description: 'a warm bakery at night' });
+  // Your own clip becomes a shot (scene "Your footage") when asked about.
+  await page.getByTestId('shot-card').first().getByRole('button', { name: 'Ask AI' }).click();
+  await expect(page.getByRole('dialog', { name: /Ask AI about/ })).toBeVisible();
+  await page.getByRole('tab', { name: 'Storyboard' }).click();
+  await page.getByTestId('storyboard').getByTestId('story-card').first().locator(`button[title="Show this shot's details"]`).click();
+  const panel = page.getByTestId('shot-panel');
+  await panel.getByLabel('Place of this scene').selectOption(location.id);
+  await expect.poll(async () => (await call<{ scenes: { locationId: string | null; place: string | null }[] }>(page, 'GET', `/api/projects/${id}/shots`)).scenes[0]).toMatchObject({ locationId: location.id, place: 'Moonlight Bakery' });
+  await page.screenshot({ path: `${SHOTS}/L1-scene-place.png` });
+});
+
+test('W — the script view edits the same shots as the storyboard and graph', async ({ page }) => {
+  const id = await storyProject(page);
+  await page.getByTestId('shot-card').first().getByRole('button', { name: 'Ask AI' }).click();
+  await expect(page.getByRole('dialog', { name: /Ask AI about/ })).toBeVisible();
+  await page.getByRole('tab', { name: 'Script' }).click();
+  const script = page.getByTestId('script-view');
+  await expect(script.getByRole('region', { name: 'Scene 1' })).toBeVisible();
+  const action = script.getByLabel('Shot 1 action');
+  await action.fill('The robot slides a birthday cake toward the camera');
+  await action.blur();
+  await expect.poll(async () => (await call<{ shots: { description: string }[] }>(page, 'GET', `/api/projects/${id}/shots`)).shots.map((s) => s.description)).toContain('The robot slides a birthday cake toward the camera');
+  await script.getByRole('button', { name: 'Add a shot' }).click();
+  await expect(script.getByTestId('script-shot')).toHaveCount(2);
+  // The storyboard shows the same new shot, planned, in its place.
+  await page.getByRole('tab', { name: 'Storyboard' }).click();
+  await expect(page.getByTestId('storyboard')).toContainText('The robot slides a birthday cake toward the camera');
+  await expect(page.getByTestId('storyboard')).toContainText('New shot — describe what happens');
+  await page.screenshot({ path: `${SHOTS}/W1-script-to-storyboard.png` });
+});

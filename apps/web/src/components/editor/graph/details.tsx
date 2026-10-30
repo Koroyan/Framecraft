@@ -1,11 +1,51 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
+import { useQuery } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import { api, ApiError, type Location } from '@/lib/api';
 import { Loader2, Plus, Trash2, X } from 'lucide-react';
 import { CAMERA_PRESETS } from '@framecraft/shared';
 import { scopeLabel } from '@/lib/director';
 import { cn } from '@/lib/utils';
 import type { DirectorDeps } from '../director-chat';
+
+/**
+ * + Location for a scene: a saved place from the Location library. Its reference photos go into
+ * every shot of the scene (prompts and keyframes), so the place stays the same from shot to shot.
+ */
+export function PlacePicker({ deps, sceneId }: { deps: DirectorDeps; sceneId: string }) {
+  const places = useQuery({ queryKey: ['locations'], queryFn: () => api<{ locations: Location[] }>('/api/locations'), staleTime: 60_000 });
+  const scene = deps.studio?.scenes.find((s) => s.id === sceneId);
+  const [busy, setBusy] = useState(false);
+  const set = async (locationId: string) => {
+    setBusy(true);
+    try {
+      await api(`/api/projects/${deps.projectId}/director/apply`, { body: { ops: [{ op: 'scene.update', sceneId, locationId: locationId || null }], scope: { kind: 'project' } } });
+      await deps.refetch();
+      toast.success(locationId ? 'Place set for the whole scene' : 'Place removed');
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Could not set the place');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <label className="block text-[11px] text-fog-400">
+      Place (whole scene)
+      <span className="mt-1 flex items-center gap-1.5">
+        <select value={scene?.locationId ?? ''} disabled={busy} onChange={(e) => void set(e.target.value)} aria-label="Place of this scene" className="min-w-0 flex-1 rounded-lg border hairline bg-black/30 px-2 py-1.5 text-xs text-white focus:border-iris-400 focus:outline-none">
+          <option value="">{scene?.place && !scene.locationId ? scene.place : 'No saved place'}</option>
+          {(places.data?.locations ?? []).map((l) => (
+            <option key={l.id} value={l.id}>{l.name}{l.references.length ? '' : ' (no photo yet)'}</option>
+          ))}
+        </select>
+        <Link href="/app/locations" className="shrink-0 rounded-lg border hairline px-2 py-1.5 text-[11px] text-iris-300 hover:text-white">+ Location</Link>
+      </span>
+    </label>
+  );
+}
 
 /**
  * A shot's plan in place: what happens, camera, length, who is in it and what they say, and the
@@ -68,6 +108,7 @@ export function ShotDetailsCard({ deps, shotId, onSave, onClose }: { deps: Direc
             <input type="range" min={2} max={30} step={1} value={duration} disabled={generated} onChange={(e) => setDuration(Number(e.target.value))} className="mt-2.5 w-full accent-iris-500 disabled:opacity-40" aria-label="Length in seconds" />
           </label>
         </div>
+        <PlacePicker deps={deps} sceneId={shot.sceneId} />
         {(deps.studio?.characters.length ?? 0) > 0 && (
           <div className="text-[11px] text-fog-400">
             In this shot

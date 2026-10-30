@@ -2,7 +2,7 @@
 
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, CheckCheck, ChevronsLeft, Copy, Crosshair, Download, Film, History, Keyboard, LayoutGrid, Network, Plus, Redo2, Save, Scissors, SlidersHorizontal, Snowflake, Trash2, Undo2, Upload } from 'lucide-react';
+import { Bot, CheckCheck, ChevronsLeft, FileText, Copy, Crosshair, Download, Film, History, Keyboard, LayoutGrid, Network, Plus, Redo2, Save, Scissors, SlidersHorizontal, Snowflake, Trash2, Undo2, Upload } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { rippleDelete, swapShotVersion, timelineDuration, type Timeline } from '@framecraft/shared';
@@ -18,6 +18,7 @@ import { useUploader } from '@/components/studio/upload';
 import { MultiTrack } from '@/components/editor/multitrack';
 import { SimpleEditor } from '@/components/editor/simple-editor';
 import { StoryGraph } from '@/components/editor/story-graph';
+import { ScriptView } from '@/components/editor/script-view';
 import { DirectorPanel } from '@/components/editor/director-chat';
 import { useAutoInsertShots } from '@/lib/director';
 import { Storyboard } from '@/components/editor/storyboard';
@@ -32,7 +33,7 @@ import { ReviewBar } from '@/components/editor/review';
 import { useStudio } from '@/lib/studio';
 import { cn, seconds } from '@/lib/utils';
 
-type Workspace = 'story' | 'edit' | 'shot' | 'review';
+type Workspace = 'script' | 'story' | 'edit' | 'shot' | 'review';
 type TimelineResponse = { timeline: Timeline; version: number; label: string | null; durationSec: number; project: Project };
 
 function useMediaQuery(q: string) {
@@ -500,6 +501,12 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {timeline.clips.length ? (
           <MultiTrack
+            onTrackMeta={(index, patch) =>
+              apply((t) => {
+                const meta = t.tracks.find((x) => x.index === index) ?? { index, locked: false, hidden: false };
+                return { ...t, tracks: [...t.tracks.filter((x) => x.index !== index), { ...meta, ...patch }] };
+              })
+            }
             title={timelineTitle}
             actions={actions}
             musicHint={musicHint}
@@ -657,6 +664,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         <div className="flex items-center gap-0.5 rounded-xl border hairline bg-ink-900 p-1" role="tablist" aria-label="Workspace">
           {(
             [
+              ['script', FileText, 'Script'],
               ['board', LayoutGrid, 'Storyboard'],
               ['graph', Network, 'Graph'],
               ['edit', Film, 'Editor'],
@@ -888,6 +896,12 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
           {workspace === 'shot' && shotEditorClip && (
             <div className={cn('min-h-0 overflow-y-auto', wide && 'flex-1')}>
               <ShotEditor key={shotEditorClip} projectId={id} clipId={shotEditorClip} timeline={timeline} apply={apply} shot={shotEditorShot} assets={assets} onClose={() => setWorkspace('edit')} initialCompare={compareInit} />
+            </div>
+          )}
+
+          {workspace === 'script' && (
+            <div className={cn('min-h-[420px] overflow-hidden rounded-2xl border hairline bg-ink-950', wide && 'min-h-0 flex-1')}>
+              <ScriptView projectId={id} studio={studio} timeline={timeline} apply={apply} refetch={() => studioQ.refetch()} onOpenStoryboard={() => { setStoryView('board'); setWorkspace('story'); }} />
             </div>
           )}
 

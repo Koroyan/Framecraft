@@ -57,7 +57,12 @@ async function loadStory(ctx: AppContext, user: SessionLike, projectId: string, 
     .select()
     .from(characters)
     .where(and(eq(characters.userId, project.userId), cast.length ? or(eq(characters.projectId, projectId), inArray(characters.id, cast)) : eq(characters.projectId, projectId)));
-  const locRows = await ctx.db.select().from(locations).where(eq(locations.projectId, projectId));
+  // This film's places and any saved location a scene uses (Location library).
+  const placeIds = [...new Set(sceneRows.flatMap((s) => (s.locationId ? [s.locationId] : [])))];
+  const locRows = await ctx.db
+    .select()
+    .from(locations)
+    .where(and(eq(locations.userId, project.userId), placeIds.length ? or(eq(locations.projectId, projectId), inArray(locations.id, placeIds)) : eq(locations.projectId, projectId)));
   let timeline: Timeline | null = null;
   if (timelineInput) timeline = timelineSchema.parse(timelineInput);
   else {
@@ -101,13 +106,14 @@ const characterLine = (c: CharacterRow) => {
  * cast (appearance repeated word for word, as the screenplay does), the scene's place and the
  * film's style — so a short request like "close-up of the robot, surprised" generates consistently.
  */
-export function composeShotPrompt(p: { description: string; shotType?: string | null; camera?: string | null; cast: CharacterRow[]; place?: { name: string; description: string } | null; style?: string; previous?: string | null }) {
+export function composeShotPrompt(p: { description: string; shotType?: string | null; camera?: string | null; cast: CharacterRow[]; place?: { name: string; description: string; styleMeta?: Record<string, string> } | null; style?: string; previous?: string | null }) {
+  const placeLook = p.place?.styleMeta ? ['setting', 'timeOfDay', 'weather', 'lighting', 'architecture'].map((k) => p.place!.styleMeta![k]).filter(Boolean).join(', ') : '';
   const framing = [p.shotType ? `${p.shotType} shot` : '', CAMERA_PRESETS.find((c) => c.key === p.camera)?.prompt ?? ''].filter(Boolean).join(', ');
   return [
     p.description.trim().replace(/\.?$/, '.'),
     framing && `${framing.charAt(0).toUpperCase()}${framing.slice(1)}.`,
     p.cast.length ? `Characters — ${p.cast.map(characterLine).join(' | ')}.` : '',
-    p.place ? `Setting: ${p.place.name} — ${p.place.description}.` : '',
+    p.place ? `Setting: ${p.place.name} — ${[p.place.description, placeLook].filter(Boolean).join('; ')}.` : '',
     p.previous ? `Continuity: same characters, place, light and colour as the previous shot (${p.previous.slice(0, 160)}).` : '',
     lookStyle(p.style) && `Look: ${lookStyle(p.style)}.`,
     'No on-screen text.',
@@ -489,8 +495,12 @@ export async function applyDirectorOps(ctx: AppContext, user: SessionLike, proje
         }
         case 'scene.update': {
           const sc = story.scenes.find((x) => x.id === op.sceneId)!;
-          await tx.update(scenes).set(clean({ title: op.title, synopsis: op.synopsis, updatedAt: new Date() })).where(eq(scenes.id, sc.id));
-          undo.unshift(clean({ op: 'scene.update' as const, sceneId: sc.id, title: op.title !== undefined ? sc.title : undefined, synopsis: op.synopsis !== undefined ? sc.synopsis : undefined }) as DirectorOp);
+          if (op.locationId) {
+            const [own] = await tx.select({ id: locations.id }).from(locations).where(and(eq(locations.id, op.locationId), eq(locations.userId, story.project.userId)));
+            if (!own) throw notFound('Location');
+          }
+          await tx.update(scenes).set(clean({ title: op.title, synopsis: op.synopsis, locationId: op.locationId, updatedAt: new Date() })).where(eq(scenes.id, sc.id));
+          undo.unshift(clean({ op: 'scene.update' as const, sceneId: sc.id, title: op.title !== undefined ? sc.title : undefined, synopsis: op.synopsis !== undefined ? sc.synopsis : undefined, locationId: op.locationId !== undefined ? sc.locationId : undefined }) as DirectorOp);
           break;
         }
         case 'character.update': {

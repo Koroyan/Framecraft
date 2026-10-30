@@ -97,7 +97,7 @@ export type Character = {
   usage?: { shots: number; generated: number; projects: number };
 };
 
-export type Location = { id: string; name: string; description: string; references: { assetId: string; url: string }[] };
+export type Location = { id: string; name: string; description: string; styleMeta?: Record<string, string>; references: { assetId: string; url: string }[]; usage?: { scenes: number; projects: number } };
 
 export type { GenerationEstimate, PublicJob, PublicModel, TemplateDefinition, Timeline, VideoSpecInput };
 

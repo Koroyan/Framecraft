@@ -20,7 +20,7 @@ import {
 import type { AppContext } from '../../context';
 import { liveProviders } from '../../context';
 import { parse, requireUser } from '../app';
-import { assets, characterReferences, characters, consents, generationJobs, locationReferences, locations, notifications, projects, savedPrompts, shots, templates, userSettings } from '../../db/schema';
+import { assets, characterReferences, characters, consents, generationJobs, locationReferences, locations, notifications, projects, savedPrompts, scenes, shots, templates, userSettings } from '../../db/schema';
 import { cancelGeneration, createGeneration, estimateGeneration, getOwnedJob, listJobs, providerJobsFor, retryGeneration, toPublicJob } from '../../generation/service';
 import { loadRoutableModels, toPublicModel } from '../../services/registry';
 import { ALLOWED_UPLOADS, assetUrl, downloadAssetToTemp, getOwnedAsset, prepOf, sniffMime, storeAsset, tmpFile } from '../../services/assets';
@@ -438,7 +438,17 @@ export async function studioRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/api/locations', async (req) => {
     const u = requireUser(req);
     const rows = await ctx.db.select().from(locations).where(eq(locations.userId, u.id)).orderBy(desc(locations.updatedAt));
-    return { locations: await withRefs(rows, 'location') };
+    // Where each place is used: its photos go into every shot of these scenes.
+    const used = await ctx.db
+      .select({ locationId: scenes.locationId, projectId: scenes.projectId })
+      .from(scenes)
+      .innerJoin(projects, eq(projects.id, scenes.projectId))
+      .where(and(eq(projects.userId, u.id), isNull(projects.deletedAt)));
+    const usage = (id: string) => {
+      const mine = used.filter((s) => s.locationId === id);
+      return { scenes: mine.length, projects: new Set(mine.map((s) => s.projectId)).size };
+    };
+    return { locations: (await withRefs(rows, 'location')).map((l) => ({ ...l, usage: usage(l.id) })) };
   });
 
   const saveLocation = async (userId: string, body: z.infer<typeof locationSchema>, id?: string) => {

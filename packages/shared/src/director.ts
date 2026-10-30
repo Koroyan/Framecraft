@@ -55,7 +55,7 @@ export const directorOpSchema = z.discriminatedUnion('op', [
   /** A planned shot is deleted; a generated one only leaves the movie (its takes stay in the project). */
   z.object({ op: z.literal('shot.remove'), shotId: uuid }),
   z.object({ op: z.literal('shot.move'), shotId: uuid, sceneId: uuid, afterShotId: uuid.nullable() }),
-  z.object({ op: z.literal('scene.update'), sceneId: uuid, title: z.string().trim().min(1).max(120).optional(), synopsis: z.string().trim().max(2000).optional() }),
+  z.object({ op: z.literal('scene.update'), sceneId: uuid, title: z.string().trim().min(1).max(120).optional(), synopsis: z.string().trim().max(2000).optional(), /** The place (a saved location): its reference photos go into every shot of the scene. */ locationId: uuid.nullable().optional() }),
   z.object({ op: z.literal('character.update'), characterId: uuid, patch: z.object({ description: z.string().trim().max(2000), clothing: z.string().trim().max(500), appearance: z.record(z.string(), z.string().max(400)) }).partial() }),
   // Paid (price shown, approval required)
   z.object({ op: z.literal('storyboard.generate'), shotIds: z.array(shotRef).min(1).max(60) }),
@@ -399,7 +399,7 @@ export function describeDirectorOp(op: DirectorOp, names: { shot: (id: string) =
     case 'shot.move':
       return `Move ${names.shot(op.shotId)} ${op.afterShotId ? `after ${names.shot(op.afterShotId)}` : `to the start of ${names.scene(op.sceneId)}`}`;
     case 'scene.update':
-      return `${names.scene(op.sceneId)}: ${[op.title && `title “${op.title}”`, op.synopsis && 'new synopsis'].filter(Boolean).join(', ')}`;
+      return `${names.scene(op.sceneId)}: ${[op.title && `title “${op.title}”`, op.synopsis && 'new synopsis', op.locationId !== undefined && (op.locationId ? 'new place' : 'no place')].filter(Boolean).join(', ')}`;
     case 'character.update':
       return `${names.character(op.characterId)}: ${Object.keys(op.patch).join(', ')} updated (affects every shot they appear in)`;
     case 'storyboard.generate':

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { gradeCss } from '@/lib/looks';
 import { api } from '@/lib/api';
-import { Blend, Captions, Film, Layers, Mic, Minus, Music2, Plus, Type } from 'lucide-react';
+import { Blend, Captions, Eye, EyeOff, Film, Layers, Lock, LockOpen, Mic, Minus, Music2, Plus, Type } from 'lucide-react';
 import { lostSpans, timelineDuration, type Timeline } from '@framecraft/shared';
 import type { Asset } from '@/lib/api';
 import { clipLen, clipStarts } from '@/lib/editor-store';
@@ -74,7 +74,10 @@ export function MultiTrack({
   title,
   actions,
   musicHint = 'Add music from Audio (left)',
+  onTrackMeta,
 }: {
+  /** Hide (also from the export) or lock a layer track. */
+  onTrackMeta?: (index: number, patch: { hidden?: boolean; locked?: boolean }) => void;
   /** Shown at the start / end of the timeline's single header row (saves a row of height). */
   title?: React.ReactNode;
   actions?: React.ReactNode;
@@ -142,8 +145,8 @@ export function MultiTrack({
   const voices = timeline.audio.filter((a) => a.kind === 'voice');
   const beds = timeline.audio.filter((a) => a.kind !== 'voice');
 
-  const lanes: { key: string; icon: React.ReactNode; label: string; show: boolean }[] = [
-    ...layerTracks.map((tr) => ({ key: `layer-${tr}`, icon: <Layers className="size-3.5" />, label: `${laneName(timeline.layers.filter((l) => l.track === tr))}${locked.has(tr) ? ' 🔒' : ''}${hiddenT.has(tr) ? ' (hidden)' : ''}`, show: true })),
+  const lanes: { key: string; icon: React.ReactNode; label: string; show: boolean; track?: number }[] = [
+    ...layerTracks.map((tr) => ({ key: `layer-${tr}`, icon: <Layers className="size-3.5" />, label: laneName(timeline.layers.filter((l) => l.track === tr)), show: true, track: tr })),
     { key: 'overlay', icon: <Layers className="size-3.5" />, label: 'Overlays', show: timeline.overlays.length > 0 },
     { key: 'video', icon: <Film className="size-3.5" />, label: 'Video', show: true },
     { key: 'voice', icon: <Mic className="size-3.5" />, label: 'Voice', show: voices.length > 0 },
@@ -171,10 +174,20 @@ export function MultiTrack({
         </span>
       </div>
       <div className="flex gap-2">
-        <div className="w-24 shrink-0 space-y-1.5 pt-6 max-sm:hidden">
+        <div className="w-28 shrink-0 space-y-1.5 pt-6 max-sm:hidden">
           {lanes.filter((l) => l.show).map((l) => (
-            <div key={l.key} className="flex h-9 items-center gap-1.5 truncate text-[11px] text-fog-400">
-              {l.icon} {l.label}
+            <div key={l.key} className={cn('group/lane flex h-9 items-center gap-1.5 text-[11px] text-fog-400', l.track !== undefined && hiddenT.has(l.track) && 'opacity-50')}>
+              {l.icon} <span className="min-w-0 flex-1 truncate">{l.label}</span>
+              {l.track !== undefined && onTrackMeta && (
+                <span className="flex shrink-0 items-center">
+                  <button type="button" aria-label={hiddenT.has(l.track) ? `Show ${l.label} track` : `Hide ${l.label} track`} title={hiddenT.has(l.track) ? 'Hidden — also from the export. Click to show.' : 'Hide (also from the export)'} aria-pressed={hiddenT.has(l.track)} onClick={() => onTrackMeta(l.track!, { hidden: !hiddenT.has(l.track!) })} className={cn('grid size-5 place-items-center rounded hover:bg-white/[0.08] hover:text-white', hiddenT.has(l.track) ? 'text-signal-amber' : 'opacity-60 group-hover/lane:opacity-100')}>
+                    {hiddenT.has(l.track) ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
+                  </button>
+                  <button type="button" aria-label={locked.has(l.track) ? `Unlock ${l.label} track` : `Lock ${l.label} track`} title={locked.has(l.track) ? 'Locked — click to unlock' : 'Lock against changes'} aria-pressed={locked.has(l.track)} onClick={() => onTrackMeta(l.track!, { locked: !locked.has(l.track!) })} className={cn('grid size-5 place-items-center rounded hover:bg-white/[0.08] hover:text-white', locked.has(l.track) ? 'text-signal-amber' : 'opacity-60 group-hover/lane:opacity-100')}>
+                    {locked.has(l.track) ? <Lock className="size-3" /> : <LockOpen className="size-3" />}
+                  </button>
+                </span>
+              )}
             </div>
           ))}
         </div>

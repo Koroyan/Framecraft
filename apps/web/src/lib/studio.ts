@@ -96,7 +96,7 @@ export type StudioData = {
   style: string | null;
   /** Generated shots the user took out of the movie (not put back automatically). */
   removed: string[];
-  scenes: { id: string; index: number; title: string; synopsis: string; place: string | null }[];
+  scenes: { id: string; index: number; title: string; synopsis: string; locationId: string | null; place: string | null }[];
   characters: StudioCharacter[];
   shots: StudioShot[];
 };

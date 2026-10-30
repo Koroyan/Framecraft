@@ -8,7 +8,7 @@ import { createTestContext, type TestHarness } from './helpers/context';
 import { FakeLlm } from '../src/director/llm';
 import { ffmpeg } from '../src/media/ffmpeg';
 import { storeAsset } from '../src/services/assets';
-import { characters, projects, scenes, shots } from '../src/db/schema';
+import { characters, locations, projects, scenes, shots } from '../src/db/schema';
 import { saveTimeline } from '../src/editor/editor';
 import { projectShots } from '../src/editing/versions';
 import { applyDirectorOps, applyRequestSchema, composeShotPrompt, directorPlan, runDirectorOp } from '../src/director/story';
@@ -196,6 +196,21 @@ describe('applying the Director’s free steps', () => {
     await expect(apply([{ op: 'shot.update', shotId: '99999999-9999-4999-8999-999999999999', patch: { durationSec: 3 } }])).rejects.toThrow(/not found/);
     const other = await h.makeUser();
     await expect(applyDirectorOps(h.ctx, { id: other.id, role: 'user' }, projectId, applyRequestSchema.parse({ ops: [{ op: 'shot.remove', shotId: ids.s2 }] }))).rejects.toThrow(/not found/);
+  });
+
+  it('a scene takes a saved location: new shots are set there, undo puts the old place back, other people’s places are refused', async () => {
+    const [bakery] = await h.ctx.db.insert(locations).values({ userId: user.id, name: 'Moonlight Bakery', description: 'a warm bakery at night' }).returning();
+    const r = await apply([{ op: 'scene.update', sceneId: ids.sc1, locationId: bakery!.id }]);
+    expect((await h.ctx.db.select().from(scenes).where(eq(scenes.id, ids.sc1)))[0]!.locationId).toBe(bakery!.id);
+    const ins = await apply([{ op: 'shot.insert', ref: 'new1', sceneId: ids.sc1, afterShotId: ids.s1, shot: { description: 'Bolt waves', characterIds: [ids.bolt] } }]);
+    const [row] = await h.ctx.db.select().from(shots).where(eq(shots.id, ins.created.new1!));
+    expect(row!.prompt).toContain('Setting: Moonlight Bakery — a warm bakery at night');
+    await apply(ins.undo as unknown[]);
+    await apply(r.undo as unknown[]);
+    expect((await h.ctx.db.select().from(scenes).where(eq(scenes.id, ids.sc1)))[0]!.locationId).toBeNull();
+    const other = await h.makeUser();
+    const [theirs] = await h.ctx.db.insert(locations).values({ userId: other.id, name: 'Not yours' }).returning();
+    await expect(apply([{ op: 'scene.update', sceneId: ids.sc1, locationId: theirs!.id }])).rejects.toThrow(/not found/);
   });
 
   it('paid steps never run below their price', async () => {
