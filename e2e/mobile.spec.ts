@@ -23,6 +23,14 @@ test('mobile: landing, navigation and create flow fit the phone screen', async (
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: 'test-results/mobile-create.png', fullPage: true });
 
+  // The new studio pages fit the phone too.
+  for (const path of ['/app/cartoon', '/app/characters', '/app/locations']) {
+    await page.goto(path);
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+  }
+  await page.screenshot({ path: 'test-results/mobile-locations.png', fullPage: true });
+
   await page.getByRole('button', { name: 'More' }).click();
   await expect(page.getByRole('link', { name: 'Credits & Billing' })).toBeVisible();
 });

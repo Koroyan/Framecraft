@@ -48,6 +48,16 @@ function settledTime(layer: Layer, t: number) {
   return Math.min(Math.max(t, Math.min(from, to)), to);
 }
 
+/** A titled group in the layer inspector (Timing, Text, Transform, Animation). */
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-2 border-t hairline pt-2.5">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-fog-400">{title}</div>
+      {children}
+    </div>
+  );
+}
+
 function LayerView({ layer, t, playing, assets, frameH, selected, onSelect, hidden }: { layer: Layer; t: number; playing: boolean; assets: Map<string, Asset>; frameH: number; selected: boolean; onSelect: () => void; hidden: boolean }) {
   const st = layerStateAt(layer, selected && !playing ? settledTime(layer, t) : t);
   const raster = useRaster(layer, frameH);
@@ -262,18 +272,20 @@ export function LayersPanel({ timeline, apply, playhead, selectedId, setSelected
               <Button size="icon" variant="ghost" aria-label="Delete layer" onClick={() => { apply((t) => ({ ...t, layers: t.layers.filter((x) => x.id !== sel.id) })); setSelectedId(null); }}><Trash2 /></Button>
             </span>
           </div>
+          <Section title="Timing">
           <div className="grid grid-cols-2 gap-2">
             <Field label="Start (s)"><Input type="number" step={0.1} min={0} value={sel.startSec} onChange={(e) => upd({ startSec: Number(e.target.value) })} /></Field>
             <Field label="End (s)"><Input type="number" step={0.1} min={0.1} value={sel.endSec} onChange={(e) => upd({ endSec: Number(e.target.value) })} /></Field>
           </div>
+          </Section>
           {sel.text && (
-            <>
-              <Textarea rows={2} value={sel.text.content} maxLength={500} onChange={(e) => upd({ text: { ...sel.text!, content: e.target.value || ' ' } })} />
+            <Section title="Text">
+              <Field label="Words"><Textarea rows={2} value={sel.text.content} maxLength={500} onChange={(e) => upd({ text: { ...sel.text!, content: e.target.value || ' ' } })} /></Field>
               <div className="grid grid-cols-2 gap-2">
-                <NativeSelect value={sel.text.font} onChange={(e) => upd({ text: { ...sel.text!, font: e.target.value as Layer['text'] extends infer T ? T extends { font: infer F } ? F : never : never } })}>
+                <Field label="Font"><NativeSelect value={sel.text.font} onChange={(e) => upd({ text: { ...sel.text!, font: e.target.value as Layer['text'] extends infer T ? T extends { font: infer F } ? F : never : never } })}>
                   {TEXT_FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
-                </NativeSelect>
-                <Input type="number" min={10} max={300} aria-label="Font size" value={sel.text.size} onChange={(e) => upd({ text: { ...sel.text!, size: Number(e.target.value) } })} />
+                </NativeSelect></Field>
+                <Field label="Size"><Input type="number" min={10} max={300} aria-label="Font size" value={sel.text.size} onChange={(e) => upd({ text: { ...sel.text!, size: Number(e.target.value) } })} /></Field>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-xs text-fog-300">
                 <label className="flex items-center gap-1">Colour <input type="color" value={sel.text.color} onChange={(e) => upd({ text: { ...sel.text!, color: e.target.value.toUpperCase() } })} className="h-6 w-8 border-0 bg-transparent" /></label>
@@ -283,7 +295,7 @@ export function LayersPanel({ timeline, apply, playhead, selectedId, setSelected
                 <label className="flex items-center gap-1"><input type="checkbox" checked={Boolean(sel.text.shadow)} onChange={(e) => upd({ text: { ...sel.text!, shadow: e.target.checked ? { color: '#000000', opacity: 0.6, offset: 4 } : undefined } })} /> shadow</label>
                 <label className="flex items-center gap-1"><input type="checkbox" checked={Boolean(sel.text.background)} onChange={(e) => upd({ text: { ...sel.text!, background: e.target.checked ? { color: '#000000', opacity: 0.6, padding: 18 } : undefined } })} /> background</label>
               </div>
-            </>
+            </Section>
           )}
           {sel.shape && (
             <div className="grid grid-cols-2 gap-2 text-xs">
@@ -292,6 +304,7 @@ export function LayersPanel({ timeline, apply, playhead, selectedId, setSelected
               <Input className="col-span-2" placeholder="Label" value={sel.shape.label ?? ''} maxLength={80} onChange={(e) => upd({ shape: { ...sel.shape!, label: e.target.value || undefined } })} />
             </div>
           )}
+          <Section title="Transform">
           {(['x', 'y', 'w', 'rotation', 'opacity'] as const).map((k) => (
             <label key={k} className="block text-xs text-fog-300">
               <span className="flex justify-between">{{ x: 'Horizontal', y: 'Vertical', w: 'Size', rotation: 'Rotation', opacity: 'Opacity' }[k]}<span className="tabular-nums">{k === 'rotation' ? `${sel[k]}°` : `${Math.round(sel[k] * 100)}%`}</span></span>
@@ -304,6 +317,7 @@ export function LayersPanel({ timeline, apply, playhead, selectedId, setSelected
             {(sel.kind === 'video' || sel.kind === 'image') && <label className="flex items-center gap-1"><input type="checkbox" checked={Boolean(sel.chromaKey)} onChange={(e) => upd({ chromaKey: e.target.checked ? { color: '#00FF00', similarity: 0.15, blend: 0.05 } : undefined })} /> Green screen</label>}
             {sel.kind === 'video' && <label className="flex items-center gap-1">Sound <input type="range" min={0} max={1} step={0.05} value={sel.volume} onChange={(e) => upd({ volume: Number(e.target.value) })} className="w-16" /></label>}
           </div>
+          </Section>
           {(sel.kind === 'video' || sel.kind === 'image') && (
             <div className="grid grid-cols-4 gap-1 text-[10px] text-fog-400">
               {(['l', 't', 'r', 'b'] as const).map((k) => (
@@ -311,6 +325,7 @@ export function LayersPanel({ timeline, apply, playhead, selectedId, setSelected
               ))}
             </div>
           )}
+          <Section title="Animation">
           <div className="grid grid-cols-2 gap-2">
             <Field label="Animate in">
               <NativeSelect value={sel.animIn.type} onChange={(e) => upd({ animIn: { ...sel.animIn, type: e.target.value as Layer['animIn']['type'] } })}>{LAYER_ANIMS.filter((a) => sel.kind === 'text' || (a !== 'typewriter' && a !== 'words')).map((a) => <option key={a} value={a}>{a.replace('_', ' ')}</option>)}</NativeSelect>
@@ -329,6 +344,7 @@ export function LayersPanel({ timeline, apply, playhead, selectedId, setSelected
             {sel.keyframes.length > 0 && <Button size="sm" variant="ghost" onClick={() => upd({ keyframes: [] })}>Clear</Button>}
             {sel.follow && <span className="rounded bg-iris-500/20 px-1.5 py-0.5 text-iris-100">follows a tracked object <button type="button" onClick={() => upd({ follow: undefined })}>✕</button></span>}
           </div>
+          </Section>
         </div>
       )}
     </div>
