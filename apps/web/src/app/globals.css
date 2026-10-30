@@ -5,35 +5,37 @@
   --font-display: var(--font-instrument), var(--font-geist), serif;
   --font-mono: ui-monospace, 'SFMono-Regular', Menlo, monospace;
 
-  --color-ink-950: #060608;
-  --color-ink-900: #0b0b0f;
-  --color-ink-850: #101016;
-  --color-ink-800: #14141b;
-  --color-ink-700: #1c1c25;
-  --color-ink-600: #262632;
-  --color-ink-500: #3a3a49;
-  --color-fog-400: #6f6f82;
-  --color-fog-300: #9898a9;
-  --color-fog-200: #c5c5d2;
-  --color-fog-100: #ececf2;
+  /* Framecraft studio palette (from the owner's Figma design): deep navy surfaces, violet accent. */
+  --color-ink-950: #090b13;
+  --color-ink-900: #111521;
+  --color-ink-850: #151927;
+  --color-ink-800: #1b2030;
+  --color-ink-700: #22283a;
+  --color-ink-600: #2b3145;
+  --color-ink-500: #3a4258;
+  --color-fog-500: #666f85;
+  --color-fog-400: #7a8297;
+  --color-fog-300: #9299ad;
+  --color-fog-200: #c9cddb;
+  --color-fog-100: #f5f6fc;
 
-  --color-iris-300: #b9b3ff;
-  --color-iris-400: #9a90ff;
-  --color-iris-500: #7c6cff;
-  --color-iris-600: #6352f0;
-  --color-iris-700: #4b3dc2;
+  --color-iris-300: #c7c0ff;
+  --color-iris-400: #a99eff;
+  --color-iris-500: #7969f7;
+  --color-iris-600: #6656e6;
+  --color-iris-700: #4d3fc0;
 
-  --color-signal-green: #3ddc97;
-  --color-signal-amber: #f5b84b;
-  --color-signal-red: #ff6b6b;
-  --color-signal-blue: #5cb8ff;
+  --color-signal-green: #67d9aa;
+  --color-signal-amber: #f1b96b;
+  --color-signal-red: #f07882;
+  --color-signal-blue: #54c9e8;
 
-  --radius-xl: 14px;
-  --radius-2xl: 20px;
-  --radius-3xl: 28px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-3xl: 22px;
 
-  --shadow-glow: 0 0 0 1px rgb(124 108 255 / 0.35), 0 8px 40px -12px rgb(124 108 255 / 0.45);
-  --shadow-card: 0 1px 0 0 rgb(255 255 255 / 0.04) inset, 0 20px 50px -30px rgb(0 0 0 / 0.8);
+  --shadow-glow: 0 0 0 1px rgb(121 105 247 / 0.35), 0 8px 40px -12px rgb(121 105 247 / 0.45);
+  --shadow-card: 0 18px 48px -24px rgb(0 0 0 / 0.55);
 
   --animate-shimmer: shimmer 2.2s linear infinite;
   --animate-float: float 8s ease-in-out infinite;
@@ -78,7 +80,7 @@
     text-rendering: optimizeLegibility;
   }
   ::selection {
-    background: rgb(124 108 255 / 0.4);
+    background: rgb(121 105 247 / 0.4);
   }
   :focus-visible {
     outline: 2px solid var(--color-iris-400);
@@ -96,8 +98,8 @@
 
 @layer components {
   .surface {
-    background: linear-gradient(180deg, rgb(255 255 255 / 0.028), rgb(255 255 255 / 0.012));
-    border: 1px solid rgb(255 255 255 / 0.07);
+    background: var(--color-ink-900);
+    border: 1px solid #232a3c;
     box-shadow: var(--shadow-card);
   }
   .surface-strong {
@@ -105,7 +107,7 @@
     border: 1px solid rgb(255 255 255 / 0.08);
   }
   .hairline {
-    border-color: rgb(255 255 255 / 0.07);
+    border-color: #232a3c;
   }
   .text-gradient {
     background: linear-gradient(100deg, #fff 0%, #d8d4ff 45%, #9a90ff 100%);

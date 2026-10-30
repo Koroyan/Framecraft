@@ -18,7 +18,7 @@ export const StoryEdge = memo(function StoryEdge({ id, sourceX, sourceY, targetX
   const asking = g.ask?.key === id;
   return (
     <>
-      <BaseEdge id={id} path={path} markerEnd={markerEnd} style={{ stroke: data?.planned ? 'rgba(167,155,250,0.55)' : '#8b7cf6', strokeWidth: selected || asking ? 3 : 2, strokeDasharray: data?.planned ? '6 6' : undefined }} />
+      <BaseEdge id={id} path={path} markerEnd={markerEnd} style={{ stroke: data?.planned ? 'rgba(167,155,250,0.55)' : '#7969f7', strokeWidth: selected || asking ? 3 : 2, strokeDasharray: data?.planned ? '6 6' : undefined }} />
       <EdgeLabelRenderer>
         <button
           type="button"

@@ -3,88 +3,119 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Clapperboard, ImagePlay, Megaphone, Scissors, Smile, Sparkles, Wand2 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { ArrowRight, ChevronRight, Clapperboard, ImagePlay, Megaphone, Scissors, Smile, Sparkles, Wand2 } from 'lucide-react';
 import { guessIntent, type CreateFlow } from '@framecraft/shared';
+import { api, type Project } from '@/lib/api';
 import { FLOW_LABEL as LABEL, hrefFor } from '@/lib/create-flow';
 import { Button } from '@/components/ui';
-import { cn } from '@/lib/utils';
+import { cn, timeAgo } from '@/lib/utils';
 
-const FLOWS: { key: CreateFlow; icon: typeof Wand2; title: string; text: string; needs: string; cost: string }[] = [
-  { key: 'ai', icon: Wand2, title: 'Create with AI', text: 'Describe an idea — get a video.', needs: 'A sentence', cost: 'Paid · price shown first' },
-  { key: 'animate', icon: ImagePlay, title: 'Animate an image', text: 'Bring a photo to life with motion.', needs: 'One image', cost: 'Paid · price shown first' },
-  { key: 'edit', icon: Scissors, title: 'Edit my video', text: 'Trim, text, music, colour, objects.', needs: 'Your clips', cost: 'Free editing' },
-  { key: 'ad', icon: Megaphone, title: 'Create an advertisement', text: 'Your product, your footage, a real ad.', needs: 'Product videos or photos', cost: 'Paid parts priced first' },
-  { key: 'cartoon', icon: Smile, title: 'Create a cartoon', text: 'Characters, story and animation from one sentence.', needs: 'An idea', cost: 'Plan free · video priced first' },
-  { key: 'film', icon: Clapperboard, title: 'Create a film', text: 'Story, characters, scenes and shots.', needs: 'An idea', cost: 'Paid · plan first' },
+const FLOWS: { key: CreateFlow; icon: typeof Wand2; title: string; text: string; cost: string }[] = [
+  { key: 'ai', icon: Wand2, title: 'Text to video', text: 'Describe an idea — get a video.', cost: 'Price shown first' },
+  { key: 'animate', icon: ImagePlay, title: 'Image to video', text: 'Bring a photo to life with motion.', cost: 'Price shown first' },
+  { key: 'cartoon', icon: Smile, title: 'Cartoon', text: 'Characters, story and animation from one sentence.', cost: 'Planning free' },
+  { key: 'film', icon: Clapperboard, title: 'AI movie', text: 'Story, characters, scenes and shots.', cost: 'Planning free' },
+  { key: 'ad', icon: Megaphone, title: 'Brand ad', text: 'Your product, your footage, a real ad.', cost: 'Paid parts priced first' },
+  { key: 'edit', icon: Scissors, title: 'Edit my video', text: 'Trim, text, music, colour, objects.', cost: 'Free editing' },
 ];
 
-/** New video: describe it (we suggest the right start) or pick one of six clear starting points. */
+const PLACEHOLDER: Record<CreateFlow, string> = {
+  ai: 'A slow cinematic push toward a tiny glass greenhouse glowing in a snowy forest at blue hour',
+  animate: 'Make my photo come alive: the candles flicker and the camera slowly moves in',
+  cartoon: 'A funny 45-second cartoon about a small robot who wants to become a chef',
+  film: 'A 60-second short film about two friends who find an old map in their grandmother’s attic',
+  ad: 'A 20-second vertical ad for my handmade candles — warm, premium, ends with “Order today”',
+  edit: 'Edit my vacation clips into a 30-second reel with music and captions',
+};
+
+/** New video: pick a mode (or just describe it — we suggest the right one), then continue. Nothing is generated or charged here. */
 export default function NewVideoPage() {
   const router = useRouter();
   const [idea, setIdea] = useState('');
+  const [mode, setMode] = useState<CreateFlow | null>(null);
   const intent = useMemo(() => guessIntent(idea), [idea]);
+  const flow = mode ?? intent?.flow ?? 'ai';
+  const recent = useQuery({ queryKey: ['projects', 'recent-new'], queryFn: () => api<{ projects: Project[] }>('/api/projects'), staleTime: 30_000 });
+  const go = () => router.push(hrefFor(flow, idea.trim(), intent ? { ...intent, flow } : null));
+  const kindLabel = (k: Project['kind']) => ({ quick: 'AI video', social: 'Social', cinematic: 'Cinematic', movie: 'Film', edit: 'Edit', ad: 'Ad' })[k];
+
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <div className="rounded-3xl border hairline bg-gradient-to-br from-iris-500/15 via-transparent to-transparent p-5 md:p-7">
-        <h1 className="text-2xl font-semibold text-white md:text-3xl">What do you want to make?</h1>
-        <p className="mt-1 text-sm text-fog-300">Say it in your own words — Georgian, English or Russian. We suggest where to start; nothing is generated or charged here.</p>
+    <div className="mx-auto grid max-w-[1400px] gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <section className="min-w-0">
+        <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-iris-400"><Sparkles className="size-3.5" /> Create</div>
+        <h1 className="mt-3 max-w-xl text-3xl font-semibold leading-tight text-white md:text-[42px]">Start with what you want to make.</h1>
+        <p className="mt-2 text-sm text-fog-300">Choose a mode, or just describe it in Georgian, English or Russian — we suggest the right start. Nothing is generated or charged here.</p>
+
+        <div className="mt-6 grid grid-cols-3 gap-2 sm:grid-cols-6" role="radiogroup" aria-label="Creation mode">
+          {FLOWS.map((f) => {
+            const on = flow === f.key;
+            return (
+              <button key={f.key} type="button" role="radio" aria-checked={on} title={f.text} onClick={() => setMode(f.key)} className={cn('flex flex-col items-center gap-2 rounded-2xl border px-2 py-4 text-center transition', on ? 'border-iris-400 bg-iris-500/10 text-white shadow-glow' : 'hairline bg-ink-900 text-fog-300 hover:border-white/20 hover:text-white')}>
+                <f.icon className={cn('size-5', on ? 'text-iris-400' : '')} />
+                <span className="text-[12px] font-medium leading-tight">{f.title}</span>
+              </button>
+            );
+          })}
+        </div>
+
         <form
-          className="mt-4"
+          className="mt-3 rounded-2xl border hairline bg-ink-900 p-4 focus-within:border-iris-400/60"
           onSubmit={(e) => {
             e.preventDefault();
-            if (intent) router.push(hrefFor(intent.flow, idea.trim(), intent));
+            go();
           }}
         >
           <textarea
             value={idea}
             onChange={(e) => setIdea(e.target.value)}
-            rows={2}
+            rows={4}
             maxLength={1000}
             aria-label="Describe your video"
-            placeholder="e.g. A cinematic 20-second vertical ad for my handmade candles"
+            placeholder={PLACEHOLDER[flow]}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                if (intent) router.push(hrefFor(intent.flow, idea.trim(), intent));
+                go();
               }
             }}
-            className="w-full resize-none rounded-2xl border hairline bg-ink-900/70 px-4 py-3 text-[15px] text-fog-100 placeholder:text-fog-500 focus:border-iris-500/60 focus:outline-none"
+            className="w-full resize-none bg-transparent text-[15px] leading-relaxed text-fog-100 placeholder:text-fog-500 focus:outline-none"
           />
-          {intent && (
-            <div className="mt-3 flex flex-wrap items-center gap-3 rounded-2xl border border-iris-400/30 bg-iris-500/[0.07] p-3" data-testid="intent-suggestion">
-              <Sparkles className="size-4 shrink-0 text-iris-300" />
-              <div className="min-w-0 flex-1 text-sm">
-                <span className="text-white">Suggested: <b>{LABEL[intent.flow]}</b></span>
-                <span className="text-fog-300"> · {intent.reasons.slice(1).join(' · ')}</span>
-                <div className="text-[11px] text-fog-400">Because {intent.reasons[0]}. You can change everything on the next screen.</div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t hairline pt-3">
+            {intent ? (
+              <div className="min-w-0 flex-1 text-xs" data-testid="intent-suggestion">
+                <span className="text-white">
+                  {mode && mode !== intent.flow ? <>You chose <b>{LABEL[flow]}</b> · we would suggest {LABEL[intent.flow]}</> : <>Suggested: <b>{LABEL[intent.flow]}</b></>}
+                </span>
+                <span className="text-fog-400"> · {intent.reasons.slice(1).join(' · ')}</span>
               </div>
-              <div className="flex gap-1.5">
-                {FLOWS.filter((f) => f.key !== intent.flow).slice(0, 2).map((f) => (
-                  <Link key={f.key} href={hrefFor(f.key, idea.trim(), intent)} className="rounded-lg px-2 py-1.5 text-xs text-fog-300 hover:bg-white/[0.06] hover:text-white">{LABEL[f.key]}</Link>
-                ))}
-                <Button type="submit" size="sm">Continue <ArrowRight /></Button>
-              </div>
-            </div>
-          )}
+            ) : (
+              <div className="text-xs text-fog-500">{FLOWS.find((f) => f.key === flow)?.text} · {FLOWS.find((f) => f.key === flow)?.cost}</div>
+            )}
+            <Button type="submit" size="sm">Continue <ArrowRight /></Button>
+          </div>
         </form>
-      </div>
+      </section>
 
-      <div>
-        <div className="mb-2 text-sm font-medium text-white">Or start here</div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {FLOWS.map((f) => (
-            <Link key={f.key} href={hrefFor(f.key, idea.trim(), intent)} className={cn('group flex flex-col rounded-2xl border hairline bg-ink-900/60 p-4 transition hover:border-iris-400/60 hover:bg-ink-900', intent?.flow === f.key && 'border-iris-400/60')}>
-              <f.icon className="size-6 text-iris-300" />
-              <div className="mt-3 text-sm font-semibold text-white">{f.title}</div>
-              <div className="mt-1 flex-1 text-xs text-fog-300">{f.text}</div>
-              <div className="mt-3 space-y-0.5 text-[11px] text-fog-500">
-                <div>Needs: {f.needs}</div>
-                <div>{f.cost}</div>
-              </div>
+      <aside className="rounded-2xl border hairline bg-ink-900 p-4 lg:sticky lg:top-4 lg:self-start">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-fog-400">Continue where you left off</div>
+        <div className="mt-3 space-y-1">
+          {(recent.data?.projects ?? []).slice(0, 6).map((p) => (
+            <Link key={p.id} href={p.kind === 'movie' ? `/app/movie/${p.id}` : p.kind === 'ad' ? `/app/editor/${p.id}` : p.kind === 'edit' ? `/app/editor/${p.id}` : `/app/projects/${p.id}`} className="flex items-center gap-3 rounded-xl p-2 transition hover:bg-white/[0.04]">
+              <span className="relative aspect-video w-20 shrink-0 overflow-hidden rounded-lg bg-ink-700">
+                {p.thumbnailUrl ? <img src={p.thumbnailUrl} alt="" className="size-full object-cover" /> : <span className="grid size-full place-items-center bg-gradient-to-br from-iris-500/30 to-ink-800 text-[10px] text-fog-300">{kindLabel(p.kind)}</span>}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[13px] font-medium text-white">{p.title}</span>
+                <span className="block text-[11px] text-fog-500">{kindLabel(p.kind)} · {p.aspectRatio} · {timeAgo(p.updatedAt)}</span>
+              </span>
+              <ChevronRight className="size-4 shrink-0 text-fog-500" />
             </Link>
           ))}
+          {recent.data && !recent.data.projects.length && <p className="py-6 text-center text-xs text-fog-500">Your projects will appear here.</p>}
         </div>
-      </div>
+        <Link href="/app/projects" className="mt-2 block text-xs text-iris-300 hover:text-white">All projects →</Link>
+      </aside>
     </div>
   );
 }

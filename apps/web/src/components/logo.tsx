@@ -9,8 +9,8 @@ export function Logo({ small }: { small?: boolean }) {
           </linearGradient>
         </defs>
         <rect x="2" y="2" width="28" height="28" rx="9" fill="url(#fc-g)" />
-        <path d="M11 9.5h10.5M11 9.5v13M11 16h7.5" stroke="#0b0b0f" strokeWidth="2.6" strokeLinecap="round" />
-        <circle cx="22" cy="21.5" r="2.2" fill="#0b0b0f" />
+        <path d="M11 9.5h10.5M11 9.5v13M11 16h7.5" stroke="#090b13" strokeWidth="2.6" strokeLinecap="round" />
+        <circle cx="22" cy="21.5" r="2.2" fill="#090b13" />
       </svg>
       {!small && <span className="text-[17px] font-semibold tracking-tight text-white">Framecraft</span>}
     </span>

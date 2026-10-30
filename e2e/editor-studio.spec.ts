@@ -50,7 +50,7 @@ test('editor studio: graph → shot → AI fix (fixture) → compare → accept 
 
   // 1) Story graph (films open on the simple storyboard; the graph is one click away).
   await page.goto(`/app/editor/${pid}`);
-  await page.getByRole('button', { name: 'Graph' }).click();
+  await page.getByRole('tab', { name: 'Graph' }).click();
   await expect(page.getByText('FILM START')).toBeVisible();
   await expect(page.getByText('SHOT 01')).toBeVisible();
   await page.waitForTimeout(1500);
@@ -121,7 +121,7 @@ test('editor studio: graph → shot → AI fix (fixture) → compare → accept 
   await page.keyboard.press('Control+s');
   await page.waitForTimeout(1500);
   await page.reload();
-  await page.getByRole('button', { name: 'Graph' }).click();
+  await page.getByRole('tab', { name: 'Graph' }).click();
   await expect(page.getByText('FILM START')).toBeVisible();
   const tl = await call<{ timeline: { clips: { shotId?: string; camera?: { keyframes: unknown[] }; versionId?: string; assetId: string }[] } }>(page, 'GET', `/api/projects/${pid}/timeline`);
   const c1 = tl.timeline.clips.find((c) => c.shotId === s1.id)!;

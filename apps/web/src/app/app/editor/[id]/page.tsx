@@ -654,20 +654,37 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
           <span className="hidden text-[11px] text-fog-500 md:inline" aria-live="polite">{saving ? 'Saving…' : dirty ? 'Unsaved' : 'Saved'}</span>
         </div>
         {!simple && (
-        <div className="flex items-center gap-0.5 rounded-xl border hairline bg-white/[0.02] p-1" role="tablist" aria-label="Workspace">
+        <div className="flex items-center gap-0.5 rounded-xl border hairline bg-ink-900 p-1" role="tablist" aria-label="Workspace">
           {(
             [
-              ['story', LayoutGrid, 'Storyboard'],
-              ['edit', Film, 'Edit'],
+              ['board', LayoutGrid, 'Storyboard'],
+              ['graph', Network, 'Graph'],
+              ['edit', Film, 'Editor'],
               ['shot', Crosshair, 'Shot'],
               ['review', CheckCheck, `Review${reviewOps.length ? ` · ${reviewOps.length}` : ''}`],
             ] as const
-          ).map(([k, Icon, label]) => (
-            <button key={k} type="button" role="tab" aria-selected={workspace === k} onClick={() => setWorkspace(k)} className={cn('flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs', workspace === k ? 'bg-iris-500 text-white' : 'text-fog-300 hover:bg-white/[0.06]')}>
-              <Icon className="size-3.5" />
-              <span className={cn(k !== 'edit' && 'hidden sm:inline')}>{label}</span>
-            </button>
-          ))}
+          ).map(([k, Icon, label]) => {
+            const on = k === 'board' ? workspace === 'story' && storyView === 'board' : k === 'graph' ? workspace === 'story' && storyView === 'graph' : workspace === k;
+            return (
+              <button
+                key={k}
+                type="button"
+                role="tab"
+                aria-label={label}
+                aria-selected={on}
+                onClick={() => {
+                  if (k === 'board' || k === 'graph') {
+                    setStoryView(k);
+                    setWorkspace('story');
+                  } else setWorkspace(k);
+                }}
+                className={cn('flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition', on ? 'bg-ink-600 text-white shadow-sm' : 'text-fog-300 hover:bg-white/[0.05] hover:text-white')}
+              >
+                <Icon className={cn('size-3.5', on && 'text-iris-400')} />
+                <span className={cn(!on && 'hidden xl:inline')}>{label}</span>
+              </button>
+            );
+          })}
         </div>
         )}
         <div className="flex items-center gap-1">
@@ -676,11 +693,11 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
           {!simple && (
             <>
               <Button size="icon" variant="ghost" aria-label="Versions" title="Version history" onClick={() => setVersionsOpen(true)}><History /></Button>
-              <Button size="icon" variant="ghost" aria-label="Save a version" title="Save a version (Ctrl+S)" onClick={() => save(false, 'Manual save')}><Save /></Button>
-              <Button size="icon" variant="ghost" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)" onClick={() => setHelpOpen(true)} className="hidden md:inline-flex"><Keyboard /></Button>
+              <Button size="icon" variant="ghost" aria-label="Save a version" title="Save a version (Ctrl+S)" onClick={() => save(false, 'Manual save')} className="hidden 2xl:inline-flex"><Save /></Button>
+              <Button size="icon" variant="ghost" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)" onClick={() => setHelpOpen(true)} className="hidden 2xl:inline-flex"><Keyboard /></Button>
               {campaignId && <Link href={`/app/ads/footage/${campaignId}`} className={cn(buttonVariants({ size: 'sm', variant: 'ghost' }), 'hidden lg:inline-flex')}>Ad storyboard</Link>}
-              <Button size="sm" variant={layout.assistantOpen ? 'secondary' : 'outline'} aria-pressed={layout.assistantOpen} title="Assistant (Ctrl+J)" onClick={() => layout.toggleAssistant()} className="relative">
-                <Bot /> <span className="hidden sm:inline">Assistant</span>
+              <Button size="sm" variant={layout.assistantOpen ? 'secondary' : 'outline'} aria-pressed={layout.assistantOpen} aria-label="Assistant" title="Assistant (Ctrl+J)" onClick={() => layout.toggleAssistant()} className="relative">
+                <Bot /> <span className="hidden xl:inline">Assistant</span>
                 {!layout.assistantOpen && unread > 0 && <span className="absolute -right-1 -top-1 grid size-4 place-items-center rounded-full bg-iris-500 text-[9px] font-semibold text-white">{unread}</span>}
               </Button>
             </>
@@ -694,7 +711,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
               title={layout.simple ? 'All tools: object selection, colour grading, layers, camera, AI and the assistant' : 'Back to the simple editor'}
               className={cn('flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition', !layout.simple ? 'border-iris-400/60 bg-iris-500/15 text-white' : 'hairline text-fog-300 hover:border-white/25 hover:text-white')}
             >
-              <SlidersHorizontal className="size-3.5" /> <span className="hidden sm:inline">Pro tools</span>
+              <SlidersHorizontal className="size-3.5" /> <span className="hidden xl:inline">Pro tools</span>
             </button>
           )}
           <Button size="sm" onClick={() => setExportOpen(true)}><Download /> Export</Button>
@@ -804,19 +821,17 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
           {workspace === 'story' && (
             <div className={cn('flex min-h-0 flex-col gap-2', wide && 'flex-1')}>
               <div className="flex items-center justify-between gap-2">
-                <p className="text-xs text-fog-400">{storyView === 'board' ? 'Your video, shot by shot. Drag to reorder, click a shot to play it, open it to change it.' : 'Advanced: how shots, versions and AI edits connect.'}</p>
+                <span />
                 <div className="flex items-center gap-0.5 rounded-lg border hairline p-0.5 text-[11px]">
-                  <button type="button" onClick={() => setStoryView('board')} className={cn('flex items-center gap-1 rounded-md px-2 py-1', storyView === 'board' ? 'bg-white/10 text-white' : 'text-fog-400')}><LayoutGrid className="size-3" /> Storyboard</button>
-                  <button type="button" onClick={() => setStoryView('graph')} className={cn('flex items-center gap-1 rounded-md px-2 py-1', storyView === 'graph' ? 'bg-white/10 text-white' : 'text-fog-400')}><Network className="size-3" /> Graph</button>
-                  {storyView === 'graph' && !directorDocked && (
+                  {!directorDocked && (
                     <button type="button" aria-pressed={graphSide} onClick={() => setGraphSide((v) => !v)} className={cn('ml-1 flex items-center gap-1 rounded-md px-2 py-1', graphSide ? 'bg-white/10 text-white' : 'text-fog-400 hover:text-white')}>Preview</button>
                   )}
                 </div>
               </div>
-              <div className={cn('grid min-h-0 gap-2', (storyView === 'board' || graphSide || directorDocked) && 'xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]', wide && 'flex-1')}>
+              <div className={cn('grid min-h-0 gap-2', (graphSide || (directorDocked && storyView === 'graph')) && 'xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]', wide && 'flex-1')}>
                 <div className={cn('min-h-[420px] overflow-hidden rounded-2xl border hairline bg-ink-900/40', wide && 'min-h-0')}>
                   {storyView === 'board' ? (
-                    <Storyboard projectId={id} timeline={timeline} assets={assets} studio={studio} apply={apply} refetch={() => studioQ.refetch()} selectedClipId={selected} playhead={playhead} onPlay={playFrom} onOpenShot={(cid) => openShot(cid)} onAdd={() => setLibraryFor('clip')} />
+                    <Storyboard title={project.title} onOpenGraph={() => setStoryView('graph')} projectId={id} timeline={timeline} assets={assets} studio={studio} apply={apply} refetch={() => studioQ.refetch()} selectedClipId={selected} playhead={playhead} onPlay={playFrom} onOpenShot={(cid) => openShot(cid)} onAdd={() => setLibraryFor('clip')} />
                   ) : (
                     <StoryGraph
                       projectId={id}
@@ -848,7 +863,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     />
                   )}
                 </div>
-                {(storyView === 'board' || graphSide || directorDocked) && (
+                {(graphSide || (directorDocked && storyView === 'graph')) && (
                 <div className="flex min-h-[360px] flex-col rounded-2xl border hairline bg-ink-900/40 p-2">
                   {directorDocked && storyView === 'graph' && (
                     <div className="mb-2 flex items-center gap-0.5 self-start rounded-lg border hairline p-0.5 text-[11px]" role="tablist" aria-label="Beside the canvas">

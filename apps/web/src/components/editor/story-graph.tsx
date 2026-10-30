@@ -18,7 +18,7 @@ import {
   type NodeChange,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { LayoutGrid, Map as MapIcon, Users } from 'lucide-react';
+import { Clapperboard, LayoutGrid, Map as MapIcon, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { clipDuration, insertShot, moveNodeAfter, removeNode, type DirectorOp, type DirectorScope, type Timeline } from '@framecraft/shared';
 import { api, ApiError, type Asset } from '@/lib/api';
@@ -26,7 +26,7 @@ import { useAssistant } from '@/lib/assistant';
 import { rememberRemoved, scopeLabel, shotName, shotState, storyModel } from '@/lib/director';
 import { newId } from '@/lib/editor-store';
 import { activeVersion, type StudioData } from '@/lib/studio';
-import { cn } from '@/lib/utils';
+import { cn, seconds } from '@/lib/utils';
 import { AskCard, type DirectorDeps } from './director-chat';
 import { AI_ACTION_MIME, ActionCard, ActionPalette, type AiActionKey } from './graph/actions';
 import { ShotDetailsCard } from './graph/details';
@@ -336,7 +336,7 @@ function Graph(props: Props) {
         target: b,
         type: 'story',
         deletable: !planned && !b.startsWith('scene-c:') && b !== '__end',
-        markerEnd: { type: MarkerType.ArrowClosed, color: planned ? 'rgba(167,155,250,0.7)' : '#8b7cf6' },
+        markerEnd: { type: MarkerType.ArrowClosed, color: planned ? 'rgba(167,155,250,0.7)' : '#7969f7' },
         data: { from: shotOf(a), to: shotOf(b), planned, title: `Between ${nameOf(a)} and ${nameOf(b)}`, fromClip: shotOf(a) ? null : (seq.find((n) => n.key === a)?.clipIds[0] ?? null) },
       });
     }
@@ -632,13 +632,18 @@ function Graph(props: Props) {
           colorMode="dark"
         >
           <Background variant={BackgroundVariant.Dots} gap={24} size={1.2} color="rgba(255,255,255,0.07)" />
-          {minimap && <MiniMap pannable zoomable className="!bg-ink-900" nodeColor={(n) => (n.type === 'shot' ? '#8b7cf6' : n.type === 'director' ? '#e879f9' : n.type === 'version' ? '#34d399' : 'rgba(255,255,255,0.06)')} maskColor="rgba(0,0,0,0.55)" />}
+          {minimap && <MiniMap pannable zoomable className="!bg-ink-900" nodeColor={(n) => (n.type === 'shot' ? '#7969f7' : n.type === 'director' ? '#e879f9' : n.type === 'version' ? '#34d399' : 'rgba(255,255,255,0.06)')} maskColor="rgba(0,0,0,0.55)" />}
           <Controls showInteractive={false} position="bottom-right" />
         </ReactFlow>
 
         {/* Toolbar */}
         <div className="pointer-events-none absolute left-3 right-3 top-3 flex items-start justify-between gap-2">
-          <div className="pointer-events-auto flex gap-1.5">
+          <div className="pointer-events-auto flex flex-wrap items-center gap-1.5">
+            {!p.directorDocked && (
+              <button type="button" onClick={api_.openDirector} className="flex items-center gap-1 rounded-lg bg-iris-500 px-2.5 py-1 text-[11px] font-medium text-white shadow-glow hover:bg-iris-400">
+                <Clapperboard className="size-3.5" /> Ask Director
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -651,6 +656,10 @@ function Graph(props: Props) {
               <LayoutGrid className="size-3.5" /> Auto layout
             </button>
             <button type="button" aria-pressed={minimap} onClick={() => setMinimap((m) => !m)} className={cn('flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] backdrop-blur', minimap ? 'bg-white/15 text-white' : 'bg-black/60 text-fog-200 hover:text-white')}><MapIcon className="size-3.5" /> Map</button>
+            <span className="hidden rounded-lg bg-black/50 px-2 py-1 text-[11px] text-fog-300 backdrop-blur md:inline">
+              Playback order · {model.seq.length} shot{model.seq.length === 1 ? '' : 's'} · {seconds(p.timeline.clips.reduce((s, c) => s + clipDuration(c), 0))}
+              {model.order.length > model.seq.length ? ` · ${model.order.length - model.seq.length} planned` : ''} · synced with the storyboard
+            </span>
             {cast.length > 0 && <button type="button" aria-pressed={castOpen} onClick={() => setCastOpen((c) => !c)} className={cn('flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] backdrop-blur', castOpen ? 'bg-white/15 text-white' : 'bg-black/60 text-fog-200 hover:text-white')}><Users className="size-3.5" /> Cast · {cast.length}</button>}
           </div>
           {castOpen && (

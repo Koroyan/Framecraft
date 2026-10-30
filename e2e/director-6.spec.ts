@@ -64,8 +64,7 @@ async function storyProject(page: Page) {
   await expect(page.getByRole('region', { name: 'Preview' })).toBeVisible();
   const pro = page.getByRole('button', { name: 'Pro tools' });
   if ((await pro.isVisible()) && (await pro.getAttribute('aria-pressed')) !== 'true') await pro.click();
-  await page.getByRole('tab', { name: 'Storyboard' }).click();
-  await page.getByRole('button', { name: 'Graph', exact: true }).click();
+  await page.getByRole('tab', { name: 'Graph' }).click();
   await expect(page.getByTestId('story-graph')).toBeVisible();
   await expect(page.getByTestId('shot-card')).toHaveCount(3);
   return project.id;
@@ -173,7 +172,7 @@ test('E — the AI Director keeps its conversation, subject and unsent draft', a
   await page.mouse.move(700, 500);
   await page.mouse.wheel(0, 300);
   await page.reload();
-  await page.getByRole('tab', { name: 'Storyboard' }).click();
+  await page.getByRole('tab', { name: 'Graph' }).click();
   await expect(page.getByTestId('story-graph')).toBeVisible();
   await page.getByRole('button', { name: 'Expand the AI Director' }).click();
   await expect(director.getByText('slow zoom in')).toBeVisible();
@@ -190,7 +189,7 @@ test('S — the storyboard shows the planned shot in place, with Ask AI and Gene
   await card.getByRole('textbox', { name: 'Ask the AI Director' }).press('Enter');
   await card.getByRole('button', { name: 'Apply change' }).click();
   await expect(page.getByTestId('shot-card')).toHaveCount(4);
-  await page.getByRole('button', { name: 'Storyboard', exact: true }).click();
+  await page.getByRole('tab', { name: 'Storyboard' }).click();
   const board = page.getByTestId('storyboard');
   await expect(board.getByTestId('story-card')).toHaveCount(4);
   const planned = board.getByTestId('story-card').nth(2);
