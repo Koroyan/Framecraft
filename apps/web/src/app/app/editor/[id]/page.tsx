@@ -817,7 +817,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                 <div className="flex min-h-[200px] flex-1">
                   <div className="shrink-0 border-r hairline" data-testid="tool-panel">{toolbox}</div>
                   {leftOpen && <ResizeHandle axis="x" label="Resize the tool panel" className="-mr-1.5" {...resize('leftWidth', 1)} />}
-                  <section aria-label="Preview" className="min-w-0 flex-1 bg-ink-950 px-3 pb-1 pt-3">{cloneElement(previewEl, { transport: false })}</section>
+                  <section aria-label="Preview" className="min-w-0 flex-1 bg-ink-950 px-2 pb-0.5 pt-2">{cloneElement(previewEl, { transport: false })}</section>
                   {layout.inspectorOpen ? (
                     <>
                       <ResizeHandle axis="x" label="Resize the properties panel" className="-ml-1.5" {...resize('inspectorWidth', -1)} />
@@ -832,7 +832,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                   )}
                 </div>
                 <ResizeHandle axis="y" label="Resize the timeline" className="-my-0.75 border-t hairline" {...resize('timelineHeight', -1)} />
-                <section aria-label="Timeline" className="min-h-[150px] shrink overflow-hidden bg-ink-900 px-3 pb-2 pt-1.5" style={{ height: `min(${Math.min(layout.timelineHeight, timelineNeed + 12)}px, 44dvh)` }}>{timelineEl}</section>
+                <section aria-label="Timeline" className="min-h-[150px] shrink overflow-hidden bg-ink-900 px-3 pb-2 pt-1.5" style={{ height: `min(${Math.min(layout.timelineHeight, timelineNeed + 12)}px, 30dvh)` }}>{timelineEl}</section>
               </div>
             ) : (
               <div className="space-y-2">

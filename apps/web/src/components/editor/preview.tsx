@@ -428,10 +428,15 @@ export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, s
           {!selecting && logo && timeline.logo && <DraggableLogo url={logo.url} logo={timeline.logo} onMove={onLogoMove} />}
           {asset?.isFixture && <span className="absolute left-2 top-2 rounded-full bg-signal-amber px-2 py-0.5 text-[10px] font-semibold text-black">TEST FIXTURE · NOT AI</span>}
           {overlay?.(pf)}
+          {!transport && !playing && !selecting && timeline.clips.length > 0 && (
+            <button type="button" aria-hidden tabIndex={-1} onClick={(e) => { e.stopPropagation(); setPlaying(true); }} className="absolute left-1/2 top-1/2 z-10 grid size-14 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white ring-1 ring-white/25 backdrop-blur-sm transition hover:scale-105 hover:bg-black/60">
+              <Play className="size-6 translate-x-0.5" />
+            </button>
+          )}
         </div>
       </div>
       {controls && (
-      <div className="flex h-11 shrink-0 items-center gap-1.5 px-1">
+      <div className={cn('flex shrink-0 items-center gap-1.5 px-1', transport ? 'h-11' : 'h-9')}>
         {onToggleSelecting && (
           <button type="button" onClick={onToggleSelecting} aria-pressed={selecting} aria-label="Select object" title="Click an object in the picture to select it (V)" className={cn('flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition', selecting ? 'bg-iris-500 text-white' : 'border hairline text-fog-200 hover:border-white/25 hover:text-white')}>
             <MousePointerClick className="size-3.5" /> {compact ? null : selecting ? 'Selecting…' : 'Select object'}
