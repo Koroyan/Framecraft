@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { AudioLines, Bot, Captions, ChevronsLeft, ChevronsRight, Crosshair, Film, Image as ImageIcon, Mic, MousePointerClick, Music, Palette, Plus, Shapes, Sparkles, Type, Wand2, X } from 'lucide-react';
+import { AudioLines, Bot, Captions, ChevronsLeft, ChevronsRight, Crosshair, Film, Image as ImageIcon, Mic, MousePointerClick, Music, Palette, Plus, Search, Shapes, Sparkles, Type, Wand2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { LOOKS, layerSchema, snapClipsToBeats, type LayerInput, type Timeline } from '@framecraft/shared';
 import { lookActive, lookSwatch } from '@/lib/looks';
@@ -71,6 +71,8 @@ export function EditorToolbox(p: {
   onOpenShot?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>('media');
+  const [kind, setKind] = useState<'all' | 'video' | 'image'>('all');
+  const [q, setQ] = useState('');
   const open = p.open ?? true;
   const pick = (k: Tab) => {
     if (open && tab === k && p.onOpenChange) return p.onOpenChange(false);
@@ -88,11 +90,11 @@ export function EditorToolbox(p: {
   };
 
   return (
-    <div className="flex h-full overflow-hidden rounded-2xl border hairline bg-ink-900/70">
-      <nav aria-label="Editor tools" className={cn('flex w-16 shrink-0 flex-col gap-0.5 overflow-y-auto p-1.5', open && 'border-r hairline')}>
+    <div className="flex h-full overflow-hidden bg-ink-900">
+      <nav aria-label="Editor tools" className={cn('flex w-[68px] shrink-0 flex-col gap-1 overflow-y-auto px-1.5 py-2', open && 'border-r hairline')}>
         {TABS.map((t) => (
-          <button key={t.key} type="button" onClick={() => pick(t.key)} aria-pressed={open && tab === t.key} title={t.label} className={cn('flex flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 text-[10px] transition', open && tab === t.key ? 'bg-iris-500/20 text-white' : 'text-fog-400 hover:bg-white/[0.05] hover:text-fog-100')}>
-            <t.icon className="size-4" />
+          <button key={t.key} type="button" onClick={() => pick(t.key)} aria-pressed={open && tab === t.key} title={t.label} className={cn('flex flex-col items-center gap-1 rounded-xl px-1 py-2 text-[10px] transition', open && tab === t.key ? 'bg-ink-700 text-white shadow-sm' : 'text-fog-400 hover:bg-white/[0.04] hover:text-fog-100')}>
+            <t.icon className={cn('size-[18px]', open && tab === t.key && 'text-iris-300')} />
             {t.label}
           </button>
         ))}
@@ -103,26 +105,69 @@ export function EditorToolbox(p: {
         )}
       </nav>
       {open && <div className="min-w-0 flex-1 space-y-3 overflow-y-auto p-3" style={p.panelWidth ? { width: p.panelWidth } : undefined}>
-        {tab === 'media' && (
-          <>
-            <MediaDropzone compact label="Import videos or photos" onAsset={() => p.onUploaded()} />
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-2">
-              {list.filter((a) => a.mediaType === 'video' || a.mediaType === 'image').slice(0, 60).map((a) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  title={a.mediaType === 'video' ? 'Add to the end of the timeline' : 'Add as a photo layer at the playhead'}
-                  onClick={() => (a.mediaType === 'video' ? p.onAddClip(a) : addLayer({ id: newId('ly'), name: a.originalName ?? 'Photo', kind: 'image', track: 3, assetId: a.id, startSec: at, endSec: at + 3, x: 0.5, y: 0.45, w: 0.7 }))}
-                  className="group relative overflow-hidden rounded-lg border hairline text-left hover:border-iris-400/60"
-                >
-                  <img src={a.thumbnailUrl ?? a.url} alt="" className="aspect-[3/4] w-full object-cover" loading="lazy" />
-                  <span className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/80 px-1.5 pb-1 pt-3 text-[10px] text-white">{a.mediaType === 'video' && a.durationMs ? `${seconds(a.durationMs / 1000)} · ` : ''}{mediaLabel(a)}</span>
-                  <span className="absolute right-1 top-1 hidden rounded-full bg-iris-500 p-0.5 text-white group-hover:block"><Plus className="size-3" /></span>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-fog-500">Editor tool</div>
+            <div className="truncate text-[15px] font-semibold text-white">{TABS.find((t) => t.key === tab)?.label}</div>
+          </div>
+          {p.onOpenChange && (
+            <button type="button" onClick={() => p.onOpenChange!(false)} aria-label="Close the tool panel" title="Close the tool panel" className="grid size-7 shrink-0 place-items-center rounded-lg text-fog-400 hover:bg-white/[0.06] hover:text-white"><X className="size-4" /></button>
+          )}
+        </div>
+        {tab === 'media' && (() => {
+          const visual = list.filter((a) => a.mediaType === 'video' || a.mediaType === 'image');
+          const shown = visual.filter((a) => (kind === 'all' || a.mediaType === kind) && mediaLabel(a).toLowerCase().includes(q.trim().toLowerCase())).slice(0, 80);
+          return (
+            <>
+              <MediaDropzone compact label="Import media" onAsset={() => p.onUploaded()} />
+              <div className="grid grid-cols-3 border-b hairline text-[11px]" role="tablist" aria-label="Media type">
+                {(
+                  [
+                    ['all', 'All'],
+                    ['video', 'Videos'],
+                    ['image', 'Photos'],
+                  ] as const
+                ).map(([k, label]) => (
+                  <button key={k} type="button" role="tab" aria-selected={kind === k} onClick={() => setKind(k)} className={cn('-mb-px border-b-2 py-2 transition', kind === k ? 'border-iris-500 font-medium text-white' : 'border-transparent text-fog-400 hover:text-white')}>
+                    {label} <span className="text-fog-500">{k === 'all' ? visual.length : visual.filter((a) => a.mediaType === k).length}</span>
+                  </button>
+                ))}
+              </div>
+              {visual.length > 6 && (
+                <label className="flex items-center gap-2 rounded-xl border hairline bg-ink-950 px-3 py-2">
+                  <Search className="size-3.5 text-fog-400" />
+                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search project media" aria-label="Search project media" className="min-w-0 flex-1 bg-transparent text-xs text-white placeholder:text-fog-500 focus:outline-none" />
+                </label>
+              )}
+              <div className="flex items-center justify-between text-[10px] font-medium uppercase tracking-[0.12em] text-fog-500">
+                <span>Recently added</span>
+                <span className="normal-case tracking-normal text-iris-300">Click to add</span>
+              </div>
+              <div className="-mx-1 space-y-0.5">
+                {shown.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    title={a.mediaType === 'video' ? 'Add to the end of the timeline' : 'Add as a photo layer at the playhead'}
+                    onClick={() => (a.mediaType === 'video' ? p.onAddClip(a) : addLayer({ id: newId('ly'), name: a.originalName ?? 'Photo', kind: 'image', track: 3, assetId: a.id, startSec: at, endSec: at + 3, x: 0.5, y: 0.45, w: 0.7 }))}
+                    className="group flex w-full items-center gap-2.5 rounded-xl px-1 py-1 text-left transition hover:bg-white/[0.04]"
+                  >
+                    <span className="relative h-11 w-[72px] shrink-0 overflow-hidden rounded-lg bg-ink-700">
+                      <img src={a.thumbnailUrl ?? a.url} alt="" className="size-full object-cover" loading="lazy" />
+                      <span className="absolute bottom-0.5 right-0.5 rounded bg-black/75 px-1 text-[9px] font-medium tabular-nums text-white">{a.mediaType === 'video' ? (a.durationMs ? clock(a.durationMs / 1000) : 'VID') : 'IMG'}</span>
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs font-medium text-white">{mediaLabel(a)}</span>
+                      <span className="block truncate text-[10px] text-fog-500">{mediaMeta(a)}</span>
+                    </span>
+                    <span className="grid size-6 shrink-0 place-items-center rounded-full text-fog-500 transition group-hover:bg-iris-500 group-hover:text-white"><Plus className="size-3.5" /></span>
+                  </button>
+                ))}
+                {!shown.length && <p className="px-1 py-4 text-center text-[11px] text-fog-500">{visual.length ? 'Nothing matches.' : 'Imported videos and photos appear here.'}</p>}
+              </div>
+            </>
+          );
+        })()}
 
         {tab === 'audio' && <AudioTab {...p} list={list} />}
 
@@ -262,6 +307,19 @@ function AudioTab(p: Parameters<typeof EditorToolbox>[0] & { list: Asset[] }) {
 }
 
 /** What a media tile is called: its file name, or what it is (an export, an AI shot, a photo reference). */
+/** 0:06 — clip length as on a phone. */
+function clock(sec: number) {
+  const s = Math.round(sec);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** 1920×1080 · MP4 · 14.2 MB */
+function mediaMeta(a: Asset) {
+  const ext = (a.mimeType?.split('/')[1] ?? '').replace('quicktime', 'mov').replace('jpeg', 'jpg').toUpperCase();
+  const size = a.sizeBytes ? (a.sizeBytes > 1e6 ? `${(a.sizeBytes / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(a.sizeBytes / 1e3))} KB`) : '';
+  return [a.width && a.height ? `${a.width}×${a.height}` : '', ext, size].filter(Boolean).join(' · ');
+}
+
 function mediaLabel(a: Asset) {
   if (a.originalName) return a.originalName;
   return a.kind === 'render' ? 'Exported video' : a.kind === 'generated' ? (a.mediaType === 'image' ? 'AI image' : 'AI video') : a.kind === 'reference' ? 'Reference' : a.mediaType === 'image' ? 'Photo' : 'Video';

@@ -61,6 +61,8 @@ export type Asset = {
   width: number | null;
   height: number | null;
   durationMs: number | null;
+  mimeType?: string;
+  sizeBytes?: number;
   originalName: string | null;
   isFixture: boolean;
   createdAt: string;

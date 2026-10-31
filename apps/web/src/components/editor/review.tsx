@@ -21,10 +21,10 @@ export function ReviewBar({ reviewOps, apply, onDone, onImprove }: { timeline: T
   const first = reviewOps[0]!;
   return (
     <>
-      <div className="flex shrink-0 items-center gap-3 rounded-xl border border-signal-amber/40 bg-signal-amber/[0.07] px-3 py-1.5 text-xs" role="status">
-        <span className="font-medium text-signal-amber">{reviewOps.length === 1 ? 'An AI result is ready' : `${reviewOps.length} AI results are ready`}</span>
+      <div className="flex shrink-0 items-center gap-3 rounded-xl border border-signal-amber/30 bg-signal-amber/[0.06] py-1 pl-3 pr-1 text-xs" role="status">
+        <span className="flex items-center gap-2 font-medium text-signal-amber"><span className="size-1.5 animate-pulse rounded-full bg-signal-amber" />{reviewOps.length === 1 ? 'An AI result is ready' : `${reviewOps.length} AI results are ready`}</span>
         <span className="min-w-0 flex-1 truncate text-fog-300">Shot {first.shot.number} · {first.op.mode.replaceAll('_', ' ')} · {seconds(first.op.startSec)}–{seconds(first.op.endSec)} — nothing changes until you accept.</span>
-        <Button size="sm" onClick={() => setOpen(first)}>Compare</Button>
+        <Button size="sm" className="h-7" onClick={() => setOpen(first)}>Compare</Button>
       </div>
       {open && <CompareDialog item={open} apply={apply} onClose={() => setOpen(null)} onDone={() => { setOpen(null); onDone(); }} onImprove={onImprove ? () => { onImprove(open.shot.id); setOpen(null); } : undefined} />}
     </>

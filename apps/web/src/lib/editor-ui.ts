@@ -68,7 +68,9 @@ export const useEditorUi = create<UiState>()(
     }),
     {
       name: 'fc-editor-layout',
-      version: 1,
+      // v2 (studio layout): the properties panel is part of the layout again, so it opens once.
+      version: 2,
+      migrate: (state, version) => (version < 2 ? { ...(state as Layout), inspectorOpen: true } : state) as Layout,
       storage: createJSONStorage(() => localStorage),
       partialize: ({ set: _s, toggleAssistant: _t, reset: _r, ...layout }) => {
         void _s;

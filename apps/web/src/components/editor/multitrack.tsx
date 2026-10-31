@@ -8,9 +8,11 @@ import { lostSpans, timelineDuration, type Timeline } from '@framecraft/shared';
 import type { Asset } from '@/lib/api';
 import { clipLen, clipStarts } from '@/lib/editor-store';
 import { transitionLabel } from '@/lib/transitions';
-import { cn, seconds } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 
-const LANE = 'relative h-9 rounded-md bg-white/[0.025]';
+const LANE = 'relative h-10 border-b border-white/[0.05]';
+/** Ruler label as minutes:seconds (00:04), as in the studio design. */
+const mmss = (t: number) => `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 const SNAP_PX = 7;
 
 // Waveform / filmstrip images are rendered once per file on the server (free) and cached.
@@ -113,6 +115,7 @@ export function MultiTrack({
   const box = useRef<HTMLDivElement>(null);
   const [pps, setPps] = useState<number | null>(null); // pixels per second; null = fit to width
   const [fit, setFit] = useState(40);
+  const [snapOn, setSnapOn] = useState(true);
   useEffect(() => {
     const el = box.current;
     if (!el) return;
@@ -127,6 +130,7 @@ export function MultiTrack({
   // Snap targets: playhead and every clip boundary.
   const targets = [playhead, 0, total, ...starts, ...timeline.clips.map((c, i) => (starts[i] ?? 0) + clipLen(c))];
   const snap = (t: number) => {
+    if (!snapOn) return t;
     let best = t;
     let d = SNAP_PX / scale;
     for (const s of targets) {
@@ -158,25 +162,26 @@ export function MultiTrack({
 
   return (
     <div>
-      <div className="mb-1 flex min-h-8 flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs text-fog-400">
+      <div className="mb-1 flex min-h-9 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b hairline pb-1.5 text-xs text-fog-400">
         <span className="flex min-w-0 items-center gap-2">
           {title}
           <span tabIndex={0} title="Shift + drag on the ruler (or I / O) marks a range · drag clip edges to trim · Shift-click selects several clips" className="grid size-4 shrink-0 cursor-help place-items-center rounded-full border border-white/15 text-[9px] text-fog-500">?</span>
-          <span className="truncate text-[11px] text-fog-500 max-2xl:hidden">Shift-drag the ruler marks a range · drag clip edges to trim · Shift-click selects several</span>
         </span>
-        <span className="flex items-center gap-1">
-        <span className="flex items-center gap-0.5">
-          <button type="button" aria-label="Zoom out" onClick={() => setPps(Math.max(4, scale / 1.6))} className="grid size-6 place-items-center rounded-md hover:bg-white/[0.06] hover:text-white"><Minus className="size-3.5" /></button>
-          <button type="button" onClick={() => setPps(null)} className={cn('rounded-md px-1.5 py-0.5 hover:bg-white/[0.06] hover:text-white', pps === null && 'text-white')}>Fit</button>
-          <button type="button" aria-label="Zoom in" onClick={() => setPps(Math.min(400, scale * 1.6))} className="grid size-6 place-items-center rounded-md hover:bg-white/[0.06] hover:text-white"><Plus className="size-3.5" /></button>
-        </span>
-        {actions}
+        <span className="flex items-center gap-2">
+          {actions}
+          <button type="button" aria-pressed={snapOn} onClick={() => setSnapOn((v) => !v)} title="Snap to clip edges and the playhead" className={cn('h-7 rounded-md border px-2.5 text-[11px] font-medium transition', snapOn ? 'border-iris-400/50 bg-iris-500/20 text-iris-100' : 'hairline text-fog-400 hover:text-white')}>Snap</button>
+          <span className="flex items-center gap-1">
+            <button type="button" aria-label="Zoom out" onClick={() => setPps(Math.max(4, scale / 1.6))} className="grid size-6 place-items-center rounded-md hover:bg-white/[0.06] hover:text-white"><Minus className="size-3.5" /></button>
+            <input type="range" aria-label="Timeline zoom" min={0} max={100} step={1} value={Math.max(0, Math.min(100, Math.round((Math.log(scale / 4) / Math.log(100)) * 100)))} onChange={(e) => setPps(4 * Math.pow(100, Number(e.target.value) / 100))} className="w-20 max-md:hidden" />
+            <button type="button" aria-label="Zoom in" onClick={() => setPps(Math.min(400, scale * 1.6))} className="grid size-6 place-items-center rounded-md hover:bg-white/[0.06] hover:text-white"><Plus className="size-3.5" /></button>
+            <button type="button" onClick={() => setPps(null)} title="Fit the whole film" className={cn('rounded-md px-1.5 py-0.5 hover:bg-white/[0.06] hover:text-white', pps === null && 'text-white')}>Fit</button>
+          </span>
         </span>
       </div>
       <div className="flex gap-2">
-        <div className="w-28 shrink-0 space-y-1.5 pt-6 max-sm:hidden">
+        <div className="w-32 shrink-0 border-r hairline pr-2 pt-6 max-sm:hidden">
           {lanes.filter((l) => l.show).map((l) => (
-            <div key={l.key} className={cn('group/lane flex h-9 items-center gap-1.5 text-[11px] text-fog-400', l.track !== undefined && hiddenT.has(l.track) && 'opacity-50')}>
+            <div key={l.key} className={cn('group/lane flex h-10 items-center gap-1.5 border-b border-white/[0.05] pl-1 text-[11px] text-fog-300', l.track !== undefined && hiddenT.has(l.track) && 'opacity-50')}>
               {l.icon} <span className="min-w-0 flex-1 truncate">{l.label}</span>
               {l.track !== undefined && onTrackMeta && (
                 <span className="flex shrink-0 items-center">
@@ -221,7 +226,10 @@ export function MultiTrack({
               onPointerUp={() => (rulerDrag.current = null)}
             >
               {Array.from({ length: Math.floor(total / step) + 1 }, (_, i) => i * step).map((t) => (
-                <span key={t} className="pointer-events-none absolute top-0 border-l border-white/10 pl-1" style={{ left: x(t) }}>{seconds(t)}</span>
+                <span key={t} className="pointer-events-none absolute top-0 border-l border-white/15 pl-1 tabular-nums" style={{ left: x(t) }}>{mmss(t)}</span>
+              ))}
+              {step * scale >= 40 && Array.from({ length: Math.floor(total / (step / 4)) + 1 }, (_, i) => (i * step) / 4).filter((_, i) => i % 4).map((t) => (
+                <span key={`m${t}`} className="pointer-events-none absolute bottom-0 h-1.5 border-l border-white/10" style={{ left: x(t) }} />
               ))}
               {range && (
                 <span className="absolute inset-y-0 bg-iris-500/40" style={{ left: x(range.start), width: Math.max(2, x(range.end - range.start)) }}>
@@ -243,7 +251,7 @@ export function MultiTrack({
                 </span>
               )}
             </div>
-            <div className="mt-1 space-y-1.5" onClick={(e) => onSeek(snap(timeAt(e.clientX)))}>
+            <div className="mt-1" onClick={(e) => onSeek(snap(timeAt(e.clientX)))}>
               {/* Layer tracks: drag a bar to move it in time, drag its edges to trim. */}
               {layerTracks.map((tr) => (
                 <div key={tr} className={cn(LANE, hiddenT.has(tr) && 'opacity-40')}>
@@ -278,7 +286,7 @@ export function MultiTrack({
                           e.stopPropagation();
                           onSeek(Math.min(l.endSec - 0.01, Math.max(l.startSec, timeAt(e.clientX))));
                         }}
-                        className={cn('absolute inset-y-1 cursor-grab truncate rounded px-2 text-[9px] leading-7', l.kind === 'text' ? 'bg-signal-amber/25 text-signal-amber' : l.kind === 'shape' ? 'bg-pink-500/25 text-pink-200' : 'bg-signal-blue/25 text-signal-blue', selectedLayer === l.id && 'ring-1 ring-white')}
+                        className={cn('absolute inset-y-1 cursor-grab truncate rounded px-2 text-[9px] leading-7', l.kind === 'text' ? 'border border-iris-400/40 bg-iris-500/30 text-iris-100' : l.kind === 'shape' ? 'border border-pink-400/40 bg-pink-500/25 text-pink-100' : 'border border-signal-green/40 bg-signal-green/20 text-signal-green', selectedLayer === l.id && 'ring-1 ring-white')}
                         style={{ left: x(l.startSec), width: Math.max(6, x(l.endSec - l.startSec)) }}
                         onPointerDown={down('move')}
                         onPointerMove={moveL}
@@ -295,7 +303,7 @@ export function MultiTrack({
               {show('overlay') && (
                 <div className={LANE}>
                   {timeline.overlays.map((o) => (
-                    <span key={o.id} className="absolute inset-y-1 truncate rounded bg-signal-blue/25 px-1.5 text-[9px] leading-7 text-signal-blue" style={{ left: x(o.startSec), width: Math.max(3, x(o.endSec - o.startSec)) }}>
+                    <span key={o.id} className="absolute inset-y-1 truncate rounded border border-signal-green/40 bg-signal-green/20 px-1.5 text-[9px] leading-7 text-signal-green" style={{ left: x(o.startSec), width: Math.max(3, x(o.endSec - o.startSec)) }}>
                       {assets.get(o.assetId)?.originalName ?? 'overlay'}
                     </span>
                   ))}
@@ -355,10 +363,11 @@ export function MultiTrack({
                       title={c.label ?? `Clip ${i + 1}`}
                       aria-label={`Clip ${i + 1}${c.label ? ` · ${c.label}` : ''}`}
                       aria-selected={selected === c.id || selectedExtra.includes(c.id)}
-                      className={cn('group absolute inset-y-0 cursor-pointer overflow-hidden rounded-md border text-left', selected === c.id ? 'z-10 border-iris-400 ring-2 ring-iris-500/40' : selectedExtra.includes(c.id) ? 'z-10 border-iris-300 ring-2 ring-iris-300/50' : 'border-white/10 hover:border-white/30')}
+                      className={cn('group absolute inset-y-1 cursor-pointer overflow-hidden rounded-md border-2 bg-ink-700 text-left', selected === c.id ? 'z-10 border-iris-400 ring-2 ring-iris-500/30' : selectedExtra.includes(c.id) ? 'z-10 border-iris-300 ring-2 ring-iris-300/40' : 'border-iris-400/25 hover:border-iris-400/60')}
                       style={{ left: x(starts[i] ?? 0), width: Math.max(6, x(len) - 2) }}
                     >
                       {a?.mediaType === 'video' ? <Strip assetId={c.assetId} filter={gradeCss(c.adjust as Record<string, unknown> | undefined)} /> : a?.thumbnailUrl && <img src={a.thumbnailUrl} alt="" className="absolute inset-0 size-full object-cover opacity-80" style={{ filter: gradeCss(c.adjust as Record<string, unknown> | undefined) }} />}
+                      <span className="pointer-events-none absolute left-2 top-0.5 max-w-[calc(100%-1rem)] truncate text-[10px] font-semibold text-white [text-shadow:0_1px_3px_#000]">{c.label ?? `Clip ${i + 1}`}</span>
                       <span className="pointer-events-none absolute bottom-0.5 left-2 rounded bg-black/60 px-1 text-[9px] text-white">{i + 1}{c.freezeSec ? ' ❄' : c.speed !== 1 ? ` ${c.speed}×` : ''}{c.reverse ? ' ⟲' : ''}{c.camera ? ' 🎥' : ''}{c.adjust ? ' ◐' : ''}{c.objects?.length ? ` ◎${c.objects.length}` : ''}</span>
                       {lost.map((l, k) => <span key={k} title="Object tracking unsure here" className="pointer-events-none absolute top-0 h-1 rounded bg-signal-red" style={{ left: x(Math.max(0, l.a)), width: Math.max(2, x(Math.min(len, l.b) - Math.max(0, l.a))) }} />)}
                       {onTrimClip && !c.freezeSec && (
@@ -404,7 +413,7 @@ export function MultiTrack({
               {show('voice') && (
                 <div className={LANE}>
                   {voices.map((a) => (
-                    <AudioBar key={a.id} a={a} x={x} scale={scale} snap={snap} selected={selectedAudio === a.id} onSelect={onSelectAudio} onMove={onAudioTiming} drag={audioDrag} className="bg-iris-500/35">
+                    <AudioBar key={a.id} a={a} x={x} scale={scale} snap={snap} selected={selectedAudio === a.id} onSelect={onSelectAudio} onMove={onAudioTiming} drag={audioDrag} className="border border-signal-blue/40 bg-signal-blue/25 text-signal-blue">
                       <Wave assetId={a.assetId} className="absolute inset-0" style={{}} />
                     </AudioBar>
                   ))}
@@ -413,7 +422,7 @@ export function MultiTrack({
               {/* Music & sound */}
               <div className={LANE}>
                 {beds.map((a) => (
-                  <AudioBar key={a.id} a={a} x={x} scale={scale} snap={snap} selected={selectedAudio === a.id} onSelect={onSelectAudio} onMove={onAudioTiming} drag={audioDrag} className={a.kind === 'music' ? 'bg-signal-green/25 text-signal-green' : 'bg-signal-blue/25 text-signal-blue'}>
+                  <AudioBar key={a.id} a={a} x={x} scale={scale} snap={snap} selected={selectedAudio === a.id} onSelect={onSelectAudio} onMove={onAudioTiming} drag={audioDrag} className={a.kind === 'music' ? 'border border-iris-400/40 bg-iris-500/25 text-iris-100' : 'border border-signal-amber/40 bg-signal-amber/20 text-signal-amber'}>
                     <Wave assetId={a.assetId} className="absolute inset-0 opacity-50" style={{}} />
                     <span className="relative px-1.5 text-[9px] leading-7">{a.kind === 'music' ? 'music' : 'sound'}</span>
                   </AudioBar>
@@ -438,8 +447,8 @@ export function MultiTrack({
             {/* Marked range across all lanes */}
             {range && <div className="pointer-events-none absolute bottom-0 top-5 border-x border-iris-300/70 bg-iris-500/10" style={{ left: x(range.start), width: Math.max(2, x(range.end - range.start)) }} />}
             {/* Playhead */}
-            <div className="pointer-events-none absolute inset-y-0 w-px bg-white shadow-[0_0_6px_rgba(255,255,255,0.7)]" style={{ left: x(Math.min(playhead, total)) }}>
-              <span className="absolute -left-1 top-0 size-2 rotate-45 bg-white" />
+            <div className="pointer-events-none absolute inset-y-0 w-px bg-signal-red shadow-[0_0_6px_rgba(240,120,130,0.6)]" style={{ left: x(Math.min(playhead, total)) }} data-testid="playhead">
+              <span className="absolute -left-[5px] -top-0.5 size-0 border-x-[5px] border-t-[7px] border-x-transparent border-t-signal-red" />
             </div>
           </div>
         </div>

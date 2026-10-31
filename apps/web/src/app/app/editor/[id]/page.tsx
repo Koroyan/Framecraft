@@ -1,8 +1,8 @@
 'use client';
 
-import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { cloneElement, use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, CheckCheck, ChevronsLeft, FileText, Copy, Crosshair, Download, Film, History, Keyboard, LayoutGrid, Network, Plus, Redo2, Save, Scissors, SlidersHorizontal, Snowflake, Trash2, Undo2, Upload } from 'lucide-react';
+import { Bot, CheckCheck, ChevronsLeft, FileText, Copy, Crosshair, Download, Film, History, Keyboard, LayoutGrid, Network, Pause, Play, Plus, Redo2, Save, Scissors, SlidersHorizontal, Snowflake, Trash2, Undo2, Upload } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { rippleDelete, swapShotVersion, timelineDuration, type Timeline } from '@framecraft/shared';
@@ -24,7 +24,7 @@ import { useAutoInsertShots } from '@/lib/director';
 import { Storyboard } from '@/components/editor/storyboard';
 import { ShotEditor } from '@/components/editor/shot-editor';
 import { EditorToolbox } from '@/components/editor/toolbox';
-import { Preview } from '@/components/editor/preview';
+import { Preview, timecode } from '@/components/editor/preview';
 import { Inspector, type Focus } from '@/components/editor/inspector';
 import { ExportDialog, LibraryDialog, TranscribeButton, TtsDialog, VersionsDialog, type LibraryKind } from '@/components/editor/editor-dialogs';
 import { DockedAssistant, FloatingAssistant, ResizeHandle, useAssistantShortcut } from '@/components/editor/assistant';
@@ -434,6 +434,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       onBackgroundClick={() => {
         if (focus === 'layer') setFocus(sel ? 'clip' : 'project');
       }}
+      onPlayingChange={setPlaying}
     />
   );
 
@@ -459,37 +460,53 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     />
   );
 
+  const rangeChip = range && (
+    <span className="flex items-center gap-1 rounded-md bg-iris-500/20 px-2 py-0.5 text-[11px] font-normal text-iris-100" data-testid="range-chip">
+      Marked {seconds(range.start)}–{seconds(range.end)} ({(range.end - range.start).toFixed(1)} s)
+      <button type="button" className="ml-1 text-iris-200 hover:text-white" onClick={() => { apply((x) => ({ ...x, ...rippleCut(x, range) })); setRange(null); toast.success('Cut and closed the gap — Ctrl+Z undoes it'); }}>Cut</button>
+      <button type="button" aria-label="Clear marked range" className="ml-1 text-iris-200 hover:text-white" onClick={() => setRange(null)}>✕</button>
+    </span>
+  );
+  // Studio layout: play, scrub and time sit in the timeline's header, right above the clips.
+  const transportTitle = (
+    <span className="flex shrink-0 items-center gap-2.5 text-white" aria-label="Timeline">
+      <button type="button" aria-label={playing ? 'Pause' : 'Play'} title="Play / pause (Space)" onClick={() => window.dispatchEvent(new Event('fc-editor-toggle-play'))} disabled={!timeline.clips.length} className="grid size-8 place-items-center rounded-full text-fog-100 transition hover:bg-white/[0.08] hover:text-white disabled:opacity-40">
+        {playing ? <Pause className="size-4" /> : <Play className="size-4 translate-x-px" />}
+      </button>
+      <input type="range" aria-label="Playhead position" min={0} max={Math.max(0.1, total)} step={0.01} value={Math.min(playhead, total)} onChange={(e) => setPlayhead(Number(e.target.value))} className="w-28 max-xl:hidden" />
+      <span className="font-mono text-[13px] tabular-nums" aria-label="Time">
+        <span className="font-semibold text-white">{timecode(playhead)}</span> <span className="text-fog-500">/ {timecode(total)}</span>
+      </span>
+      {rangeChip}
+    </span>
+  );
   const timelineTitle = (
     <span className="flex shrink-0 items-center gap-2 text-sm font-medium text-white">
       Timeline <span className="font-normal text-fog-400">· {seconds(total)}</span>
-      {range && (
-        <span className="flex items-center gap-1 rounded-md bg-iris-500/20 px-2 py-0.5 text-[11px] font-normal text-iris-100" data-testid="range-chip">
-          Marked {seconds(range.start)}–{seconds(range.end)} ({(range.end - range.start).toFixed(1)} s)
-          <button type="button" className="ml-1 text-iris-200 hover:text-white" onClick={() => { apply((x) => ({ ...x, ...rippleCut(x, range) })); setRange(null); toast.success('Cut and closed the gap — Ctrl+Z undoes it'); }}>Cut</button>
-          <button type="button" aria-label="Clear marked range" className="ml-1 text-iris-200 hover:text-white" onClick={() => setRange(null)}>✕</button>
-        </span>
-      )}
+      {rangeChip}
     </span>
   );
   // The everyday clip actions sit right above the clips (as in phone and desktop editors), not at the
   // bottom of the inspector.
   const selIdx = timeline.clips.findIndex((c) => c.id === selected);
-  const clipTools = selIdx >= 0 && (
-    <span className="flex items-center gap-0.5 border-r hairline pr-1.5" aria-label="Selected clip">
-      <Button size="icon" variant="ghost" className="size-7" aria-label="Split at the playhead" title="Split at the playhead (S)" onClick={() => apply((x) => splitAtPlayhead(x, playhead, selected))}><Scissors /></Button>
-      <Button size="icon" variant="ghost" className="size-7" aria-label="Duplicate clip" title="Duplicate (Ctrl+D)" onClick={() => apply((x) => { const c = x.clips[selIdx]!; x.clips.splice(selIdx + 1, 0, { ...c, id: newId('clip'), transition: undefined }); return x; })}><Copy /></Button>
-      <Button size="icon" variant="ghost" className="size-7" aria-label="Freeze frame" title="Freeze the frame at the playhead for 2 s" onClick={() => apply((x) => { const c = x.clips[selIdx]!; const at = Math.min(c.outSec - 0.05, c.inSec + (playhead - (clipStarts(x)[selIdx] ?? 0)) * (c.speed || 1)); x.clips.splice(selIdx + 1, 0, { ...c, id: newId('clip'), inSec: Math.max(0, at), outSec: Math.max(at + 0.1, c.outSec), freezeSec: 2, transition: undefined, camera: undefined, objects: undefined }); return x; })}><Snowflake /></Button>
-      <Button size="icon" variant="ghost" className="size-7 hover:text-signal-red" aria-label="Delete clip" title="Delete (Del)" disabled={timeline.clips.length < 2} onClick={() => { apply((x) => ({ ...x, clips: x.clips.filter((c) => c.id !== selected) })); select(null); }}><Trash2 /></Button>
+  const chip = 'flex h-7 items-center gap-1 rounded-md border hairline bg-ink-950/60 px-2 text-[11px] text-fog-200 transition hover:border-white/25 hover:text-white disabled:pointer-events-none disabled:opacity-35';
+  const noClip = selIdx < 0;
+  const clipTools = timeline.clips.length > 0 && (
+    <span className="flex items-center gap-1 border-r hairline pr-2" aria-label="Selected clip" title={noClip ? 'Select a clip on the timeline' : undefined}>
+      <button type="button" className={chip} disabled={noClip} aria-label="Split at the playhead" title="Split at the playhead (S)" onClick={() => apply((x) => splitAtPlayhead(x, playhead, selected))}><Scissors className="size-3" /><span className="max-2xl:hidden">Split</span></button>
+      <button type="button" className={chip} disabled={noClip} aria-label="Duplicate clip" title="Duplicate (Ctrl+D)" onClick={() => apply((x) => { const c = x.clips[selIdx]!; x.clips.splice(selIdx + 1, 0, { ...c, id: newId('clip'), transition: undefined }); return x; })}><Copy className="size-3" /><span className="max-2xl:hidden">Duplicate</span></button>
+      <button type="button" className={chip} disabled={noClip} aria-label="Freeze frame" title="Freeze the frame at the playhead for 2 s" onClick={() => apply((x) => { const c = x.clips[selIdx]!; const at = Math.min(c.outSec - 0.05, c.inSec + (playhead - (clipStarts(x)[selIdx] ?? 0)) * (c.speed || 1)); x.clips.splice(selIdx + 1, 0, { ...c, id: newId('clip'), inSec: Math.max(0, at), outSec: Math.max(at + 0.1, c.outSec), freezeSec: 2, transition: undefined, camera: undefined, objects: undefined }); return x; })}><Snowflake className="size-3" /><span className="max-2xl:hidden">Freeze</span></button>
+      <button type="button" className={cn(chip, 'hover:border-signal-red/50 hover:text-signal-red')} disabled={noClip || timeline.clips.length < 2} aria-label="Delete clip" title="Delete (Del)" onClick={() => { apply((x) => ({ ...x, clips: x.clips.filter((c) => c.id !== selected) })); select(null); }}><Trash2 className="size-3" /><span className="max-2xl:hidden">Delete</span></button>
     </span>
   );
   const timelineActions = (
     <span className="flex items-center gap-1.5">
       {clipTools}
-      <Button size="sm" variant="secondary" className="h-7" onClick={() => setLibraryFor('clip')}><Plus /> Clip</Button>
-      <Button size="sm" variant="ghost" className="h-7" onClick={async () => { const a = await videoUp.pick(); if (a) { addAssetAsClip(a); void assetsQ.refetch(); } }}><Upload /> <span className="max-lg:hidden">Upload video</span></Button>
+      <button type="button" className={chip} onClick={() => setLibraryFor('clip')}><Plus className="size-3" /> Clip</button>
+      <button type="button" className={chip} aria-label="Upload video" title="Upload a video" onClick={async () => { const a = await videoUp.pick(); if (a) { addAssetAsClip(a); void assetsQ.refetch(); } }}><Upload className="size-3" /> <span className="max-2xl:hidden">Upload</span></button>
     </span>
   );
-  const timelineFor = (actions: React.ReactNode, musicHint?: string) => (
+  const timelineFor = (actions: React.ReactNode, musicHint?: string, studioHead = true) => (
     <div className="flex h-full min-h-0 flex-col">
       {/* With clips, the title and buttons share the timeline's own header row (one row, not two). */}
       {!timeline.clips.length && (
@@ -507,7 +524,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                 return { ...t, tracks: [...t.tracks.filter((x) => x.index !== index), { ...meta, ...patch }] };
               })
             }
-            title={timelineTitle}
+            title={studioHead ? transportTitle : timelineTitle}
             actions={actions}
             musicHint={musicHint}
             timeline={timeline}
@@ -651,7 +668,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       {logoUp.element}
 
       {/* Top bar */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 lg:grid lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
         <div className="flex min-w-0 items-center gap-2">
           {chrome.home && <span className="shrink-0 pr-1">{chrome.home}</span>}
           <Link href={project.kind === 'movie' ? `/app/movie/${id}` : project.kind === 'edit' ? '/app/edit' : `/app/projects/${id}`} aria-label="Back" title="Back to the project" className="grid size-8 place-items-center rounded-lg text-fog-400 hover:bg-white/[0.06] hover:text-white">
@@ -695,7 +712,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
           })}
         </div>
         )}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 lg:justify-self-end">
           <Button size="icon" variant="ghost" aria-label="Undo" title="Undo (Ctrl+Z)" onClick={undo} disabled={!past.length}><Undo2 /></Button>
           <Button size="icon" variant="ghost" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" onClick={redo} disabled={!future.length}><Redo2 /></Button>
           {!simple && (
@@ -723,7 +740,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             </button>
           )}
           <Button size="sm" onClick={() => setExportOpen(true)}><Download /> Export</Button>
-          {chrome.tools && <span className="ml-1 flex items-center gap-1.5 border-l hairline pl-2">{chrome.tools}</span>}
+          {chrome.tools && <span className={cn('ml-1 flex items-center gap-1.5 border-l hairline pl-2', !simple && 'max-2xl:hidden')}>{chrome.tools}</span>}
         </div>
       </div>
 
@@ -775,7 +792,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                 setFocus(aid ? 'audio' : 'clip');
               }}
               preview={simplePreviewEl}
-              timelineEl={timelineFor(null, 'No music yet — add some with Music above')}
+              timelineEl={timelineFor(null, 'No music yet — add some with Music above', false)}
               timelineHeight={`min(${Math.min(layout.timelineHeight, timelineNeed)}px, 34dvh)`}
               resizeHandle={wide ? <ResizeHandle axis="y" label="Resize the timeline" {...resize('timelineHeight', -1)} /> : undefined}
               onAddFromLibrary={() => setLibraryFor('clip')}
@@ -796,32 +813,32 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
           {workspace === 'edit' &&
             !simple &&
             (wide ? (
-              <>
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border hairline bg-ink-950" data-testid="studio-frame">
                 <div className="flex min-h-[200px] flex-1">
-                  <div className="shrink-0" data-testid="tool-panel">{toolbox}</div>
-                  {leftOpen ? <ResizeHandle axis="x" label="Resize the tool panel" {...resize('leftWidth', 1)} /> : <span className="w-2 shrink-0" />}
-                  <section aria-label="Preview" className="min-w-0 flex-1 rounded-2xl border hairline bg-ink-900/40 p-2">{previewEl}</section>
+                  <div className="shrink-0 border-r hairline" data-testid="tool-panel">{toolbox}</div>
+                  {leftOpen && <ResizeHandle axis="x" label="Resize the tool panel" className="-mr-1.5" {...resize('leftWidth', 1)} />}
+                  <section aria-label="Preview" className="min-w-0 flex-1 bg-ink-950 px-3 pb-1 pt-3">{cloneElement(previewEl, { transport: false })}</section>
                   {layout.inspectorOpen ? (
                     <>
-                      <ResizeHandle axis="x" label="Resize the properties panel" {...resize('inspectorWidth', -1)} />
-                      <aside aria-label="Properties" className="shrink-0 overflow-hidden rounded-2xl border hairline bg-ink-900/70" style={{ width: layout.inspectorWidth }}>
+                      <ResizeHandle axis="x" label="Resize the properties panel" className="-ml-1.5" {...resize('inspectorWidth', -1)} />
+                      <aside aria-label="Properties" className="shrink-0 overflow-hidden border-l hairline bg-ink-900" style={{ width: layout.inspectorWidth }}>
                         {inspector}
                       </aside>
                     </>
                   ) : (
-                    <button type="button" onClick={() => layout.set({ inspectorOpen: true })} className="ml-2 flex w-8 shrink-0 flex-col items-center justify-center gap-2 rounded-2xl border hairline bg-ink-900/70 text-[11px] text-fog-400 hover:text-white" title="Show properties">
+                    <button type="button" onClick={() => layout.set({ inspectorOpen: true })} className="flex w-9 shrink-0 flex-col items-center justify-center gap-2 border-l hairline bg-ink-900 text-[11px] text-fog-400 hover:text-white" title="Show properties">
                       <span className="[writing-mode:vertical-rl]">Properties</span>‹
                     </button>
                   )}
                 </div>
-                <ResizeHandle axis="y" label="Resize the timeline" {...resize('timelineHeight', -1)} />
-                <section aria-label="Timeline" className="min-h-[140px] shrink overflow-hidden rounded-2xl border hairline bg-ink-900/40 px-3 py-2" style={{ height: `min(${Math.min(layout.timelineHeight, timelineNeed)}px, 42dvh)` }}>{timelineEl}</section>
-              </>
+                <ResizeHandle axis="y" label="Resize the timeline" className="-my-0.75 border-t hairline" {...resize('timelineHeight', -1)} />
+                <section aria-label="Timeline" className="min-h-[150px] shrink overflow-hidden bg-ink-900 px-3 pb-2 pt-1.5" style={{ height: `min(${Math.min(layout.timelineHeight, timelineNeed + 12)}px, 44dvh)` }}>{timelineEl}</section>
+              </div>
             ) : (
               <div className="space-y-2">
                 <section aria-label="Preview" className="h-[56dvh] rounded-2xl border hairline bg-ink-900/40 p-2">{previewEl}</section>
                 <section aria-label="Timeline" className="flex max-h-[380px] min-h-[170px] flex-col rounded-2xl border hairline bg-ink-900/40 p-3">{timelineEl}</section>
-                <div className="h-[360px]" data-testid="tool-panel">{toolbox}</div>
+                <div className="h-[360px] overflow-hidden rounded-2xl border hairline" data-testid="tool-panel">{toolbox}</div>
                 <aside aria-label="Properties" className="max-h-[70dvh] overflow-hidden rounded-2xl border hairline bg-ink-900/70">{inspector}</aside>
               </div>
             ))}

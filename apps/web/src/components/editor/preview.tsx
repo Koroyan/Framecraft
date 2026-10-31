@@ -161,10 +161,12 @@ export type PreviewProps = {
   minimal?: boolean;
   /** false = no control row (the simple editor puts play / time in its toolbar). */
   controls?: boolean;
+  /** false = play, frame steps and time live in the timeline header instead (studio layout). */
+  transport?: boolean;
   onPlayingChange?: (playing: boolean) => void;
 };
 
-export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, selectedLayer, onSelectLayer, onLayerChange, selecting, onToggleSelecting, overlay, objectsLayer, toolbar, onBackgroundClick, minimal, controls = true, onPlayingChange }: PreviewProps) {
+export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, selectedLayer, onSelectLayer, onLayerChange, selecting, onToggleSelecting, overlay, objectsLayer, toolbar, onBackgroundClick, minimal, controls = true, transport = true, onPlayingChange }: PreviewProps) {
   const video = useRef<HTMLVideoElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -435,7 +437,10 @@ export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, s
             <MousePointerClick className="size-3.5" /> {compact ? null : selecting ? 'Selecting…' : 'Select object'}
           </button>
         )}
+        {!transport && <span className="ml-1 text-[11px] tabular-nums text-fog-500 max-md:hidden">{timeline.aspectRatio === '16:9' ? '1920 × 1080' : timeline.aspectRatio === '9:16' ? '1080 × 1920' : timeline.aspectRatio === '1:1' ? '1080 × 1080' : '1080 × 1350'} · {timeline.aspectRatio}</span>}
         <span className="flex-1" />
+        {transport && (
+        <>
         <button type="button" aria-label="Previous frame" title="Previous frame (←)" onClick={() => step(-1)} className="grid size-8 place-items-center rounded-lg text-fog-300 hover:bg-white/[0.06] hover:text-white"><ChevronLeft className="size-4" /></button>
         <button type="button" aria-label={playing ? 'Pause' : 'Play'} title="Play / pause (Space)" onClick={() => setPlaying((p) => !p)} disabled={!timeline.clips.length} className="grid size-9 place-items-center rounded-full bg-white text-ink-950 transition hover:bg-fog-100 disabled:opacity-40">
           {playing ? <Pause className="size-4" /> : <Play className="size-4 translate-x-px" />}
@@ -445,6 +450,8 @@ export function Preview({ timeline, assets, playhead, setPlayhead, onLogoMove, s
           <span className="text-white">{timecode(playhead)}</span>{compact ? null : <> / {timecode(total)}</>}
         </span>
         <span className="flex-1" />
+        </>
+        )}
         <select aria-label="Safe zones" className={cn('h-8 rounded-lg border hairline bg-ink-900 px-1.5 text-[11px] text-fog-200', (compact || minimal) && 'hidden')} value={safe} onChange={(e) => setSafe(e.target.value as typeof safe)}>
           <option value="off">Safe zones</option>
           <option value="tiktok">TikTok</option>

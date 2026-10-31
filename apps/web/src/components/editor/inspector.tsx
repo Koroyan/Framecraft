@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowLeft, ArrowRight, AudioLines, ChevronsRight, Crosshair, Film, ImagePlus, Layers, MousePointerClick, Music, Mic, Plus, RotateCcw, Scissors, Settings2, Sparkles, Trash2, Type } from 'lucide-react';
+import { ArrowLeft, ArrowRight, AudioLines, Blend, Crosshair, Film, Gauge, ImagePlus, Layers, MousePointerClick, Music, Mic, Plus, RotateCcw, Scissors, Settings2, Sparkles, Trash2, Type, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { applyPlanOp, clipDuration, describeEffects, LOOKS, type Timeline } from '@framecraft/shared';
 import { TRANSITION_LABEL, TRANSITIONS } from '@/lib/transitions';
@@ -57,6 +57,18 @@ const HEAD: Record<Focus, { icon: typeof Film; label: string }> = {
 };
 
 /** Properties of whatever is selected — it follows the selection (clip, layer, audio, object). */
+const EYEBROW: Record<Focus, string> = { clip: 'Selected clip', layer: 'Selected layer', audio: 'Selected audio', object: 'Selected object', project: 'Project settings' };
+
+/** A titled group in the inspector, separated by a line (as in the studio design). */
+function Sec({ icon: Icon, title, children }: { icon: typeof Film; title: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-3 border-t hairline pt-4 first:border-0 first:pt-0">
+      <h3 className="flex items-center gap-2 text-[13px] font-semibold text-white"><Icon className="size-4 text-fog-300" /> {title}</h3>
+      {children}
+    </section>
+  );
+}
+
 export function Inspector(p: InspectorProps) {
   const extra = useEditor((s) => s.extra);
   const sel = p.timeline.clips.find((c) => c.id === p.selectedClipId);
@@ -67,24 +79,27 @@ export function Inspector(p: InspectorProps) {
   const title = many ? `${extra.length + 1} clips selected` : focus === 'clip' && sel ? `Clip ${index + 1}` : focus === 'layer' ? (p.timeline.layers.find((l) => l.id === p.selectedLayer)?.name ?? 'Layers') : H.label;
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b hairline px-3">
-        <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-white">
-          <H.icon className="size-4 shrink-0 text-iris-300" />
-          <span className="truncate">{title}</span>
-          {focus === 'clip' && sel && <span className="shrink-0 text-[11px] font-normal text-fog-400">{seconds(clipDuration(sel))}</span>}
+      <div className="flex shrink-0 items-start justify-between gap-2 px-4 pb-2 pt-3">
+        <span className="min-w-0">
+          <span className="block text-[10px] font-medium uppercase tracking-[0.14em] text-fog-500">{EYEBROW[focus]}</span>
+          <span className="flex min-w-0 items-center gap-2 text-[15px] font-semibold text-white">
+            <H.icon className="size-4 shrink-0 text-iris-300" />
+            <span className="truncate">{title}</span>
+            {focus === 'clip' && sel && <span className="shrink-0 text-[11px] font-normal text-fog-400">{seconds(clipDuration(sel))}</span>}
+          </span>
         </span>
         <span className="flex shrink-0 items-center gap-0.5">
           <button type="button" onClick={() => p.setFocus(focus === 'project' ? (sel ? 'clip' : 'project') : 'project')} className={cn('flex h-7 items-center gap-1 rounded-md px-2 text-[11px]', focus === 'project' ? 'bg-white/10 text-white' : 'text-fog-400 hover:bg-white/[0.06] hover:text-white')} title="Format, logo, subtitles">
             <Settings2 className="size-3.5" /> Project
           </button>
           {p.onHide && (
-            <button type="button" onClick={p.onHide} aria-label="Hide properties" title="Hide properties" className="grid size-7 place-items-center rounded-md text-fog-500 hover:bg-white/[0.06] hover:text-white">
-              <ChevronsRight className="size-3.5" />
+            <button type="button" onClick={p.onHide} aria-label="Hide properties" title="Hide properties" className="grid size-7 place-items-center rounded-md text-fog-400 hover:bg-white/[0.06] hover:text-white">
+              <X className="size-4" />
             </button>
           )}
         </span>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-1">
         {focus === 'clip' && sel && (many ? <BatchPanel {...p} ids={[sel.id, ...extra]} /> : <ClipPanel {...p} />)}
         {focus === 'layer' && <LayersPanel timeline={p.timeline} apply={p.apply} playhead={p.playhead} selectedId={p.selectedLayer} setSelectedId={p.setSelectedLayer} logoAssetId={p.timeline.logo?.assetId} onPickAsset={p.onPickLayerAsset} />}
         {focus === 'audio' && <AudioPanel {...p} />}
@@ -174,7 +189,7 @@ function ClipPanel(p: InspectorProps) {
   const objects = sel.objects ?? [];
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-4 gap-1 rounded-xl border hairline bg-white/[0.02] p-1" role="tablist" aria-label="Clip tools">
+      <div className="grid grid-cols-4 border-b hairline" role="tablist" aria-label="Clip tools">
         {(
           [
             ['edit', Scissors, 'Edit'],
@@ -183,7 +198,7 @@ function ClipPanel(p: InspectorProps) {
             ['ai', Sparkles, 'AI'],
           ] as const
         ).map(([k, Icon, label]) => (
-          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={cn('flex items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-[11px]', tab === k ? 'bg-iris-500 text-white' : 'text-fog-300 hover:bg-white/[0.06]')}>
+          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={cn('-mb-px flex items-center justify-center gap-1 border-b-2 px-1 py-2 text-xs transition', tab === k ? 'border-iris-500 font-medium text-white' : 'border-transparent text-fog-400 hover:text-white')}>
             <Icon className="size-3" />
             {label}
           </button>
@@ -191,8 +206,9 @@ function ClipPanel(p: InspectorProps) {
       </div>
 
       {tab === 'edit' && (
-        <div className="space-y-3">
+        <div className="space-y-4">
           {asset?.isFixture && <Badge tone="amber">test fixture — not AI</Badge>}
+          <Sec icon={Gauge} title="Playback">
           <Field label={`Speed · ${sel.speed}×`} hint={sel.freezeSec ? 'Freeze frames hold one frame.' : `Lasts ${seconds(clipDuration(sel))} on the timeline.`}>
             <div className="flex gap-1">
               {SPEEDS.map((s) => (
@@ -204,6 +220,9 @@ function ClipPanel(p: InspectorProps) {
           <Field label={`Volume · ${Math.round(sel.volume * 100)}%`}>
             <input type="range" aria-label="Clip volume" className="w-full" min={0} max={2} step={0.05} value={sel.volume} onChange={(e) => set((c) => (c.volume = Number(e.target.value)))} />
           </Field>
+          <label className="flex items-center justify-between text-sm text-fog-200">Play backwards <Switch checked={sel.reverse} onCheckedChange={(v) => set((c) => (c.reverse = v))} label="Reverse clip" /></label>
+          </Sec>
+          <Sec icon={Blend} title="Transition & fades">
           <Field label="Transition into the next clip">
             <div className="grid grid-cols-[1fr_92px] gap-2">
               <NativeSelect aria-label="Transition" value={sel.transition?.type ?? 'cut'} onChange={(e) => set((c) => (c.transition = e.target.value === 'cut' ? undefined : { type: e.target.value as (typeof TRANSITIONS)[number], durationSec: c.transition?.durationSec ?? 0.5 }))}>
@@ -222,7 +241,8 @@ function ClipPanel(p: InspectorProps) {
           <Field label={`Opacity · ${Math.round(sel.opacity * 100)}%`} hint="Fades the picture towards black.">
             <input type="range" aria-label="Opacity" className="w-full" min={0} max={1} step={0.05} value={sel.opacity} onChange={(e) => set((c) => (c.opacity = Number(e.target.value)))} />
           </Field>
-          <label className="flex items-center justify-between text-sm text-fog-200">Play backwards <Switch checked={sel.reverse} onCheckedChange={(v) => set((c) => (c.reverse = v))} label="Reverse clip" /></label>
+          </Sec>
+          <Sec icon={Scissors} title="Trim">
           <div className="grid grid-cols-2 gap-2">
             <Field label="Starts at · s">
               <Input type="number" step={0.05} min={0} max={sel.outSec - 0.2} value={Math.round(sel.inSec * 100) / 100} onChange={(e) => set((c) => (c.inSec = Math.min(Math.max(0, Number(e.target.value)), c.outSec - 0.2)))} className="h-9" />
@@ -232,6 +252,8 @@ function ClipPanel(p: InspectorProps) {
             </Field>
           </div>
           <p className="-mt-2 text-[11px] text-fog-500">Seconds in the original video. Or drag the clip’s edges on the timeline.</p>
+          </Sec>
+          <Sec icon={Film} title="Clip">
           {/* Split, duplicate, freeze and delete are in the toolbar above the timeline. */}
           <div className="grid grid-cols-3 gap-2">
             <Button size="sm" variant="secondary" onClick={() => p.onLibrary('replace')}><RotateCcw /> Replace</Button>
@@ -240,6 +262,7 @@ function ClipPanel(p: InspectorProps) {
           </div>
           <Button size="sm" variant="danger" className="w-full" disabled={t.clips.length < 2} onClick={() => { p.apply((tl) => ({ ...tl, clips: tl.clips.filter((c) => c.id !== sel.id) })); p.selectClip(null); }}><Trash2 /> Remove from timeline</Button>
           <p className="text-[11px] text-fog-500">Removing keeps the file in Media.</p>
+          </Sec>
         </div>
       )}
 
