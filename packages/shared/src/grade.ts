@@ -65,7 +65,8 @@ export const gradeSchema = z.object({
   gamma: rgbTriple.optional(),
   gain: rgbTriple.optional(),
   curves: z.object({ master: curve.optional(), r: curve.optional(), g: curve.optional(), b: curve.optional() }).optional(),
-  hsl: z.record(z.enum(HSL_BANDS.map((b) => b.key) as [HslBand, ...HslBand[]]), hslAdjust).optional(),
+  // partialRecord: a grade may adjust only some bands (z.record with enum keys would demand all eight).
+  hsl: z.partialRecord(z.enum(HSL_BANDS.map((b) => b.key) as [HslBand, ...HslBand[]]), hslAdjust).optional(),
   replace: z.array(colorReplaceSchema).max(4).optional(),
   /** Custom .cube LUT (uploaded asset) blended by `strength`. */
   lut: z.object({ assetId: z.string().uuid(), strength: z.number().min(0).max(1).default(1) }).optional(),

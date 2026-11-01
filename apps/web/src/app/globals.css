@@ -82,6 +82,23 @@
   ::selection {
     background: rgb(121 105 247 / 0.4);
   }
+  /* Native dropdown lists: Windows Chrome paints options on white unless told otherwise, which
+     left light text unreadable. Dark list, light text, violet highlight — on every select. */
+  select {
+    color-scheme: dark;
+  }
+  select option,
+  select optgroup {
+    background-color: var(--color-ink-800);
+    color: var(--color-fog-100);
+  }
+  select option:checked {
+    background-color: var(--color-iris-600, #5b45e0);
+    color: #fff;
+  }
+  select option:disabled {
+    color: var(--color-fog-500);
+  }
   :focus-visible {
     outline: 2px solid var(--color-iris-400);
     outline-offset: 2px;

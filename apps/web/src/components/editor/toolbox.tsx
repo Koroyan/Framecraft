@@ -8,7 +8,7 @@ import { lookActive, lookSwatch } from '@/lib/looks';
 import { api, ApiError, type Asset } from '@/lib/api';
 import { Button, NativeSelect } from '@/components/ui';
 import { MediaDropzone } from '@/components/studio/media-dropzone';
-import { LAYER_TEMPLATES } from '@/components/editor/layers';
+import { EDIT_TEXT_EVENT, LAYER_TEMPLATES } from '@/components/editor/layers';
 import { freeTrack, newId } from '@/lib/editor-store';
 import { cn, seconds } from '@/lib/utils';
 
@@ -87,7 +87,10 @@ export function EditorToolbox(p: {
     const layer = { ...made, track: freeTrack(timeline, made.startSec, made.endSec, made.track) };
     apply((t) => ({ ...t, layers: [...t.layers, layer] }));
     p.onSelectLayer(layer.id);
+    // A new title or sticker: put the cursor straight into its text field in the inspector.
+    if (layer.text || layer.shape?.label) setTimeout(() => window.dispatchEvent(new Event(EDIT_TEXT_EVENT)), 120);
   };
+  const typeHint = <p className="col-span-2 rounded-lg bg-white/[0.03] px-2.5 py-2 text-[11px] leading-snug text-fog-400">Pick a style — then type your words in <span className="text-iris-200">Properties → Type your text</span>, or double-click it in the video.</p>;
 
   return (
     <div className="flex h-full overflow-hidden bg-ink-900">
@@ -173,6 +176,7 @@ export function EditorToolbox(p: {
 
         {tab === 'text' && (
           <div className="grid grid-cols-2 gap-2">
+            {typeHint}
             {TEXT_STYLES.map((s) => (
               <button key={s.key} type="button" onClick={() => addLayer(s.make(at))} className="grid aspect-[4/3] place-items-center rounded-lg border hairline bg-black/40 p-2 text-center hover:border-iris-400/60">
                 <span className="text-lg leading-tight" style={s.demo}>Aa</span>
@@ -190,6 +194,7 @@ export function EditorToolbox(p: {
 
         {tab === 'stickers' && (
           <div className="grid grid-cols-2 gap-2">
+            {typeHint}
             {LAYER_TEMPLATES.filter((t) => t.make(0).kind === 'shape').map((t) => {
               const shape = t.make(0).shape!;
               return (

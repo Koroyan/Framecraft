@@ -5,7 +5,7 @@ import { ArrowDown, ArrowUp, Copy, Eye, EyeOff, Image as ImageIcon, Lock, Plus, 
 import { LAYER_ANIMS, layerSchema, layerStateAt, rasterHash, SHAPES, TEXT_FONTS, type Layer, type LayerInput, type Timeline } from '@framecraft/shared';
 import { api, type Asset } from '@/lib/api';
 import { newId } from '@/lib/editor-store';
-import { Button, Field, Input, NativeSelect, Textarea } from '@/components/ui';
+import { Button, Field, Input, NativeSelect } from '@/components/ui';
 import { cn, seconds } from '@/lib/utils';
 
 /*
@@ -167,6 +167,7 @@ function TransformBox({ layer, t, frame, onChange }: { layer: Layer; t: number; 
         onPointerDown={start('move')}
         onPointerMove={move}
         onPointerUp={end}
+        onDoubleClick={() => window.dispatchEvent(new Event(EDIT_TEXT_EVENT))}
         onKeyDown={(e) => {
           const s = e.shiftKey ? 0.02 : 0.005;
           const d = { ArrowLeft: [-s, 0], ArrowRight: [s, 0], ArrowUp: [0, -s], ArrowDown: [0, s] }[e.key];
@@ -194,6 +195,9 @@ export function LayerStage({ timeline, t, playing, assets, selectedId, onSelect,
     </>
   );
 }
+
+/** Double-click on a layer in the preview → focus its text field in the inspector. */
+export const EDIT_TEXT_EVENT = 'fc-edit-layer-text';
 
 // ------------------------------------------------------------------ templates
 
@@ -225,8 +229,18 @@ export function LayersPanel({ timeline, apply, playhead, selectedId, setSelected
   const tracks = [...new Set([1, 2, 3, ...timeline.layers.map((l) => l.track)])].sort((a, b) => b - a);
   const meta = (i: number) => timeline.tracks.find((x) => x.index === i) ?? { index: i, locked: false, hidden: false };
   const setMeta = (i: number, patch: { locked?: boolean; hidden?: boolean }) => apply((t) => ({ ...t, tracks: [...t.tracks.filter((x) => x.index !== i), { ...meta(i), ...patch }] }));
-  return (
-    <div className="space-y-3">
+  const words = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const focus = () => {
+      words.current?.focus();
+      words.current?.select();
+    };
+    window.addEventListener(EDIT_TEXT_EVENT, focus);
+    return () => window.removeEventListener(EDIT_TEXT_EVENT, focus);
+  }, []);
+  const hasWords = Boolean(sel && (sel.text || (sel.shape && sel.shape.type !== 'arrow')));
+  const adders = (
+    <>
       <div className="grid grid-cols-3 gap-1.5">
         <Button size="sm" variant="secondary" onClick={() => add({ id: newId('ly'), name: 'Text', kind: 'text', track: 2, startSec: start, endSec: start + 3, x: 0.5, y: 0.5, w: 0.7, text: { content: 'ტექსტი · Text', font: 'bold', size: 72, color: '#FFFFFF' }, animIn: { type: 'fade', durationSec: 0.3 } })}><Type /> Text</Button>
         <Button size="sm" variant="secondary" onClick={() => onPickAsset('image', (a) => add({ id: newId('ly'), name: a.originalName ?? 'Image', kind: 'image', track: 3, assetId: a.id, startSec: start, endSec: start + 3, x: 0.75, y: 0.25, w: 0.3 }))}><ImageIcon /> Image</Button>
@@ -236,6 +250,34 @@ export function LayersPanel({ timeline, apply, playhead, selectedId, setSelected
         {LAYER_TEMPLATES.map((tpl) => <button key={tpl.key} type="button" onClick={() => add(tpl.make(start))} className="rounded-full border hairline px-2.5 py-1 text-[11px] text-fog-200 hover:border-white/25">{tpl.label}</button>)}
         {logoAssetId && <button type="button" onClick={() => add({ id: newId('ly'), name: 'Logo', kind: 'image', track: 4, assetId: logoAssetId, startSec: start, endSec: total, x: 0.86, y: 0.08, w: 0.18 })} className="rounded-full border hairline px-2.5 py-1 text-[11px] text-fog-200 hover:border-white/25">Brand logo</button>}
       </div>
+    </>
+  );
+  return (
+    <div className="space-y-3">
+      {sel && hasWords && (
+        <label className="block rounded-xl border border-iris-400/40 bg-iris-500/[0.07] p-2.5">
+          <span className="mb-1.5 block text-[11px] font-medium text-iris-100">{sel.text ? 'Type your text' : 'Text on the sticker'}</span>
+          <textarea
+            ref={words}
+            rows={2}
+            maxLength={sel.text ? 500 : 80}
+            aria-label={sel.text ? 'Layer text' : 'Sticker text'}
+            value={sel.text ? sel.text.content : (sel.shape?.label ?? '')}
+            placeholder={sel.text ? 'Write something…' : 'e.g. 25 ₾ or Order now'}
+            onChange={(e) => (sel.text ? upd({ text: { ...sel.text, content: e.target.value || ' ' } }) : upd({ shape: { ...sel.shape!, label: e.target.value || undefined } }))}
+            className="w-full resize-none rounded-lg border hairline bg-ink-950 px-2.5 py-2 text-sm text-white placeholder:text-fog-500 focus:border-iris-400 focus:outline-none"
+          />
+          <span className="mt-1 block text-[10px] text-fog-500">Tip: double-click the layer in the preview to edit it here. Georgian, Russian and English all work.</span>
+        </label>
+      )}
+      {sel ? (
+        <details className="group rounded-xl border hairline px-2.5 py-2">
+          <summary className="cursor-pointer list-none text-[11px] font-medium text-fog-300 hover:text-white">+ Add another layer</summary>
+          <div className="mt-2 space-y-2">{adders}</div>
+        </details>
+      ) : (
+        adders
+      )}
 
       <div className="space-y-1">
         {tracks.map((i) => {
@@ -280,7 +322,6 @@ export function LayersPanel({ timeline, apply, playhead, selectedId, setSelected
           </Section>
           {sel.text && (
             <Section title="Text">
-              <Field label="Words"><Textarea rows={2} value={sel.text.content} maxLength={500} onChange={(e) => upd({ text: { ...sel.text!, content: e.target.value || ' ' } })} /></Field>
               <div className="grid grid-cols-2 gap-2">
                 <Field label="Font"><NativeSelect value={sel.text.font} onChange={(e) => upd({ text: { ...sel.text!, font: e.target.value as Layer['text'] extends infer T ? T extends { font: infer F } ? F : never : never } })}>
                   {TEXT_FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
@@ -301,7 +342,7 @@ export function LayersPanel({ timeline, apply, playhead, selectedId, setSelected
             <div className="grid grid-cols-2 gap-2 text-xs">
               <NativeSelect value={sel.shape.type} onChange={(e) => upd({ shape: { ...sel.shape!, type: e.target.value as (typeof SHAPES)[number] } })}>{SHAPES.map((x) => <option key={x}>{x}</option>)}</NativeSelect>
               <input type="color" aria-label="Fill colour" value={sel.shape.fill} onChange={(e) => upd({ shape: { ...sel.shape!, fill: e.target.value.toUpperCase() } })} className="h-9 w-full rounded border-0 bg-transparent" />
-              <Input className="col-span-2" placeholder="Label" value={sel.shape.label ?? ''} maxLength={80} onChange={(e) => upd({ shape: { ...sel.shape!, label: e.target.value || undefined } })} />
+              {sel.shape.type !== 'arrow' && <label className="col-span-2 flex items-center gap-2 text-fog-300">Text colour <input type="color" aria-label="Sticker text colour" value={sel.shape.labelColor ?? '#FFFFFF'} onChange={(e) => upd({ shape: { ...sel.shape!, labelColor: e.target.value.toUpperCase() } })} className="h-6 w-8 border-0 bg-transparent" /></label>}
             </div>
           )}
           <Section title="Transform">

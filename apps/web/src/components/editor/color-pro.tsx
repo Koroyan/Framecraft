@@ -72,8 +72,14 @@ export function ColorPro({
   onMatchFrom?: (a: Partial<GradeSettings> | undefined) => void;
 }) {
   const [tab, setTab] = useState<Tab>('basic');
-  const g = gradeSchema.parse(adjust ?? {});
-  const set = (patch: Partial<GradeSettings>) => onChange(gradeSchema.parse({ ...g, ...patch }));
+  // safeParse: a stale or partial grade must never take the editor down.
+  const parsed = gradeSchema.safeParse(adjust ?? {});
+  const g = parsed.success ? parsed.data : gradeSchema.parse({});
+  const set = (patch: Partial<GradeSettings>) => {
+    const next = gradeSchema.safeParse({ ...g, ...patch });
+    if (next.success) onChange(next.data);
+    else toast.error('That colour value is out of range.');
+  };
   const tabs: [Tab, string][] = [['basic', 'Basic'], ['curves', 'Curves'], ['wheels', 'Wheels'], ['hsl', 'HSL'], ['replace', 'Replace'], ['looks', 'Looks & LUT']];
 
   // Apply a picked colour to the replacement that asked for it.

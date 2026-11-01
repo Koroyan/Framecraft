@@ -207,7 +207,7 @@ export function GradeCanvas({ video, adjust, lutUrl, srcTime, objectPosition, ob
   const [supported, setSupported] = useState(true);
   const [custom, setCustom] = useState<Lut3d | null>(null);
   const state = useRef<{ gl: WebGL2RenderingContext; prog: WebGLProgram; vtex: WebGLTexture; lut: WebGLTexture | null; reps: Slot[]; objs: Slot[]; repMasks: EditMask[]; objList: ObjectEdit[]; dummy3d: WebGLTexture; dummy2d: WebGLTexture; found: (Found | undefined)[]; grab: HTMLCanvasElement; worker: Worker | null; jobs: (Job | undefined)[]; seq: number } | null>(null);
-  const g = gradeSchema.parse(adjust ?? {});
+  const g = gradeSchema.safeParse(adjust ?? {}).data ?? gradeSchema.parse({});
   const masked = (g.replace ?? []).filter((r) => r.mask && !maskIsEmpty(r.mask)).slice(0, REPS);
   const objList = (objects ?? []).filter((o) => o.enabled && o.effects.length && !maskIsEmpty(o.mask)).slice(0, OBJS);
   const active = needsLut(g) || masked.length > 0 || objList.length > 0 || Boolean(g.lut && custom);

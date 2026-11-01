@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { CastPicker } from '@/components/studio/cast-picker';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { MentionTextarea, mentionedIn, stripMentions, useCast } from '@/components/studio/mention-textarea';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, ChevronDown, Coins, Info, Settings2, Sparkles, Volume2, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -22,7 +23,7 @@ import {
 } from '@framecraft/shared';
 import { api, endpoints, ApiError, type Asset, type GenerationEstimate } from '@/lib/api';
 import { useMe, useModels } from '@/lib/hooks';
-import { Badge, Button, Card, Dialog, Field, Input, NativeSelect, Segmented, Switch, Textarea } from '@/components/ui';
+import { Badge, Button, Card, Dialog, Field, Input, NativeSelect, Segmented, Switch } from '@/components/ui';
 import { ImageSlot } from './upload';
 import { cn, formatCredits, newKey } from '@/lib/utils';
 
@@ -155,10 +156,16 @@ export function VideoComposer({
   const [advanced, setAdvanced] = useState(advancedDefault);
   const [busy, setBusy] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // @Name in the description uses that saved character / place, like picking it below.
+  const cast = useCast();
+  const mentioned = mentionedIn(prompt, cast);
+  const useChars = [...new Set([...characterIds, ...mentioned.filter((m) => m.kind === 'character').map((m) => m.id)])].slice(0, 5);
+  const useLocs = [...new Set([...locationIds, ...mentioned.filter((m) => m.kind === 'location').map((m) => m.id)])].slice(0, 2);
+  const modelPrompt = stripMentions(prompt.trim(), cast);
 
   const spec: VideoSpecInput = useMemo(
     () => ({
-      prompt: prompt.trim() || 'A beautiful cinematic scene',
+      prompt: modelPrompt || 'A beautiful cinematic scene',
       aspectRatio,
       durationSec,
       quality,
@@ -178,14 +185,19 @@ export function VideoComposer({
       imageAssetId: image?.id,
       endImageAssetId: image && endImage ? endImage.id : undefined,
       referenceAssetIds: refs.filter(Boolean).map((r) => r!.id),
-      characterIds,
-      locationIds,
+      characterIds: useChars,
+      locationIds: useLocs,
     }),
-    [prompt, aspectRatio, durationSec, quality, style, camera, lighting, lens, colorGrade, mood, shotType, nativeAudio, enhancePrompt, modelKey, resolution, negativePrompt, renderPass, image, endImage, refs, characterIds, locationIds],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the id lists are derived from these
+    [modelPrompt, useChars.join(), useLocs.join(), aspectRatio, durationSec, quality, style, camera, lighting, lens, colorGrade, mood, shotType, nativeAudio, enhancePrompt, modelKey, resolution, negativePrompt, renderPass, image, endImage, refs],
   );
   const debounced = useDebounced(spec, 450);
   const est = useQuery({ queryKey: ['estimate', debounced], queryFn: () => endpoints.estimate(debounced), placeholderData: (p) => p, retry: false });
   const estimate = est.data?.estimate;
+  // The price of each quality mode for the same video, so the difference is visible before choosing.
+  const perQuality = useQueries({
+    queries: QUALITY_MODES.map((q) => ({ queryKey: ['estimate', { ...debounced, quality: q, modelKey: undefined }], queryFn: () => endpoints.estimate({ ...debounced, quality: q, modelKey: undefined }), placeholderData: (p: unknown) => p, retry: false, enabled: !debounced.modelKey })),
+  });
   const allowedQuality = me?.plan?.limits.qualityModes ?? QUALITY_MODES;
   const routableModels = (modelData?.models ?? []).filter((m) => m.routable);
 
@@ -253,10 +265,11 @@ export function VideoComposer({
           </Card>
         )}
         <Card className="p-3 md:p-4">
-          <Textarea
+          <MentionTextarea
             value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder={animate ? 'Describe the motion — e.g. slow push-in, her hair moves in the wind' : 'Describe the video you want to create…'}
+            onChange={setPrompt}
+            onMention={(m) => (m.kind === 'character' ? setCharacterIds((ids) => (ids.includes(m.id) ? ids : [...ids, m.id].slice(-5))) : setLocationIds((ids) => (ids.includes(m.id) ? ids : [...ids, m.id].slice(-2))))}
+            placeholder={animate ? 'Describe the motion — e.g. slow push-in, her hair moves in the wind' : 'Describe the video you want to create… Type @ to use a saved character or place'}
             aria-label="Video description"
             className="min-h-32 border-0 bg-transparent px-2 text-[16px] focus:bg-transparent md:text-[17px]"
             maxLength={4000}
@@ -280,7 +293,19 @@ export function VideoComposer({
         </Card>
 
         <Card className="p-3 md:p-4">
-          <CastPicker characterIds={characterIds} locationIds={locationIds} onCharacters={setCharacterIds} onLocations={setLocationIds} />
+          <CastPicker
+            characterIds={useChars}
+            locationIds={useLocs}
+            onCharacters={(ids) => {
+              // Removing a chip also drops its @ in the text, or the mention would add it right back.
+              setPrompt((p) => stripMentions(p, cast.filter((m) => useChars.includes(m.id) && !ids.includes(m.id))));
+              setCharacterIds(ids);
+            }}
+            onLocations={(ids) => {
+              setPrompt((p) => stripMentions(p, cast.filter((m) => useLocs.includes(m.id) && !ids.includes(m.id))));
+              setLocationIds(ids);
+            }}
+          />
         </Card>
 
         <div className="grid gap-4 md:grid-cols-2">
@@ -324,6 +349,10 @@ export function VideoComposer({
                     {q === 'balanced' && <Badge tone="iris">Default</Badge>}
                   </div>
                   <div className="mt-1 text-[11.5px] leading-snug text-fog-400">{locked ? 'Upgrade to unlock' : QUALITY_MODE_INFO[q].blurb}</div>
+                  {!locked && (() => {
+                    const e = (perQuality[QUALITY_MODES.indexOf(q)]?.data as { estimate?: GenerationEstimate } | undefined)?.estimate;
+                    return e?.ok ? <div className="mt-1.5 text-xs font-medium tabular-nums text-iris-200">≈ {formatCredits(e.credits)} credits · {e.segments[0]?.resolution}</div> : null;
+                  })()}
                 </button>
               );
             })}

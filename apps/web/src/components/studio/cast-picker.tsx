@@ -53,36 +53,97 @@ export function CastPicker({ characterIds, locationIds, onCharacters, onLocation
     else if (ids.length >= max) toast.error(`Up to ${max} at a time`);
     else set([...ids, id]);
   };
+  const [open, setOpen] = useState<Kind | null>(null);
+  const [q, setQ] = useState('');
+  const pickedChars = (chars.data ?? []).filter((c) => characterIds.includes(c.id));
+  const pickedLocs = (locs.data ?? []).filter((l) => locationIds.includes(l.id));
 
-  const chip = (kind: Kind, e: Element, on: boolean, onClick: () => void, Icon: typeof UserRound) => (
-    <span key={e.id} className="group relative flex shrink-0">
-      <button
-        type="button"
-        onClick={onClick}
-        aria-pressed={on}
-        title={e.description}
-        className={cn('flex items-center gap-2 rounded-xl border py-1 pl-1 pr-7 text-xs transition', on ? 'border-iris-400 bg-iris-500/15 text-white' : 'border-white/10 text-fog-200 hover:border-white/25')}
-      >
-        {e.references[0] ? <img src={e.references[0].url} alt="" className="size-7 rounded-lg object-cover" /> : <span className="grid size-7 place-items-center rounded-lg bg-white/[0.06]"><Icon className="size-3.5" /></span>}
-        <span className="max-w-28 truncate">{e.name}</span>
-        {on && <Check className="size-3.5 text-iris-300" />}
-      </button>
-      <button type="button" aria-label={`Delete ${e.name}`} title={`Delete ${e.name}`} onClick={() => setRemoving({ kind, el: e })} className="absolute right-1.5 top-1/2 grid size-5 -translate-y-1/2 place-items-center rounded-md text-fog-500 transition hover:bg-signal-red/15 hover:text-signal-red focus-visible:text-signal-red">
-        <Trash2 className="size-3" />
+  const chip = (kind: Kind, e: Element, Icon: typeof UserRound) => (
+    <span key={e.id} className="flex shrink-0 items-center gap-2 rounded-xl border border-iris-400/50 bg-iris-500/15 py-1 pl-1 pr-1.5 text-xs text-white" title={e.description}>
+      {e.references[0] ? <img src={e.references[0].url} alt="" className="size-7 rounded-lg object-cover" /> : <span className="grid size-7 place-items-center rounded-lg bg-white/[0.06]"><Icon className="size-3.5" /></span>}
+      <span className="max-w-32 truncate">{e.name}</span>
+      <button type="button" aria-label={`Remove ${e.name}`} title="Remove from this video" onClick={() => (kind === 'character' ? onCharacters(characterIds.filter((x) => x !== e.id)) : onLocations(locationIds.filter((x) => x !== e.id)))} className="grid size-5 place-items-center rounded-md text-fog-300 hover:bg-white/10 hover:text-white">
+        <X className="size-3" />
       </button>
     </span>
   );
 
+  const list = open === 'character' ? (chars.data ?? []) : open === 'location' ? (locs.data ?? []) : [];
+  const shown = list.filter((e) => e.name.toLowerCase().includes(q.trim().toLowerCase()));
+  const ids = open === 'character' ? characterIds : locationIds;
+  const openPicker = (k: Kind) => {
+    setQ('');
+    setOpen(k);
+  };
+
   return (
-    <div className="space-y-3">
-      <Row label="Characters" hint="Same face in every video" onAdd={() => setCreating('character')}>
-        {(chars.data ?? []).map((c) => chip('character', c, characterIds.includes(c.id), () => toggle(characterIds, c.id, 5, onCharacters), UserRound))}
-        {chars.data && !chars.data.length && <span className="text-xs text-fog-400">No characters yet — add one with a photo.</span>}
-      </Row>
-      <Row label="Locations" hint="Same place every time" onAdd={() => setCreating('location')}>
-        {(locs.data ?? []).map((l) => chip('location', l, locationIds.includes(l.id), () => toggle(locationIds, l.id, 2, onLocations), MapPin))}
-        {locs.data && !locs.data.length && <span className="text-xs text-fog-400">No locations yet.</span>}
-      </Row>
+    <div className="space-y-2.5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="text-xs font-medium text-fog-200">
+          Characters &amp; places <span className="font-normal text-fog-400">· optional — keeps the same face and place in every video</span>
+        </span>
+        <span className="text-[11px] text-fog-500">
+          or type <kbd className="rounded bg-white/[0.06] px-1 font-mono text-fog-300">@</kbd> in the description
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {pickedChars.map((c) => chip('character', c, UserRound))}
+        {pickedLocs.map((l) => chip('location', l, MapPin))}
+        <button type="button" onClick={() => openPicker('character')} className="flex shrink-0 items-center gap-1.5 rounded-xl border border-dashed border-white/15 px-3 py-2 text-xs text-fog-300 transition hover:border-iris-400 hover:text-white">
+          <UserRound className="size-3.5" /> Add character
+        </button>
+        <button type="button" onClick={() => openPicker('location')} className="flex shrink-0 items-center gap-1.5 rounded-xl border border-dashed border-white/15 px-3 py-2 text-xs text-fog-300 transition hover:border-iris-400 hover:text-white">
+          <MapPin className="size-3.5" /> Add place
+        </button>
+      </div>
+      <Dialog
+        open={Boolean(open)}
+        onOpenChange={(o) => !o && setOpen(null)}
+        title={open === 'character' ? 'Choose characters' : 'Choose a place'}
+        description={open === 'character' ? 'Pick up to 5 saved characters. Their photos keep the face the same.' : 'Pick up to 2 saved places.'}
+        footer={
+          <>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                const k = open;
+                setOpen(null);
+                setCreating(k);
+              }}
+            >
+              <Plus /> New {open === 'character' ? 'character' : 'place'}
+            </Button>
+            <Button onClick={() => setOpen(null)}>Done</Button>
+          </>
+        }
+      >
+        <div className="space-y-2">
+          {list.length > 5 && <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name" aria-label="Search saved" autoFocus />}
+          <div className="max-h-[50dvh] space-y-1 overflow-y-auto">
+            {shown.map((e) => {
+              const on = ids.includes(e.id);
+              const Icon = open === 'character' ? UserRound : MapPin;
+              return (
+                <div key={e.id} className={cn('group flex items-center gap-2 rounded-xl border p-1.5 transition', on ? 'border-iris-400/60 bg-iris-500/10' : 'border-transparent hover:bg-white/[0.04]')}>
+                  <button type="button" aria-pressed={on} onClick={() => (open === 'character' ? toggle(characterIds, e.id, 5, onCharacters) : toggle(locationIds, e.id, 2, onLocations))} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
+                    {e.references[0] ? <img src={e.references[0].url} alt="" className="size-10 rounded-lg object-cover" /> : <span className="grid size-10 place-items-center rounded-lg bg-white/[0.06]"><Icon className="size-4" /></span>}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm text-white">{e.name}</span>
+                      {e.description && <span className="block truncate text-[11px] text-fog-500">{e.description}</span>}
+                    </span>
+                    <span className={cn('grid size-5 shrink-0 place-items-center rounded-md border', on ? 'border-iris-400 bg-iris-500 text-white' : 'border-white/20')}>{on && <Check className="size-3" />}</span>
+                  </button>
+                  <button type="button" aria-label={`Delete ${e.name}`} title={`Delete ${e.name} from your library`} onClick={() => setRemoving({ kind: open!, el: e })} className="grid size-7 shrink-0 place-items-center rounded-md text-fog-500 opacity-0 transition hover:bg-signal-red/15 hover:text-signal-red focus-visible:opacity-100 group-hover:opacity-100">
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+            {!list.length && <p className="py-6 text-center text-sm text-fog-400">Nothing saved yet — make one with “New {open === 'character' ? 'character' : 'place'}”.</p>}
+            {list.length > 0 && !shown.length && <p className="py-4 text-center text-sm text-fog-400">No match.</p>}
+          </div>
+        </div>
+      </Dialog>
       <Dialog
         open={Boolean(removing)}
         onOpenChange={(o) => !o && setRemoving(null)}
@@ -102,24 +163,6 @@ export function CastPicker({ characterIds, locationIds, onCharacters, onLocation
         onClose={() => setCreating(null)}
         onCreated={(kind, id) => (kind === 'character' ? onCharacters([...characterIds, id].slice(-5)) : onLocations([...locationIds, id].slice(-2)))}
       />
-    </div>
-  );
-}
-
-function Row({ label, hint, onAdd, children }: { label: string; hint: string; onAdd: () => void; children: React.ReactNode }) {
-  return (
-    <div>
-      <div className="mb-1.5 flex items-baseline justify-between gap-2">
-        <span className="text-xs font-medium text-fog-200">
-          {label} <span className="font-normal text-fog-400">· {hint}</span>
-        </span>
-      </div>
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        {children}
-        <button type="button" onClick={onAdd} className="flex shrink-0 items-center gap-1.5 rounded-xl border border-dashed border-white/15 px-3 py-1.5 text-xs text-fog-300 transition hover:border-iris-400 hover:text-white">
-          <Plus className="size-3.5" /> New
-        </button>
-      </div>
     </div>
   );
 }

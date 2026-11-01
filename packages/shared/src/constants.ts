@@ -19,8 +19,9 @@ export type QualityMode = (typeof QUALITY_MODES)[number];
 export const QUALITY_MODE_INFO: Record<QualityMode, { label: string; blurb: string; defaultResolution: Resolution }> = {
   economy: {
     label: 'Economy',
-    blurb: 'Quick, affordable clips for ideas and everyday posts.',
-    defaultResolution: '720p',
+    blurb: 'Cheapest: 480p where the model offers it — for ideas, drafts and everyday posts.',
+    // 480p, so Economy is visibly cheaper than Balanced even when both land on the same model.
+    defaultResolution: '480p',
   },
   balanced: {
     label: 'Balanced',
