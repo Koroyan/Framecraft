@@ -6,35 +6,79 @@ import { toast } from 'sonner';
 import { api, ApiError } from '@/lib/api';
 import { Button, Dialog } from '@/components/ui';
 import { cn, newKey } from '@/lib/utils';
+import { ImageViewer } from '@/components/studio/image-viewer';
 
 export type ViewKind = 'character' | 'location';
 type Estimate = { available: boolean; credits: number; perImage: number };
+/** A reference image of a character or place; `view` says which reference view it is, if any. */
+export type RefImage = { url?: string; view?: string | null };
 
 const PATH = { character: '/api/characters', location: '/api/locations' } as const;
-export const VIEW_LABELS = { character: ['Front', '¾', 'Side', 'Back'], location: ['Wide', 'Reverse', 'Side', 'Detail'] } as const;
+/** The four reference views, in the order they are shown (keys as the server stores them). */
+export const VIEWS = {
+  character: [
+    { key: 'front', label: 'Front' },
+    { key: 'three-quarter', label: '¾' },
+    { key: 'side', label: 'Side' },
+    { key: 'back', label: 'Back' },
+  ],
+  location: [
+    { key: 'wide', label: 'Wide' },
+    { key: 'reverse', label: 'Reverse' },
+    { key: 'side', label: 'Side' },
+    { key: 'detail', label: 'Detail' },
+  ],
+} as const;
+const LONG_LABEL: Record<string, string> = { '¾': 'Three-quarter' };
 
-/** Four slots: the element's reference images (or empty frames waiting for them). */
-export function ViewStrip({ kind, urls, pending = 0, className }: { kind: ViewKind; urls: (string | undefined)[]; pending?: number; className?: string }) {
+/**
+ * The element's reference images: the four views in their own slots (front, ¾, side, back · wide,
+ * reverse, side, detail) whichever order they were made in, then the user's own photos. Full-body
+ * views get tall slots so nothing is cut off; click any image to see it full size.
+ */
+export function ViewStrip({ kind, items, pending = 0, name, className }: { kind: ViewKind; items: RefImage[]; pending?: number; name?: string; className?: string }) {
+  const [open, setOpen] = useState<number | null>(null);
   const Icon = kind === 'character' ? UserRound : MapPin;
-  const shown = urls.filter(Boolean) as string[];
-  const slots = Math.max(4, Math.min(shown.length, 8));
+  const views = VIEWS[kind];
+  const withUrl = items.filter((x): x is { url: string; view?: string | null } => Boolean(x.url));
+  const byView = new Map(withUrl.filter((x) => x.view && views.some((v) => v.key === x.view)).map((x) => [x.view!, x.url]));
+  const photos = withUrl.filter((x) => !x.view || !views.some((v) => v.key === x.view)).map((x) => x.url);
+  // No views yet: the photos lead (labelled as photos); otherwise the four view slots come first.
+  const slots: { url?: string; label: string; waiting: boolean }[] = byView.size
+    ? [...views.map((v) => ({ url: byView.get(v.key), label: v.label, waiting: false })), ...photos.map((url) => ({ url, label: 'Photo', waiting: false }))]
+    : [...photos.map((url) => ({ url, label: 'Photo', waiting: false }))];
+  // Empty slots name the view they are for until there are photos or views to show.
+  while (slots.length < 4) slots.push({ label: byView.size || photos.length ? '' : views[slots.length]!.label, waiting: false });
+  // Views still being made show a spinner in their empty slots.
+  let left = pending;
+  for (const s of slots) {
+    if (s.url || left <= 0) continue;
+    s.waiting = true;
+    left--;
+  }
+  const shown = slots.slice(0, 8);
+  const gallery = shown.filter((s) => s.url).map((s) => ({ url: s.url!, label: LONG_LABEL[s.label] ?? s.label, short: s.label }));
   return (
-    <div className={cn('grid grid-cols-4 gap-1.5', className)}>
-      {Array.from({ length: slots }, (_, i) => {
-        const url = shown[i];
-        const label = i < 4 ? VIEW_LABELS[kind][i] : '';
-        return (
-          <div key={i} className={cn('relative overflow-hidden rounded-lg border bg-ink-950', kind === 'character' ? 'aspect-[3/4]' : 'aspect-video', url ? 'hairline' : 'border-dashed border-white/10')}>
-            {url ? (
-              <img src={url} alt={`${label || 'Reference'} view`} className="size-full object-cover" loading="lazy" />
-            ) : (
-              <span className="grid size-full place-items-center text-fog-500">{i < shown.length + pending ? <Loader2 className="size-4 animate-spin text-iris-300" /> : <Icon className="size-4" />}</span>
-            )}
-            {label && <span className="absolute bottom-0.5 left-1 rounded bg-black/60 px-1 text-[9px] text-white/85">{label}</span>}
-          </div>
-        );
-      })}
-    </div>
+    <>
+      <div className={cn('grid grid-cols-4 gap-1.5', className)}>
+        {shown.map((s, i) => {
+          const box = cn('relative overflow-hidden rounded-lg border bg-ink-950', kind === 'character' ? 'aspect-[9/16]' : 'aspect-video', s.url ? 'hairline' : 'border-dashed border-white/10');
+          const tag = s.label && <span className="pointer-events-none absolute bottom-0.5 left-1 rounded bg-black/60 px-1 text-[9px] text-white/85">{s.label}</span>;
+          return s.url ? (
+            <button key={i} type="button" onClick={() => setOpen(gallery.findIndex((g) => g.url === s.url))} aria-label={`Open the ${(LONG_LABEL[s.label] ?? s.label).toLowerCase() || 'reference'} image${name ? ` of ${name}` : ''}`} className={cn(box, 'group cursor-zoom-in transition hover:border-iris-400/70 focus-visible:border-iris-400')}>
+              <img src={s.url} alt="" className="size-full object-cover object-top transition duration-200 group-hover:scale-[1.03]" loading="lazy" />
+              {tag}
+            </button>
+          ) : (
+            <div key={i} className={box}>
+              <span className="grid size-full place-items-center text-fog-500">{s.waiting ? <Loader2 className="size-4 animate-spin text-iris-300" /> : <Icon className="size-4" />}</span>
+              {tag}
+            </div>
+          );
+        })}
+      </div>
+      <ImageViewer images={gallery} index={open} onIndex={setOpen} title={name} />
+    </>
   );
 }
 

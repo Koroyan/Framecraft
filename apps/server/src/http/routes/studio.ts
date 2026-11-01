@@ -343,7 +343,8 @@ export async function studioRoutes(app: FastifyInstance, ctx: AppContext) {
             .filter((x) => x.ownerId === r.id)
             .map(async (x) => {
               const a = refAssets.find((z) => z.id === x.assetId);
-              return a ? { assetId: a.id, isPrimary: x.isPrimary, url: await assetUrl(ctx, a), isFixture: a.isFixture } : null;
+              // `view`: which reference view the image is (front, side… / wide, reverse…), if it is one.
+              return a ? { assetId: a.id, isPrimary: x.isPrimary, url: await assetUrl(ctx, a), isFixture: a.isFixture, view: (a.source as { view?: string } | null)?.view ?? null } : null;
             }),
         ).then((l) => l.filter(Boolean)),
       })),

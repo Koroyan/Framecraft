@@ -142,7 +142,7 @@ export default function CharactersPage() {
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {data.characters.map((c) => (
             <Card key={c.id} className="overflow-hidden">
-              <ViewStrip kind="character" urls={c.references.slice().sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary)).map((r) => r.url)} pending={c.viewsPending} className="bg-ink-950/60 p-2" />
+              <ViewStrip kind="character" name={c.name} items={c.references.slice().sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary))} pending={c.viewsPending} className="bg-ink-950/60 p-2" />
               <div className="p-4">
                 <div className="flex items-center justify-between gap-2">
                   <div className="font-medium text-white">{c.name}</div>

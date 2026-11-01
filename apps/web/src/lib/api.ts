@@ -93,7 +93,7 @@ export type Character = {
   clothing: string;
   styleMeta: Record<string, string>;
   voice: Record<string, string | undefined>;
-  references: { assetId: string; isPrimary: boolean; url: string; isFixture: boolean }[];
+  references: { assetId: string; isPrimary: boolean; url: string; isFixture: boolean; view?: string | null }[];
   likenessConsentAt: string | null;
   /** Where the character is used (Character Bible). */
   usage?: { shots: number; generated: number; projects: number };
@@ -101,7 +101,7 @@ export type Character = {
   viewsPending?: number;
 };
 
-export type Location = { id: string; name: string; description: string; styleMeta?: Record<string, string>; references: { assetId: string; url: string }[]; usage?: { scenes: number; projects: number }; viewsPending?: number };
+export type Location = { id: string; name: string; description: string; styleMeta?: Record<string, string>; references: { assetId: string; url: string; view?: string | null }[]; usage?: { scenes: number; projects: number }; viewsPending?: number };
 
 export type { GenerationEstimate, PublicJob, PublicModel, TemplateDefinition, Timeline, VideoSpecInput };
 

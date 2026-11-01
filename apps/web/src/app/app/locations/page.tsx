@@ -64,7 +64,7 @@ export default function LocationsPage() {
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {list.map((l) => (
             <Card key={l.id} className="overflow-hidden">
-              <ViewStrip kind="location" urls={l.references.map((r) => r.url)} pending={l.viewsPending} className="bg-ink-950/60 p-2" />
+              <ViewStrip kind="location" name={l.name} items={l.references} pending={l.viewsPending} className="bg-ink-950/60 p-2" />
               <div className="p-4">
                 <div className="flex items-center justify-between gap-2">
                   <div className="truncate font-medium text-white">{l.name}</div>

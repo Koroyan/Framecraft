@@ -59,7 +59,7 @@ export async function productionRoutes(app: FastifyInstance, ctx: AppContext) {
     const u = requireUser(req);
     const { id } = parse(idParam, req.params);
     const m = await getMovie(ctx, u, id);
-    const urls = Object.fromEntries(await Promise.all(m.assets.map(async (a) => [a.id, { url: await assetUrl(ctx, a), isFixture: a.isFixture }] as const)));
+    const urls = Object.fromEntries(await Promise.all(m.assets.map(async (a) => [a.id, { url: await assetUrl(ctx, a), isFixture: a.isFixture, view: (a.source as { view?: string } | null)?.view ?? null }] as const)));
     const pub = async (j: typeof m.movieJob) => (j ? toPublicJob(ctx, j) : null);
     // Each shot's current dialogue takes, timed within the shot as in the film, so the shot preview
     // plays the dubbed voices (and mutes speech the video model rendered itself).

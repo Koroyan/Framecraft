@@ -126,7 +126,7 @@ type MovieData = {
   movieJob: PublicJob | null;
   renderJob: PublicJob | null;
   shotJobs: PublicJob[];
-  assetUrls: Record<string, { url: string; isFixture: boolean }>;
+  assetUrls: Record<string, { url: string; isFixture: boolean; view?: string | null }>;
   /** Per shot: its current dialogue takes (timed within the shot) and the clip's own audio level. */
   dub?: Record<string, ShotDub>;
 };
@@ -550,7 +550,7 @@ export default function DirectorMode({ params }: { params: Promise<{ id: string 
                   <div className="grid gap-3 md:grid-cols-2">
                     {d.characters.map((c) => (
                       <Card key={c.id} className="flex flex-col p-4">
-                        <ViewStrip kind="character" urls={c.referenceAssetIds.map((rid) => d.assetUrls[rid]?.url)} pending={c.viewsPending} />
+                        <ViewStrip kind="character" name={c.name} items={c.referenceAssetIds.map((rid) => ({ url: d.assetUrls[rid]?.url, view: d.assetUrls[rid]?.view }))} pending={c.viewsPending} />
                         <div className="mt-3 flex items-center gap-2">
                           <span className="font-medium text-white">{c.name}</span>
                           {c.projectId !== d.project.id && <Badge tone="iris">from your library</Badge>}
@@ -563,7 +563,7 @@ export default function DirectorMode({ params }: { params: Promise<{ id: string 
                     ))}
                     {d.locations.map((l) => (
                       <Card key={l.id} className="flex flex-col p-4">
-                        <ViewStrip kind="location" urls={l.referenceAssetIds.map((rid) => d.assetUrls[rid]?.url)} pending={l.viewsPending} />
+                        <ViewStrip kind="location" name={l.name} items={l.referenceAssetIds.map((rid) => ({ url: d.assetUrls[rid]?.url, view: d.assetUrls[rid]?.view }))} pending={l.viewsPending} />
                         <div className="mt-3 flex items-center gap-2">
                           <Badge tone="blue">Location</Badge>
                           <span className="font-medium text-white">{l.name}</span>
