@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { ASPECT_DIMENSIONS, movieBriefSchema, stillLook, type AspectRatio, type MovieBrief, type VideoSpecInput, type TimelineInput } from '@framecraft/shared';
 import type { AppContext } from '../context';
 import type { Db } from '../db/client';
@@ -15,7 +15,7 @@ import { enqueue, type QueueJob } from '../queue/queue';
 import { AppError, badRequest, notFound } from '../lib/errors';
 import { committedProviderSpendToday, getUserPlan, notify } from '../services/common';
 import { getConfig } from '../services/admin-config';
-import type { MoviePlan } from '../director/director';
+import type { MoviePlan, SavedCast } from '../director/director';
 import { clearVoiceSelection, dubTrack, dubsDialogue, estimateDialogue, filmDialogue, LIP_SYNC_DIRECTION, NO_SPEECH_DIRECTION, selectVoiceTake, shotSpeechTrack, startDubbing } from './dub';
 import { VIDEO_MODELS } from '../catalog/video-models';
 import { estimateSoundtrack, soundtrackTrack, startSoundtrack } from './soundtrack';
@@ -33,6 +33,15 @@ export async function createMovie(ctx: AppContext, user: SessionLike, briefInput
   for (const r of brief.references) {
     const a = await getOwnedAsset(ctx, user.id, r.assetId);
     if (a.mediaType !== 'image') throw badRequest(`${r.token} must be an image`);
+  }
+  // Saved characters and locations must be the user's own.
+  if (brief.characterIds.length) {
+    const own = await ctx.db.select({ id: characters.id }).from(characters).where(and(inArray(characters.id, brief.characterIds), eq(characters.userId, user.id)));
+    if (own.length !== new Set(brief.characterIds).size) throw notFound('Character');
+  }
+  if (brief.locationIds.length) {
+    const own = await ctx.db.select({ id: locations.id }).from(locations).where(and(inArray(locations.id, brief.locationIds), eq(locations.userId, user.id)));
+    if (own.length !== new Set(brief.locationIds).size) throw notFound('Location');
   }
   return ctx.db.transaction(async (tx) => {
     const [project] = await tx
@@ -56,6 +65,9 @@ export async function runMoviePlan(ctx: AppContext, qj: QueueJob) {
   const revision = (job.request as { revision?: string }).revision;
   const replan = Boolean((job.request as { replan?: boolean }).replan);
   try {
+    const [proj] = await ctx.db.select({ settings: projects.settings }).from(projects).where(eq(projects.id, job.projectId!));
+    const castIds = [...new Set([...((proj?.settings as { cartoon?: { characterIds?: string[] } } | undefined)?.cartoon?.characterIds ?? []), ...brief.characterIds])];
+    const saved = await savedCast(ctx.db, job.userId, castIds, brief.locationIds);
     let plan;
     if (revision) {
       // Chat edit ("make her older, add a scene at the market…"): revise the plan as it is now,
@@ -63,13 +75,10 @@ export async function runMoviePlan(ctx: AppContext, qj: QueueJob) {
       await ctx.db.update(generationJobs).set({ phase: 'AI Director is revising the screenplay' }).where(eq(generationJobs.id, job.id));
       plan = await ctx.director.revisePlan(await planFromDb(ctx.db, job.projectId!, brief), revision, brief);
     } else {
-      const images = ctx.director.llmAvailable ? await referenceImagesForLlm(ctx, job.userId, brief) : [];
-      plan = await ctx.director.screenplay(brief, images);
+      const images = ctx.director.llmAvailable ? [...(await referenceImagesForLlm(ctx, job.userId, brief)), ...(await savedCastImagesForLlm(ctx, job.userId, saved))] : [];
+      plan = await ctx.director.screenplay(brief, images, saved.forDirector);
     }
-    const [proj] = await ctx.db.select({ settings: projects.settings }).from(projects).where(eq(projects.id, job.projectId!));
-    const castIds = (proj?.settings as { cartoon?: { characterIds?: string[] } } | undefined)?.cartoon?.characterIds ?? [];
-    const cast = castIds.length ? await ctx.db.select({ id: characters.id, name: characters.name }).from(characters).where(and(inArray(characters.id, castIds), eq(characters.userId, job.userId))) : [];
-    await persistPlan(ctx.db, job.userId, job.projectId!, plan, plan.source, brief, { replace: Boolean(revision) || replan, cast });
+    await persistPlan(ctx.db, job.userId, job.projectId!, plan, plan.source, brief, { replace: Boolean(revision) || replan, cast: saved.cast, places: saved.places });
     if (replan) await ctx.db.update(projects).set({ settings: sql`${projects.settings} || ${JSON.stringify({ brief })}::jsonb`, aspectRatio: brief.aspectRatio, updatedAt: new Date() }).where(eq(projects.id, job.projectId!));
     await ctx.db
       .update(generationJobs)
@@ -98,16 +107,59 @@ async function referenceImagesForLlm(ctx: AppContext, userId: string, brief: Mov
   return out;
 }
 
+/** The saved characters / locations a film casts: for the Director's prompt and for re-use when the plan is saved. */
+async function savedCast(db: Db, userId: string, characterIds: string[], locationIds: string[]) {
+  const chars = characterIds.length ? await db.select().from(characters).where(and(inArray(characters.id, characterIds), eq(characters.userId, userId))) : [];
+  const locs = locationIds.length ? await db.select().from(locations).where(and(inArray(locations.id, locationIds), eq(locations.userId, userId))) : [];
+  // In the order the user picked them.
+  chars.sort((a, b) => characterIds.indexOf(a.id) - characterIds.indexOf(b.id));
+  locs.sort((a, b) => locationIds.indexOf(a.id) - locationIds.indexOf(b.id));
+  const forDirector: SavedCast = {
+    characters: chars.map((c) => {
+      const v = c.voice as { style?: string; gender?: string };
+      return { name: c.name, description: c.description, appearance: Object.values(c.appearance ?? {}).filter(Boolean).join(', '), clothing: c.clothing, voiceStyle: v.style, ...(v.gender === 'male' || v.gender === 'female' ? { gender: v.gender } : {}) };
+    }),
+    locations: locs.map((l) => ({ name: l.name, description: l.description })),
+  };
+  return { forDirector, cast: chars.map((c) => ({ id: c.id, name: c.name })), places: locs.map((l) => ({ id: l.id, name: l.name })), charIds: chars.map((c) => c.id), locIds: locs.map((l) => l.id) };
+}
+
+/** One photo of each saved character / location, so the AI Director sees who and where they are. */
+async function savedCastImagesForLlm(ctx: AppContext, userId: string, saved: Awaited<ReturnType<typeof savedCast>>): Promise<LlmImage[]> {
+  const out: LlmImage[] = [];
+  const pick = async (label: string, assetId: string | undefined) => {
+    if (!assetId || out.length >= 8) return;
+    const a = await getOwnedAsset(ctx, userId, assetId).catch(() => null);
+    if (!a || a.mediaType !== 'image') return;
+    const src = await downloadAssetToTemp(ctx, a);
+    const small = tmpFile('.jpg');
+    try {
+      await ffmpeg(['-i', src, '-vf', "scale='min(768,iw)':-2", '-frames:v', '1', '-q:v', '5', small]);
+      out.push({ label, mediaType: 'image/jpeg', data: (await fsp.readFile(small)).toString('base64') });
+    } finally {
+      await Promise.all([fsp.rm(src, { force: true }), fsp.rm(small, { force: true })]);
+    }
+  };
+  for (const [i, id] of saved.charIds.entries()) {
+    const [ref] = (await ctx.db.select().from(characterReferences).where(eq(characterReferences.characterId, id))).sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary));
+    await pick(`Saved character ${saved.forDirector.characters[i]!.name}:`, ref?.assetId);
+  }
+  for (const [i, id] of saved.locIds.entries()) {
+    const [ref] = await ctx.db.select().from(locationReferences).where(eq(locationReferences.locationId, id)).limit(1);
+    await pick(`Saved location ${saved.forDirector.locations[i]!.name}:`, ref?.assetId);
+  }
+  return out;
+}
+
 /**
  * The project's current plan rebuilt from the database (so revisions see Director-mode edits),
  * with reference photos mapped back to their photoN tokens.
  */
 export async function planFromDb(db: Db, projectId: string, brief: MovieBrief): Promise<MoviePlan> {
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
-  const chars = await db.select().from(characters).where(eq(characters.projectId, projectId)).orderBy(asc(characters.createdAt));
-  const locs = await db.select().from(locations).where(eq(locations.projectId, projectId)).orderBy(asc(locations.createdAt));
   const sceneRows = await db.select().from(scenes).where(eq(scenes.projectId, projectId)).orderBy(asc(scenes.index));
   const shotRows = await db.select().from(shots).where(eq(shots.projectId, projectId)).orderBy(asc(shots.index));
+  const { chars, locs } = await filmCast(db, projectId, shotRows, sceneRows);
   const charRefs = chars.length ? await db.select().from(characterReferences).where(inArray(characterReferences.characterId, chars.map((c) => c.id))) : [];
   const locRefs = locs.length ? await db.select().from(locationReferences).where(inArray(locationReferences.locationId, locs.map((l) => l.id))) : [];
   const tokenOf = new Map(brief.references.map((r) => [r.assetId, r.token]));
@@ -152,8 +204,29 @@ export async function planFromDb(db: Db, projectId: string, brief: MovieBrief): 
   };
 }
 
+/**
+ * The film's characters and locations: the ones made for it plus saved library ones it casts
+ * (referenced by its shots and scenes), oldest first.
+ */
+async function filmCast(db: Db, projectId: string, shotRows: Shot[], sceneRows: (typeof scenes.$inferSelect)[], userId?: string) {
+  const usedChars = [...new Set(shotRows.flatMap((s) => s.characterIds))];
+  const usedLocs = [...new Set(sceneRows.map((s) => s.locationId).filter(Boolean) as string[])];
+  const own = (col: typeof characters.userId | typeof locations.userId) => (userId ? eq(col, userId) : sql`true`);
+  const chars = await db
+    .select()
+    .from(characters)
+    .where(and(own(characters.userId), usedChars.length ? or(eq(characters.projectId, projectId), inArray(characters.id, usedChars)) : eq(characters.projectId, projectId)))
+    .orderBy(asc(characters.createdAt));
+  const locs = await db
+    .select()
+    .from(locations)
+    .where(and(own(locations.userId), usedLocs.length ? or(eq(locations.projectId, projectId), inArray(locations.id, usedLocs)) : eq(locations.projectId, projectId)))
+    .orderBy(asc(locations.createdAt));
+  return { chars, locs };
+}
+
 /** Replace the project's scenes/shots with a plan. `replace` also replaces its characters & locations (re-plans). */
-export async function persistPlan(db: Db, userId: string, projectId: string, plan: MoviePlan, source: string, brief?: MovieBrief, opts: { replace?: boolean; cast?: { id: string; name: string }[] } = {}) {
+export async function persistPlan(db: Db, userId: string, projectId: string, plan: MoviePlan, source: string, brief?: MovieBrief, opts: { replace?: boolean; cast?: { id: string; name: string }[]; places?: { id: string; name: string }[] } = {}) {
   const tokenAsset = new Map((brief?.references ?? []).map((r) => [r.token, r.assetId]));
   const assetsFor = (tokens: string[] | undefined) => [...new Set((tokens ?? []).map((t) => tokenAsset.get(t)).filter(Boolean) as string[])];
   await db.transaction(async (tx) => {
@@ -186,6 +259,12 @@ export async function persistPlan(db: Db, userId: string, projectId: string, pla
     }
     const locIds = new Map<string, string>();
     for (const l of plan.locations) {
+      // A saved location is used as itself: its photos carry over to every scene set there.
+      const ownPlace = opts.places?.find((x) => same(l.name, x.name));
+      if (ownPlace) {
+        locIds.set(l.key, ownPlace.id);
+        continue;
+      }
       const [row] = await t.insert(locations).values({ userId, projectId, name: l.name, description: l.description }).returning({ id: locations.id });
       locIds.set(l.key, row!.id);
       const refs = assetsFor(l.referenceTokens);
@@ -252,8 +331,7 @@ export async function getMovie(ctx: AppContext, user: SessionLike, projectId: st
   const project = await getOwnedProject(ctx, user, projectId);
   const sceneRows = await ctx.db.select().from(scenes).where(eq(scenes.projectId, projectId)).orderBy(asc(scenes.index));
   const shotRows = await ctx.db.select().from(shots).where(eq(shots.projectId, projectId)).orderBy(asc(shots.index));
-  const chars = await ctx.db.select().from(characters).where(and(eq(characters.projectId, projectId), eq(characters.userId, user.id)));
-  const locs = await ctx.db.select().from(locations).where(and(eq(locations.projectId, projectId), eq(locations.userId, user.id)));
+  const { chars, locs } = await filmCast(ctx.db, projectId, shotRows, sceneRows, user.id);
   const jobs = await ctx.db.select().from(generationJobs).where(eq(generationJobs.projectId, projectId)).orderBy(asc(generationJobs.createdAt));
   const charRefs = chars.length ? await ctx.db.select().from(characterReferences).where(inArray(characterReferences.characterId, chars.map((c) => c.id))) : [];
   const locRefs = locs.length ? await ctx.db.select().from(locationReferences).where(inArray(locationReferences.locationId, locs.map((l) => l.id))) : [];

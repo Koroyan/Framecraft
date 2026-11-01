@@ -2,7 +2,7 @@ import fsp from 'node:fs/promises';
 import { and, eq, sql } from 'drizzle-orm';
 import { ASPECT_DIMENSIONS, type AspectRatio } from '@framecraft/shared';
 import type { AppContext } from '../context';
-import { characterReferences, generationJobs, shots } from '../db/schema';
+import { characterReferences, generationJobs, locationReferences, shots } from '../db/schema';
 import { IMAGE_MODELS } from '../catalog/media-models';
 import { generatePlaceholderImage } from '../media/ffmpeg';
 import { fetchProviderOutput, getOwnedAsset, providerInputUrl, storeAsset, tmpFile } from '../services/assets';
@@ -16,7 +16,7 @@ import { ProviderHttpError } from '../providers/video/types';
 import { httpErrorToNormalized } from '../providers/video/base';
 import type { SessionLike } from '../generation/service';
 
-export type ImagePurpose = 'storyboard' | 'character' | 'frame';
+export type ImagePurpose = 'storyboard' | 'character' | 'location' | 'frame';
 
 export type ImageJobInput = {
   prompt: string;
@@ -26,6 +26,11 @@ export type ImageJobInput = {
   projectId?: string;
   shotId?: string;
   characterId?: string;
+  locationId?: string;
+  /** A reference view (front, side… / wide, reverse…) of the character or location. */
+  view?: string;
+  /** Drafted until this image job finishes; its picture then becomes this job's reference. */
+  waitForJobId?: string;
   idempotencyKey: string;
 };
 
@@ -41,12 +46,15 @@ export async function estimateImage(ctx: AppContext, needsRefs: boolean) {
  * Storyboard frames / character sheets. Without an image provider, development
  * mode produces clearly labelled placeholder frames (free, never presented as AI).
  */
-/** `link.parentJobId` attaches the frame to a film job (keyframes): the film continues when it finishes. */
-export async function createImageJob(ctx: AppContext, user: SessionLike, input: ImageJobInput, link: { parentJobId?: string } = {}) {
+/**
+ * `link.parentJobId` attaches the frame to a film job (keyframes): the film continues when it finishes.
+ * `link.draft`: reserve the credits now but start only when `input.waitForJobId` has finished.
+ */
+export async function createImageJob(ctx: AppContext, user: SessionLike, input: ImageJobInput, link: { parentJobId?: string; draft?: boolean } = {}) {
   const [existing] = await ctx.db.select().from(generationJobs).where(and(eq(generationJobs.userId, user.id), eq(generationJobs.idempotencyKey, input.idempotencyKey)));
   if (existing) return existing;
   for (const id of input.referenceAssetIds ?? []) await getOwnedAsset(ctx, user.id, id);
-  const est = await estimateImage(ctx, Boolean(input.referenceAssetIds?.length));
+  const est = await estimateImage(ctx, Boolean(input.referenceAssetIds?.length) || Boolean(link.draft));
   const fixture = !est.available;
   if (fixture && !ctx.env.devFixturesEnabled) throw configurationRequired('Image generation needs FAL_KEY or RUNWAYML_API_SECRET and LIVE_GENERATION_ENABLED=true.');
   return ctx.db.transaction(async (tx) => {
@@ -58,8 +66,8 @@ export async function createImageJob(ctx: AppContext, user: SessionLike, input: 
         shotId: input.shotId,
         parentJobId: link.parentJobId,
         kind: 'image',
-        status: 'queued',
-        phase: fixture ? 'Creating placeholder frame' : 'Waiting in queue',
+        status: link.draft ? 'draft' : 'queued',
+        phase: link.draft ? 'Waiting for the first view' : fixture ? 'Creating placeholder frame' : 'Waiting in queue',
         request: input,
         modelKey: est.modelKey,
         providerKey: fixture ? 'fixture' : est.modelKey?.split(':')[0],
@@ -73,7 +81,7 @@ export async function createImageJob(ctx: AppContext, user: SessionLike, input: 
       const r = await reserveCredits(tx as never, { userId: user.id, amount: est.credits, jobId: job!.id, description: `Image: ${input.purpose}`, idempotencyKey: `reserve:${job!.id}` });
       await tx.update(generationJobs).set({ reservationId: r.reservationId }).where(eq(generationJobs.id, job!.id));
     }
-    await enqueue(tx as never, 'image.run', { jobId: job!.id }, { queue: 'generation', dedupeKey: `image:${job!.id}`, maxAttempts: 3 });
+    if (!link.draft) await enqueue(tx as never, 'image.run', { jobId: job!.id }, { queue: 'generation', dedupeKey: `image:${job!.id}`, maxAttempts: 3 });
     return job!;
   });
 }
@@ -126,12 +134,12 @@ export async function runImageJob(ctx: AppContext, qj: QueueJob): Promise<JobRes
     const asset = await storeAsset(ctx, {
       userId: job.userId,
       projectId: job.projectId,
-      kind: input.purpose === 'character' ? 'reference' : 'generated',
+      kind: input.purpose === 'character' || input.purpose === 'location' ? 'reference' : 'generated',
       mediaType: 'image',
       filePath: file,
       mimeType: 'image/jpeg',
       isFixture: job.isFixture,
-      source: { jobId: job.id, purpose: input.purpose, model: job.modelKey, aiGenerated: !job.isFixture },
+      source: { jobId: job.id, purpose: input.purpose, model: job.modelKey, aiGenerated: !job.isFixture, ...(input.view ? { view: input.view } : {}) },
       makeThumbnail: false,
     });
     let charged = 0;
@@ -142,10 +150,20 @@ export async function runImageJob(ctx: AppContext, qj: QueueJob): Promise<JobRes
         .update(shots)
         .set({ storyboardAssetId: asset.id, status: sql`case when ${shots.status} = 'planned' then 'storyboarded' else ${shots.status} end`, updatedAt: new Date() })
         .where(eq(shots.id, input.shotId));
-    if (input.characterId && input.purpose === 'character') await ctx.db.insert(characterReferences).values({ characterId: input.characterId, assetId: asset.id, label: 'AI character sheet' }).onConflictDoNothing();
+    if (input.characterId && input.purpose === 'character') {
+      // The first view of a character without photos becomes its primary reference.
+      const has = await ctx.db.select({ id: characterReferences.assetId }).from(characterReferences).where(eq(characterReferences.characterId, input.characterId)).limit(1);
+      await ctx.db
+        .insert(characterReferences)
+        .values({ characterId: input.characterId, assetId: asset.id, label: input.view ? `AI view: ${input.view}` : 'AI character sheet', isPrimary: !has.length })
+        .onConflictDoNothing();
+    }
+    if (input.locationId && input.purpose === 'location') await ctx.db.insert(locationReferences).values({ locationId: input.locationId, assetId: asset.id }).onConflictDoNothing();
+    await releaseWaiting(ctx, job.id, asset.id);
     await set({ status: 'completed', phase: job.isFixture ? 'Placeholder ready (not AI generated)' : 'Completed', outputAssetId: asset.id, chargedCredits: charged, actualCostUsd: costUsd, completedAt: new Date(), progress: 1 });
   } catch (err) {
     if (job.reservationId) await settleReservation(ctx.db, { reservationId: job.reservationId, chargeAmount: 0, description: 'Image generation failed — credits returned' });
+    await releaseWaiting(ctx, job.id, null);
     const message = err instanceof ProviderHttpError ? httpErrorToNormalized(err).message : (err as Error).message;
     ctx.log.warn(`image job ${job.id} failed`, { message });
     await set({ status: 'failed', phase: 'Failed', error: { code: 'image_failed', message: message.slice(0, 300), retryable: true }, completedAt: new Date() });
@@ -153,4 +171,29 @@ export async function runImageJob(ctx: AppContext, qj: QueueJob): Promise<JobRes
     await fsp.rm(file, { force: true });
   }
   if (job.parentJobId) await enqueue(ctx.db, 'movie.check', { movieJobId: job.parentJobId }, { queue: 'generation', dedupeKey: `movie-check:${job.parentJobId}:${job.id}` });
+}
+
+/**
+ * Jobs drafted behind this one (the other reference views): start them with its picture as their
+ * reference — or, when it failed, cancel them and return their credits.
+ */
+async function releaseWaiting(ctx: AppContext, jobId: string, assetId: string | null) {
+  const waiting = await ctx.db
+    .select()
+    .from(generationJobs)
+    .where(and(eq(generationJobs.status, 'draft'), eq(generationJobs.kind, 'image'), sql`${generationJobs.request}->>'waitForJobId' = ${jobId}`));
+  for (const w of waiting) {
+    if (!assetId) {
+      if (w.reservationId) await settleReservation(ctx.db, { reservationId: w.reservationId, chargeAmount: 0, description: 'First view failed — credits returned' });
+      await ctx.db.update(generationJobs).set({ status: 'cancelled', phase: 'Cancelled — the first view failed', completedAt: new Date(), updatedAt: new Date() }).where(eq(generationJobs.id, w.id));
+      continue;
+    }
+    const req = w.request as unknown as ImageJobInput;
+    const started = await ctx.db
+      .update(generationJobs)
+      .set({ status: 'queued', phase: w.isFixture ? 'Creating placeholder frame' : 'Waiting in queue', request: { ...req, referenceAssetIds: [assetId, ...(req.referenceAssetIds ?? [])].slice(0, 4) }, updatedAt: new Date() })
+      .where(and(eq(generationJobs.id, w.id), eq(generationJobs.status, 'draft')))
+      .returning({ id: generationJobs.id });
+    if (started.length) await enqueue(ctx.db, 'image.run', { jobId: w.id }, { queue: 'generation', dedupeKey: `image:${w.id}`, maxAttempts: 3 });
+  }
 }

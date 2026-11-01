@@ -97,9 +97,11 @@ export type Character = {
   likenessConsentAt: string | null;
   /** Where the character is used (Character Bible). */
   usage?: { shots: number; generated: number; projects: number };
+  /** Reference views still being made. */
+  viewsPending?: number;
 };
 
-export type Location = { id: string; name: string; description: string; styleMeta?: Record<string, string>; references: { assetId: string; url: string }[]; usage?: { scenes: number; projects: number } };
+export type Location = { id: string; name: string; description: string; styleMeta?: Record<string, string>; references: { assetId: string; url: string }[]; usage?: { scenes: number; projects: number }; viewsPending?: number };
 
 export type { GenerationEstimate, PublicJob, PublicModel, TemplateDefinition, Timeline, VideoSpecInput };
 

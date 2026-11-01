@@ -169,6 +169,12 @@ export const movieBriefSchema = z.object({
     .max(12)
     .default([])
     .refine((refs) => new Set(refs.map((r) => r.token)).size === refs.length, 'Each photo token must be unique'),
+  /**
+   * Saved characters and locations (the user's library) to cast in the film as they are — same
+   * name, look and photos. Empty: the AI Director invents the cast and places itself.
+   */
+  characterIds: z.array(z.string().uuid()).max(5).default([]),
+  locationIds: z.array(z.string().uuid()).max(3).default([]),
 });
 export type MovieBrief = z.infer<typeof movieBriefSchema>;
 export type MovieReference = MovieBrief['references'][number];

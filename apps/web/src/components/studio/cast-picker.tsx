@@ -26,7 +26,7 @@ export function useElements(kind: Kind) {
  * Pick saved characters / locations for any video. Their photos and descriptions keep faces and
  * places consistent (the first frame is drawn from them). New ones can be created right here.
  */
-export function CastPicker({ characterIds, locationIds, onCharacters, onLocations }: { characterIds: string[]; locationIds: string[]; onCharacters: (ids: string[]) => void; onLocations: (ids: string[]) => void }) {
+export function CastPicker({ characterIds, locationIds, onCharacters, onLocations, maxCharacters = 5, maxLocations = 2, hint }: { characterIds: string[]; locationIds: string[]; onCharacters: (ids: string[]) => void; onLocations: (ids: string[]) => void; maxCharacters?: number; maxLocations?: number; hint?: string }) {
   const chars = useElements('character');
   const locs = useElements('location');
   const [creating, setCreating] = useState<Kind | null>(null);
@@ -82,7 +82,7 @@ export function CastPicker({ characterIds, locationIds, onCharacters, onLocation
     <div className="space-y-2.5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <span className="text-xs font-medium text-fog-200">
-          Characters &amp; places <span className="font-normal text-fog-400">· optional — keeps the same face and place in every video</span>
+          Characters &amp; places <span className="font-normal text-fog-400">· {hint ?? 'optional — keeps the same face and place in every video'}</span>
         </span>
         <span className="text-[11px] text-fog-500">
           or type <kbd className="rounded bg-white/[0.06] px-1 font-mono text-fog-300">@</kbd> in the description
@@ -102,7 +102,7 @@ export function CastPicker({ characterIds, locationIds, onCharacters, onLocation
         open={Boolean(open)}
         onOpenChange={(o) => !o && setOpen(null)}
         title={open === 'character' ? 'Choose characters' : 'Choose a place'}
-        description={open === 'character' ? 'Pick up to 5 saved characters. Their photos keep the face the same.' : 'Pick up to 2 saved places.'}
+        description={open === 'character' ? `Pick up to ${maxCharacters} saved characters. Their photos keep the face the same.` : `Pick up to ${maxLocations} saved places.`}
         footer={
           <>
             <Button
@@ -127,7 +127,7 @@ export function CastPicker({ characterIds, locationIds, onCharacters, onLocation
               const Icon = open === 'character' ? UserRound : MapPin;
               return (
                 <div key={e.id} className={cn('group flex items-center gap-2 rounded-xl border p-1.5 transition', on ? 'border-iris-400/60 bg-iris-500/10' : 'border-transparent hover:bg-white/[0.04]')}>
-                  <button type="button" aria-pressed={on} onClick={() => (open === 'character' ? toggle(characterIds, e.id, 5, onCharacters) : toggle(locationIds, e.id, 2, onLocations))} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
+                  <button type="button" aria-pressed={on} onClick={() => (open === 'character' ? toggle(characterIds, e.id, maxCharacters, onCharacters) : toggle(locationIds, e.id, maxLocations, onLocations))} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
                     {e.references[0] ? <img src={e.references[0].url} alt="" className="size-10 rounded-lg object-cover" /> : <span className="grid size-10 place-items-center rounded-lg bg-white/[0.06]"><Icon className="size-4" /></span>}
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm text-white">{e.name}</span>
@@ -163,7 +163,7 @@ export function CastPicker({ characterIds, locationIds, onCharacters, onLocation
       <QuickCreate
         kind={creating}
         onClose={() => setCreating(null)}
-        onCreated={(kind, id) => (kind === 'character' ? onCharacters([...characterIds, id].slice(-5)) : onLocations([...locationIds, id].slice(-2)))}
+        onCreated={(kind, id) => (kind === 'character' ? onCharacters([...characterIds, id].slice(-maxCharacters)) : onLocations([...locationIds, id].slice(-maxLocations)))}
       />
     </div>
   );

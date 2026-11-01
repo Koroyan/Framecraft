@@ -75,6 +75,23 @@ export const moviePlanSchema = z.object({
 });
 export type MoviePlan = z.infer<typeof moviePlanSchema>;
 
+/** Characters and places from the user's library, cast in a film as they are. */
+export type SavedCast = {
+  characters: { name: string; description: string; appearance: string; clothing: string; gender?: 'male' | 'female'; voiceStyle?: string }[];
+  locations: { name: string; description: string }[];
+};
+
+function savedCastText(saved?: SavedCast) {
+  if (!saved || (!saved.characters.length && !saved.locations.length)) return '';
+  const chars = saved.characters.length
+    ? `\nSaved characters from the user's library — cast them exactly as described and keep their names (keys c1…c${saved.characters.length} in this order, before any new character; invent others only if the story needs them): ${saved.characters.map((c, i) => `${i + 1}) ${c.name} — ${c.description}${c.appearance ? `; looks: ${c.appearance}` : ''}${c.clothing ? `; wears: ${c.clothing}` : ''}`).join(' ')}`
+    : '\nNo saved characters: invent the characters yourself.';
+  const locs = saved.locations.length
+    ? `\nSaved locations from the user's library — use them as the story's places and keep their names (keys l1…l${saved.locations.length} in this order): ${saved.locations.map((l, i) => `${i + 1}) ${l.name} — ${l.description}`).join(' ')}`
+    : '\nNo saved locations: invent the places yourself.';
+  return `${chars}${locs}`;
+}
+
 const LANG_NAME: Record<string, string> = { en: 'English', ka: 'Georgian', ru: 'Russian' };
 
 const SYSTEM_PROMPTS = {
@@ -170,7 +187,7 @@ export class Director {
     );
   }
 
-  async screenplay(brief: MovieBrief, images: LlmImage[] = []) {
+  async screenplay(brief: MovieBrief, images: LlmImage[] = [], saved?: SavedCast) {
     const refs = brief.references.length
       ? `\nReference photos supplied by the user (attached above, in order): ${brief.references.map((r) => `${r.token}${r.note ? ` — ${r.note}` : ''}`).join('; ')}. Use them for the characters, places or objects the story text connects them to; if the text does not mention a photo, use it where it fits best.`
       : '\nNo reference photos: invent the characters, locations and look yourself.';
@@ -180,11 +197,11 @@ export class Director {
           tier: 'smart',
           system: SYSTEM_PROMPTS.screenplay,
           schema: moviePlanSchema,
-          prompt: `Film idea: ${brief.idea}\nLength: ${brief.lengthSec} seconds\nAspect ratio: ${brief.aspectRatio}\nVisual style: ${brief.style}\nGenre: ${brief.genre ?? 'choose the best fit'}\nDialogue: ${brief.withDialogue ? `yes, written in ${LANG_NAME[brief.language] ?? 'English'}` : 'no dialogue'}\nMusic: ${brief.withMusic ? 'yes' : 'no'}${refs}`,
+          prompt: `Film idea: ${brief.idea}\nLength: ${brief.lengthSec} seconds\nAspect ratio: ${brief.aspectRatio}\nVisual style: ${brief.style}\nGenre: ${brief.genre ?? 'choose the best fit'}\nDialogue: ${brief.withDialogue ? `yes, written in ${LANG_NAME[brief.language] ?? 'English'}` : 'no dialogue'}\nMusic: ${brief.withMusic ? 'yes' : 'no'}${refs}${savedCastText(saved)}`,
           images,
           maxTokens: 32000,
         }),
-      () => offlineScreenplay(brief),
+      () => offlineScreenplay(brief, saved),
     );
     return { ...res, ...sanitizePlan(res, brief) };
   }
@@ -251,7 +268,7 @@ function offlineSocialCopy(topic: string, platform: string, durationSec: number)
   };
 }
 
-function offlineScreenplay(brief: MovieBrief): MoviePlan {
+function offlineScreenplay(brief: MovieBrief, saved?: SavedCast): MoviePlan {
   const idea = brief.idea.trim().replace(/\.$/, '');
   const sceneCount = Math.min(12, Math.max(2, Math.round(brief.lengthSec / 20)));
   const perScene = brief.lengthSec / sceneCount;
@@ -260,7 +277,11 @@ function offlineScreenplay(brief: MovieBrief): MoviePlan {
   const role = roleMatch?.[1] ? roleMatch[1].replace(/\b\w/g, (c) => c.toUpperCase()) : 'The Protagonist';
   const refs = classifyReferences(brief);
   const charRefs = refs.filter((r) => r.kind === 'character');
-  const characters: MoviePlan['characters'] = charRefs.length
+  // Saved characters are the cast as they are; photos of new people only add to them.
+  const savedChars: MoviePlan['characters'] = (saved?.characters ?? []).map((c, i) => ({ key: `c${i + 1}`, name: c.name, description: c.description, appearance: c.appearance || 'as in the saved character', clothing: c.clothing || 'as in the saved character', voiceStyle: c.voiceStyle ?? 'natural', ...(c.gender ? { gender: c.gender } : {}), referenceTokens: [] }));
+  const characters: MoviePlan['characters'] = savedChars.length
+    ? savedChars
+    : charRefs.length
     ? charRefs.slice(0, 5).map((r, i) => ({
         key: `c${i + 1}`,
         name: r.note ? r.note.slice(0, 40) : i === 0 ? (role.startsWith('The') ? role : `The ${role}`) : `Character ${i + 1}`,
@@ -272,7 +293,10 @@ function offlineScreenplay(brief: MovieBrief): MoviePlan {
       }))
     : [{ key: 'c1', name: role.startsWith('The') ? role : `The ${role}`, description: `Main character of: ${idea}`, appearance: 'distinctive, consistent appearance (edit to describe face, hair and age)', clothing: 'signature outfit (edit to describe)', voiceStyle: 'calm, determined', referenceTokens: [] }];
   const locRefs = refs.filter((r) => r.kind === 'location');
-  const locations: MoviePlan['locations'] = locRefs.length
+  const savedLocs: MoviePlan['locations'] = (saved?.locations ?? []).map((l, i) => ({ key: `l${i + 1}`, name: l.name, description: l.description, referenceTokens: [] }));
+  const locations: MoviePlan['locations'] = savedLocs.length
+    ? savedLocs
+    : locRefs.length
     ? locRefs.map((r, i) => ({ key: `l${i + 1}`, name: r.note ? r.note.slice(0, 40) : `Location ${i + 1}`, description: r.note ? `${r.note}, as in the user’s reference photo.` : 'The place in the user’s reference photo.', referenceTokens: [r.token] }))
     : [{ key: 'l1', name: 'Main location', description: `Primary setting of: ${idea}`, referenceTokens: [] }];
   const objectTokens = refs.filter((r) => r.kind === 'object').map((r) => r.token);

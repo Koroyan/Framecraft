@@ -2,14 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ImageIcon, Pencil, Plus, Trash2, Users } from 'lucide-react';
+import { Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { CARTOON_STYLES, LANGUAGES } from '@framecraft/shared';
 import { useBrandKits } from '@/lib/brand';
 import { api, ApiError, type Asset, type Character } from '@/lib/api';
 import { Badge, Button, Card, Dialog, EmptyState, Field, Input, NativeSelect, PageHeader, Skeleton, Textarea } from '@/components/ui';
 import { ImageSlot } from '@/components/studio/upload';
-import { newKey } from '@/lib/utils';
+import { ViewStrip, ViewsButton } from '@/components/studio/reference-views';
 
 type Form = {
   name: string;
@@ -44,7 +44,8 @@ const lookOf = (c: { description: string; appearance: unknown; clothing: string;
 
 export default function CharactersPage() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ['characters'], queryFn: () => api<{ characters: Character[] }>('/api/characters') });
+  const { data, isLoading } = useQuery({ queryKey: ['characters'], queryFn: () => api<{ characters: Character[] }>('/api/characters'), refetchInterval: (q) => (q.state.data?.characters.some((c) => (c.viewsPending ?? 0) > 0) ? 3000 : false) });
+  const [removing, setRemoving] = useState<Character | null>(null);
   const brands = useBrandKits();
   const [before, setBefore] = useState('');
   const [editing, setEditing] = useState<{ id?: string; form: Form } | null>(null);
@@ -66,7 +67,8 @@ export default function CharactersPage() {
             clothing: c.clothing,
             voiceStyle: c.voice.style ?? '',
             voiceLanguage: c.voice.language ?? 'en',
-            refs: [...c.references.slice().sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary)).map((r) => ({ id: r.assetId, url: r.url })), null, null, null, null].slice(0, 4),
+            // Room for every reference (four views and a photo), plus one empty slot, up to eight.
+            refs: [...c.references.slice().sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary)).map((r) => ({ id: r.assetId, url: r.url })), ...Array<null>(8).fill(null)].slice(0, Math.min(8, Math.max(4, c.references.length + 1))),
             consent: Boolean(c.likenessConsentAt),
             kind: c.styleMeta.kind === 'mascot' ? 'mascot' : 'character',
             brandId: c.styleMeta.brandId ?? '',
@@ -115,19 +117,6 @@ export default function CharactersPage() {
     }
   };
 
-  const sheet = async (id: string) => {
-    try {
-      // A reference sheet is a paid image: ask with its price first.
-      const est = await api<{ available: boolean; credits: number }>(`/api/characters/${id}/sheet/estimate`);
-      if (!est.available) return void toast.error('Image generation is not set up on this server.');
-      if (!window.confirm(`Create a reference sheet (front, side, back and three expressions) for about ${est.credits} credits?`)) return;
-      await api(`/api/characters/${id}/sheet`, { body: { idempotencyKey: newKey() } });
-      toast.success('Character sheet queued — it will appear as a reference image.');
-      setTimeout(() => qc.invalidateQueries({ queryKey: ['characters'] }), 4000);
-    } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : 'Could not create sheet');
-    }
-  };
 
   const set = (patch: Partial<Form>) => setEditing((e) => (e ? { ...e, form: { ...e.form, ...patch } } : e));
   useEffect(() => {
@@ -153,16 +142,7 @@ export default function CharactersPage() {
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {data.characters.map((c) => (
             <Card key={c.id} className="overflow-hidden">
-              <div className="grid aspect-[4/3] grid-cols-2 gap-px bg-ink-800">
-                {c.references.slice(0, 2).map((r) => (
-                  <img key={r.assetId} src={r.url} alt="" className="size-full object-cover" />
-                ))}
-                {!c.references.length && (
-                  <div className="col-span-2 grid place-items-center text-fog-400">
-                    <Users className="size-6" />
-                  </div>
-                )}
-              </div>
+              <ViewStrip kind="character" urls={c.references.slice().sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary)).map((r) => r.url)} pending={c.viewsPending} className="bg-ink-950/60 p-2" />
               <div className="p-4">
                 <div className="flex items-center justify-between gap-2">
                   <div className="font-medium text-white">{c.name}</div>
@@ -177,22 +157,12 @@ export default function CharactersPage() {
                   {c.references.length ? ' · approved look' : ' · no reference image yet'}
                 </p>
                 <p className="mt-1 line-clamp-2 text-sm text-fog-300">{[c.appearance.distinguishing, c.clothing && `wears ${c.clothing}`].filter(Boolean).join(' · ') || c.description}</p>
-                <div className="mt-3 flex gap-1.5">
+                <div className="mt-3 flex flex-wrap items-center gap-1.5">
                   <Button size="sm" variant="secondary" onClick={() => open(c)}>
                     <Pencil /> Edit
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => sheet(c.id)}>
-                    <ImageIcon /> Character sheet
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    aria-label="Delete"
-                    onClick={async () => {
-                      await api(`/api/characters/${c.id}`, { method: 'DELETE' });
-                      void qc.invalidateQueries({ queryKey: ['characters'] });
-                    }}
-                  >
+                  <ViewsButton kind="character" id={c.id} name={c.name} style={c.styleMeta.style} pending={c.viewsPending} hasViews={c.references.length >= 4} onStarted={() => void qc.invalidateQueries({ queryKey: ['characters'] })} />
+                  <Button size="icon" variant="ghost" aria-label={`Delete ${c.name}`} className="ml-auto" onClick={() => setRemoving(c)}>
                     <Trash2 />
                   </Button>
                 </div>
@@ -203,6 +173,35 @@ export default function CharactersPage() {
       ) : (
         <EmptyState icon={<Users />} title="No characters yet" description="Create a character once and reuse it across scenes and films." action={<Button onClick={() => open()}>Create character</Button>} />
       )}
+
+      <Dialog
+        open={Boolean(removing)}
+        onOpenChange={(o) => !o && setRemoving(null)}
+        title={`Delete ${removing?.name ?? ''}?`}
+        description={removing?.usage?.shots ? `${removing.name} is in ${removing.usage.shots} shot${removing.usage.shots === 1 ? '' : 's'}. Those shots keep their clips but lose the character's look for new generations.` : 'The character is removed from your library. Its photos stay in your Media Library.'}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setRemoving(null)}>Cancel</Button>
+            <Button
+              variant="danger"
+              onClick={async () => {
+                try {
+                  await api(`/api/characters/${removing!.id}`, { method: 'DELETE' });
+                  toast.success(`${removing!.name} deleted`);
+                  setRemoving(null);
+                  void qc.invalidateQueries({ queryKey: ['characters'] });
+                } catch (e) {
+                  toast.error(e instanceof ApiError ? e.message : 'Could not delete');
+                }
+              }}
+            >
+              <Trash2 /> Delete
+            </Button>
+          </>
+        }
+      >
+        <span />
+      </Dialog>
 
       <Dialog
         open={Boolean(editing)}

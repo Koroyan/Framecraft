@@ -9,6 +9,7 @@ import { createRenderJob, getTimeline, listVersions, restoreVersion, saveTimelin
 import { createAudioJob, estimateAudio, type AudioJobInput } from '../../audio/audio';
 import { DEFAULT_VOICES } from '../../providers/audio/elevenlabs';
 import { createImageJob } from '../../images/images';
+import { pendingViews } from '../../images/views';
 import { dubTrack, estimateDialogue } from '../../movie/dub';
 import { inArray } from 'drizzle-orm';
 import { assets } from '../../db/schema';
@@ -85,11 +86,12 @@ export async function productionRoutes(app: FastifyInstance, ctx: AppContext) {
         at += v.durationSec + 0.25;
       }
     }
+    const pending = await pendingViews(ctx, u.id);
     return {
       project: m.project,
       scenes: m.scenes,
-      characters: m.characters,
-      locations: m.locations,
+      characters: m.characters.map((c) => ({ ...c, viewsPending: pending.get(c.id) ?? 0 })),
+      locations: m.locations.map((l) => ({ ...l, viewsPending: pending.get(l.id) ?? 0 })),
       planJob: await pub(m.planJob),
       movieJob: await pub(m.movieJob),
       renderJob: await pub(m.renderJob),

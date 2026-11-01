@@ -33,6 +33,8 @@ import { audit } from '../../services/common';
 import { TERMS_VERSION } from '../../auth/auth';
 import { enqueue } from '../../queue/queue';
 import { createImageJob, estimateImage } from '../../images/images';
+import { getOwnedProject } from '../../editor/editor';
+import { createReferenceViews, pendingViews, viewsEstimateFor } from '../../images/views';
 
 const uuid = z.object({ id: z.string().uuid() });
 
@@ -361,7 +363,8 @@ export async function studioRoutes(app: FastifyInstance, ctx: AppContext) {
       const mine = used.filter((s) => s.characterIds.includes(id));
       return { shots: mine.length, generated: mine.filter((s) => s.generated).length, projects: new Set(mine.map((s) => s.projectId)).size };
     };
-    return { characters: (await withRefs(rows, 'character')).map((c) => ({ ...c, usage: usage(c.id) })) };
+    const pending = await pendingViews(ctx, u.id);
+    return { characters: (await withRefs(rows, 'character')).map((c) => ({ ...c, usage: usage(c.id), viewsPending: pending.get(c.id) ?? 0 })) };
   });
 
   const saveCharacter = async (userId: string, body: z.infer<typeof characterSchema>, id?: string) => {
@@ -435,6 +438,25 @@ export async function studioRoutes(app: FastifyInstance, ctx: AppContext) {
     return { job: await toPublicJob(ctx, job) };
   });
 
+  // Four reference views (character: front, ¾, side, back · location: wide, reverse, side, detail).
+  // Paid images: the price is asked first; credits for all four are reserved up front.
+  for (const kind of ['character', 'location'] as const) {
+    const path = kind === 'character' ? '/api/characters/:id/views' : '/api/locations/:id/views';
+    app.get(`${path}/estimate`, async (req) => {
+      const u = requireUser(req);
+      const { id } = parse(uuid, req.params);
+      return viewsEstimateFor(ctx, u, kind, id);
+    });
+    app.post(path, directorLimit, async (req) => {
+      const u = requireUser(req);
+      const { id } = parse(uuid, req.params);
+      const body = parse(z.object({ idempotencyKey: z.string().min(8).max(100), projectId: z.string().uuid().optional(), style: z.string().max(40).optional() }), req.body);
+      if (body.projectId) await getOwnedProject(ctx, u, body.projectId);
+      const jobs = await createReferenceViews(ctx, u, kind, id, body);
+      return { jobs: await Promise.all(jobs.map((j) => toPublicJob(ctx, j))) };
+    });
+  }
+
   app.get('/api/locations', async (req) => {
     const u = requireUser(req);
     const rows = await ctx.db.select().from(locations).where(eq(locations.userId, u.id)).orderBy(desc(locations.updatedAt));
@@ -448,7 +470,8 @@ export async function studioRoutes(app: FastifyInstance, ctx: AppContext) {
       const mine = used.filter((s) => s.locationId === id);
       return { scenes: mine.length, projects: new Set(mine.map((s) => s.projectId)).size };
     };
-    return { locations: (await withRefs(rows, 'location')).map((l) => ({ ...l, usage: usage(l.id) })) };
+    const pending = await pendingViews(ctx, u.id);
+    return { locations: (await withRefs(rows, 'location')).map((l) => ({ ...l, usage: usage(l.id), viewsPending: pending.get(l.id) ?? 0 })) };
   });
 
   const saveLocation = async (userId: string, body: z.infer<typeof locationSchema>, id?: string) => {

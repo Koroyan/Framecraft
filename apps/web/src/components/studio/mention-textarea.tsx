@@ -35,9 +35,10 @@ export function stripMentions(text: string, cast: CastMention[]) {
  * A textarea where typing @ lists saved characters and locations; picking one writes @Name
  * into the text and reports it through onMention (the composer then uses its photos).
  */
-export function MentionTextarea({ value, onChange, onMention, className, ...rest }: Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChange'> & { value: string; onChange: (v: string) => void; onMention: (m: CastMention) => void }) {
+export function MentionTextarea({ value, onChange, onMention, className, inputRef, ...rest }: Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChange'> & { value: string; onChange: (v: string) => void; onMention: (m: CastMention) => void; inputRef?: React.RefObject<HTMLTextAreaElement | null> }) {
   const cast = useCast();
-  const input = useRef<HTMLTextAreaElement>(null);
+  const own = useRef<HTMLTextAreaElement>(null);
+  const input = inputRef ?? own;
   const [menu, setMenu] = useState<{ query: string; start: number; active: number } | null>(null);
   const matches = menu ? cast.filter((m) => m.name.toLowerCase().includes(menu.query.toLowerCase())).slice(0, 8) : [];
   const track = (v: string, caret: number) => {

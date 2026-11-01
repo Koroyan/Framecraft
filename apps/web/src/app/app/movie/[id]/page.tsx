@@ -14,6 +14,7 @@ import { VideoPlayer } from '@/components/studio/video-player';
 import { ProgressBar } from '@/components/studio/progress';
 import { QualityPanel, SceneRevisions } from '@/components/studio/ad-quality';
 import { cn, formatCredits, formatUsd, newKey, seconds } from '@/lib/utils';
+import { ViewStrip, ViewsButton, ViewsForAll } from '@/components/studio/reference-views';
 
 /** Re-record a finished film's dialogue with native-language voices (no video is regenerated). */
 function ReVoice({ projectId, onStarted }: { projectId: string; onStarted: () => void }) {
@@ -119,8 +120,8 @@ type Scene = { id: string; index: number; title: string; synopsis: string; shots
 type MovieData = {
   project: Project & { approvedBudgetCredits: number | null };
   scenes: Scene[];
-  characters: { id: string; name: string; description: string; appearance: Record<string, string>; clothing: string; referenceAssetIds: string[] }[];
-  locations: { id: string; name: string; description: string; referenceAssetIds: string[] }[];
+  characters: { id: string; name: string; description: string; appearance: Record<string, string>; clothing: string; referenceAssetIds: string[]; projectId: string | null; viewsPending?: number }[];
+  locations: { id: string; name: string; description: string; referenceAssetIds: string[]; projectId: string | null; viewsPending?: number }[];
   planJob: PublicJob | null;
   movieJob: PublicJob | null;
   renderJob: PublicJob | null;
@@ -348,19 +349,6 @@ function ShotCard({ shot, data, onEdit, onMove, refresh, isFirst, isLast }: { sh
   );
 }
 
-function RefThumbs({ ids, urls }: { ids: string[]; urls: Record<string, { url: string; isFixture: boolean }> }) {
-  if (!ids.length) return null;
-  return (
-    <div className="mb-3 flex gap-1.5">
-      {ids.map((id) =>
-        urls[id] ? (
-          <img key={id} src={urls[id].url} alt="Reference photo" className="size-14 rounded-lg border hairline object-cover" />
-        ) : null,
-      )}
-    </div>
-  );
-}
-
 export default function DirectorMode({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const qc = useQueryClient();
@@ -370,7 +358,7 @@ export default function DirectorMode({ params }: { params: Promise<{ id: string 
     queryFn: () => api<MovieData>(`/api/movies/${id}`),
     refetchInterval: (query) => {
       const d = query.state.data;
-      const active = !d || d.planJob?.status === 'queued' || d.planJob?.status === 'preparing' || (d.movieJob && ['generating', 'rendering'].includes(d.movieJob.status)) || d.shotJobs.some((j) => !['completed', 'failed', 'cancelled'].includes(j.status));
+      const active = !d || d.planJob?.status === 'queued' || d.planJob?.status === 'preparing' || (d.movieJob && ['generating', 'rendering'].includes(d.movieJob.status)) || d.shotJobs.some((j) => !['completed', 'failed', 'cancelled'].includes(j.status)) || [...d.characters, ...d.locations].some((x) => (x.viewsPending ?? 0) > 0);
       return active ? 3000 : false;
     },
   });
@@ -544,25 +532,56 @@ export default function DirectorMode({ params }: { params: Promise<{ id: string 
           </TabsContent>
 
           <TabsContent value="cast">
-            <div className="grid gap-3 md:grid-cols-2">
-              {d.characters.map((c) => (
-                <Card key={c.id} className="p-4">
-                  <RefThumbs ids={c.referenceAssetIds} urls={d.assetUrls} />
-                  <div className="font-medium text-white">{c.name}</div>
-                  <p className="mt-1 text-sm text-fog-300">{c.appearance.distinguishing}</p>
-                  <p className="mt-1 text-xs text-fog-400">Wears: {c.clothing}</p>
-                </Card>
-              ))}
-              {d.locations.map((l) => (
-                <Card key={l.id} className="p-4">
-                  <RefThumbs ids={l.referenceAssetIds} urls={d.assetUrls} />
-                  <Badge tone="blue">Location</Badge>
-                  <div className="mt-2 font-medium text-white">{l.name}</div>
-                  <p className="mt-1 text-sm text-fog-300">{l.description}</p>
-                </Card>
-              ))}
-            </div>
-            <Link href="/app/characters" className={cn(buttonVariants({ variant: 'secondary' }), 'mt-4')}>Edit looks & add reference images</Link>
+            {(() => {
+              const style = (d.project.settings as { brief?: { style?: string } } | undefined)?.brief?.style;
+              const bare = [...d.characters.map((c) => ({ kind: 'character' as const, id: c.id, name: c.name, refs: c.referenceAssetIds.length, pending: c.viewsPending ?? 0 })), ...d.locations.map((l) => ({ kind: 'location' as const, id: l.id, name: l.name, refs: l.referenceAssetIds.length, pending: l.viewsPending ?? 0 }))].filter((x) => !x.refs && !x.pending);
+              const invented = d.characters.filter((c) => c.projectId === d.project.id).length + d.locations.filter((l) => l.projectId === d.project.id).length;
+              return (
+                <>
+                  {bare.length > 0 && (
+                    <Card className="mb-4 flex flex-wrap items-center justify-between gap-3 border-iris-400/30 bg-iris-500/[0.06] p-4">
+                      <div className="min-w-0">
+                        <div className="font-medium text-white">{bare.length} without a picture yet</div>
+                        <p className="mt-0.5 text-sm text-fog-300">{invented ? 'The AI Director invented them from your story. ' : ''}Four reference views each (front, ¾, side, back · wide, reverse, side, detail) keep faces and places the same in every shot.</p>
+                      </div>
+                      <ViewsForAll items={bare} projectId={d.project.id} style={style} onStarted={() => void refresh()} />
+                    </Card>
+                  )}
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {d.characters.map((c) => (
+                      <Card key={c.id} className="flex flex-col p-4">
+                        <ViewStrip kind="character" urls={c.referenceAssetIds.map((rid) => d.assetUrls[rid]?.url)} pending={c.viewsPending} />
+                        <div className="mt-3 flex items-center gap-2">
+                          <span className="font-medium text-white">{c.name}</span>
+                          {c.projectId !== d.project.id && <Badge tone="iris">from your library</Badge>}
+                        </div>
+                        <p className="mt-1 text-sm text-fog-300">{c.appearance.distinguishing || c.description}</p>
+                        {c.clothing && <p className="mt-1 text-xs text-fog-400">Wears: {c.clothing}</p>}
+                        <div className="mt-3 flex-1" />
+                        <ViewsButton kind="character" id={c.id} name={c.name} projectId={d.project.id} style={style} pending={c.viewsPending} hasViews={c.referenceAssetIds.length >= 4} onStarted={() => void refresh()} className="w-fit" />
+                      </Card>
+                    ))}
+                    {d.locations.map((l) => (
+                      <Card key={l.id} className="flex flex-col p-4">
+                        <ViewStrip kind="location" urls={l.referenceAssetIds.map((rid) => d.assetUrls[rid]?.url)} pending={l.viewsPending} />
+                        <div className="mt-3 flex items-center gap-2">
+                          <Badge tone="blue">Location</Badge>
+                          <span className="font-medium text-white">{l.name}</span>
+                          {l.projectId !== d.project.id && <Badge tone="iris">from your library</Badge>}
+                        </div>
+                        <p className="mt-1 text-sm text-fog-300">{l.description}</p>
+                        <div className="mt-3 flex-1" />
+                        <ViewsButton kind="location" id={l.id} name={l.name} projectId={d.project.id} style={style} pending={l.viewsPending} hasViews={l.referenceAssetIds.length >= 4} onStarted={() => void refresh()} className="w-fit" />
+                      </Card>
+                    ))}
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Link href="/app/characters" className={buttonVariants({ variant: 'secondary' })}>Edit looks & photos</Link>
+                    <Link href="/app/locations" className={buttonVariants({ variant: 'ghost' })}>Locations</Link>
+                  </div>
+                </>
+              );
+            })()}
           </TabsContent>
 
           <TabsContent value="budget">

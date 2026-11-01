@@ -8,6 +8,7 @@ import { CARTOON_STYLES } from '@framecraft/shared';
 import { api, ApiError, type Asset, type Location } from '@/lib/api';
 import { Badge, Button, Card, Dialog, EmptyState, Field, Input, NativeSelect, PageHeader, Textarea } from '@/components/ui';
 import { ImageSlot } from '@/components/studio/upload';
+import { ViewStrip, ViewsButton } from '@/components/studio/reference-views';
 
 /*
  * Location Studio: reusable places. A scene that uses a place gets its reference photos in every
@@ -20,13 +21,13 @@ const META = [
   { key: 'weather', label: 'Weather', options: ['', 'clear', 'cloudy', 'rain', 'snow', 'fog', 'storm'] },
   { key: 'lighting', label: 'Lighting', options: ['', 'soft natural light', 'warm practical lamps', 'neon', 'candlelight', 'bright studio light', 'moonlight'] },
 ] as const;
-const VIEWS = ['Wide view', 'Medium view', 'Detail', 'Another angle'];
+const VIEWS = ['Wide view', 'Reverse angle', 'Side', 'Detail', 'More', 'More', 'More', 'More'];
 
 type Form = { id?: string; name: string; description: string; meta: Record<string, string>; refs: (Asset | { id: string; url: string } | null)[] };
 
 export default function LocationsPage() {
   const qc = useQueryClient();
-  const { data } = useQuery({ queryKey: ['locations'], queryFn: () => api<{ locations: Location[] }>('/api/locations') });
+  const { data } = useQuery({ queryKey: ['locations'], queryFn: () => api<{ locations: Location[] }>('/api/locations'), refetchInterval: (q) => (q.state.data?.locations.some((l) => (l.viewsPending ?? 0) > 0) ? 3000 : false) });
   const [form, setForm] = useState<Form | null>(null);
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState('');
@@ -48,7 +49,7 @@ export default function LocationsPage() {
     }
   };
   const open = (l?: Location) =>
-    setForm(l ? { id: l.id, name: l.name, description: l.description, meta: { ...(l.styleMeta ?? {}) }, refs: [...l.references.map((r) => ({ id: r.assetId, url: r.url })), null, null, null, null].slice(0, 4) } : { name: '', description: '', meta: {}, refs: [null, null, null, null] });
+    setForm(l ? { id: l.id, name: l.name, description: l.description, meta: { ...(l.styleMeta ?? {}) }, refs: [...l.references.map((r) => ({ id: r.assetId, url: r.url })), ...Array<null>(8).fill(null)].slice(0, Math.min(8, Math.max(4, l.references.length + 1))) } : { name: '', description: '', meta: {}, refs: [null, null, null, null] });
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -63,10 +64,7 @@ export default function LocationsPage() {
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {list.map((l) => (
             <Card key={l.id} className="overflow-hidden">
-              <div className="grid aspect-video grid-cols-3 grid-rows-2 gap-px bg-ink-800">
-                {l.references[0] ? <img src={l.references[0].url} alt="" className="col-span-2 row-span-2 size-full object-cover" /> : <div className="col-span-3 row-span-2 grid place-items-center text-fog-400"><MapPin /></div>}
-                {l.references.slice(1, 3).map((r) => <img key={r.assetId} src={r.url} alt="" className="size-full object-cover" />)}
-              </div>
+              <ViewStrip kind="location" urls={l.references.map((r) => r.url)} pending={l.viewsPending} className="bg-ink-950/60 p-2" />
               <div className="p-4">
                 <div className="flex items-center justify-between gap-2">
                   <div className="truncate font-medium text-white">{l.name}</div>
@@ -77,14 +75,16 @@ export default function LocationsPage() {
                   {l.usage?.scenes ? `In ${l.usage.scenes} scene${l.usage.scenes === 1 ? '' : 's'} · ${l.usage.projects} project${l.usage.projects === 1 ? '' : 's'}` : 'Not used in a scene yet'}
                   {l.references.length ? ` · ${l.references.length} reference${l.references.length === 1 ? '' : 's'}` : ' · no reference photo yet'}
                 </p>
-                <div className="mt-3 flex gap-1.5">
+                <div className="mt-3 flex flex-wrap items-center gap-1.5">
                   <Button size="sm" variant="secondary" onClick={() => open(l)}>Edit</Button>
+                  <ViewsButton kind="location" id={l.id} name={l.name} style={l.styleMeta?.style} pending={l.viewsPending} hasViews={l.references.length >= 4} onStarted={() => void qc.invalidateQueries({ queryKey: ['locations'] })} />
                   <Button
                     size="icon"
                     variant="ghost"
                     aria-label={`Delete ${l.name}`}
+                    className="ml-auto"
                     onClick={async () => {
-                      if (l.usage?.scenes && !window.confirm(`${l.name} is the place of ${l.usage.scenes} scene(s). Delete it anyway? Those scenes keep their shots but lose the place.`)) return;
+                      if (!window.confirm(l.usage?.scenes ? `${l.name} is the place of ${l.usage.scenes} scene(s). Delete it anyway? Those scenes keep their shots but lose the place.` : `Delete ${l.name}?`)) return;
                       await api(`/api/locations/${l.id}`, { method: 'DELETE' });
                       void qc.invalidateQueries({ queryKey: ['locations'] });
                     }}

@@ -9,10 +9,12 @@ import { toast } from 'sonner';
 import { LANGUAGES, MOVIE_LENGTHS, QUALITY_MODE_INFO, QUALITY_MODES, STYLE_PRESETS, type AspectRatio, type QualityMode } from '@framecraft/shared';
 import { api, endpoints, ApiError } from '@/lib/api';
 import { useMe } from '@/lib/hooks';
-import { Badge, Button, Card, Field, NativeSelect, PageHeader, Segmented, Switch, Textarea } from '@/components/ui';
+import { Badge, Button, Card, Field, NativeSelect, PageHeader, Segmented, Switch } from '@/components/ui';
 import { newKey, timeAgo } from '@/lib/utils';
 import { ReferencePhotos, type ReferencePhoto } from '@/components/studio/reference-photos';
 import { MovieModeSwitch } from '@/components/chat/mode-switch';
+import { CastPicker } from '@/components/studio/cast-picker';
+import { MentionTextarea, mentionedIn, stripMentions, useCast } from '@/components/studio/mention-textarea';
 
 function NewMovie() {
   const params = useSearchParams();
@@ -32,6 +34,13 @@ function NewMovie() {
   const [busy, setBusy] = useState(false);
   const [photos, setPhotos] = useState<ReferencePhoto[]>([]);
   const ideaRef = useRef<HTMLTextAreaElement>(null);
+  // Saved characters / places: picked below or mentioned as @Name in the story. None: the AI invents them.
+  const [characterIds, setCharacterIds] = useState<string[]>([]);
+  const [locationIds, setLocationIds] = useState<string[]>([]);
+  const cast = useCast();
+  const mentioned = mentionedIn(idea, cast);
+  const useChars = [...new Set([...characterIds, ...mentioned.filter((m) => m.kind === 'character').map((m) => m.id)])].slice(0, 5);
+  const useLocs = [...new Set([...locationIds, ...mentioned.filter((m) => m.kind === 'location').map((m) => m.id)])].slice(0, 3);
 
   /** Insert a photo token at the cursor (or the end) of the story. */
   const insertToken = (token: string) => {
@@ -52,7 +61,8 @@ function NewMovie() {
   const create = async () => {
     setBusy(true);
     try {
-      const r = await api<{ projectId: string }>('/api/movies', { body: { brief: { idea, lengthSec, aspectRatio, quality, style, language, withDialogue, withMusic, keyframes, mode, references: photos.map((p) => ({ token: p.token, assetId: p.asset.id, note: p.note || undefined })) }, idempotencyKey: newKey() } });
+      const story = stripMentions(idea, cast).trim();
+      const r = await api<{ projectId: string }>('/api/movies', { body: { brief: { idea: story, lengthSec, aspectRatio, quality, style, language, withDialogue, withMusic, keyframes, mode, references: photos.map((p) => ({ token: p.token, assetId: p.asset.id, note: p.note || undefined })), characterIds: useChars, locationIds: useLocs }, idempotencyKey: newKey() } });
       router.push(`/app/movie/${r.projectId}`);
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : 'Could not start planning');
@@ -62,11 +72,36 @@ function NewMovie() {
 
   return (
     <Card className="p-5 md:p-6">
-      <Textarea ref={ideaRef} value={idea} onChange={(e) => setIdea(e.target.value)} aria-label="Film story" placeholder="A 2-minute cinematic science-fiction film about a detective investigating a mysterious abandoned city…  Tip: add photos below and mention them as photo1, photo2 — e.g. “a detective who looks like photo1 lives in a house like photo2”." className="min-h-32 text-[16px]" />
+      <MentionTextarea
+        inputRef={ideaRef}
+        value={idea}
+        onChange={setIdea}
+        onMention={(m) => (m.kind === 'character' ? setCharacterIds((ids) => (ids.includes(m.id) ? ids : [...ids, m.id].slice(-5))) : setLocationIds((ids) => (ids.includes(m.id) ? ids : [...ids, m.id].slice(-3))))}
+        aria-label="Film story"
+        placeholder="A 2-minute cinematic science-fiction film about a detective investigating a mysterious abandoned city…  Type @ to cast a saved character or place, or add photos below and mention them as photo1, photo2."
+        className="min-h-32 text-[16px]"
+        maxLength={4000}
+      />
+      <div className="mt-4 rounded-2xl border hairline p-3 md:p-4">
+        <CastPicker
+          characterIds={useChars}
+          locationIds={useLocs}
+          maxLocations={3}
+          hint="optional — nothing picked: the AI Director invents the cast and the places"
+          onCharacters={(ids) => {
+            setIdea((t) => stripMentions(t, cast.filter((m) => useChars.includes(m.id) && !ids.includes(m.id))));
+            setCharacterIds(ids);
+          }}
+          onLocations={(ids) => {
+            setIdea((t) => stripMentions(t, cast.filter((m) => useLocs.includes(m.id) && !ids.includes(m.id))));
+            setLocationIds(ids);
+          }}
+        />
+      </div>
       <div className="mt-4">
         <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
           <div className="text-[13px] font-medium text-fog-300">Your photos <span className="font-normal text-fog-400">(optional)</span></div>
-          <div className="text-xs text-fog-400">Use your own characters, places or products. No photos? The AI invents everything.</div>
+          <div className="text-xs text-fog-400">New faces, places or products from a photo. No photos? The AI invents everything.</div>
         </div>
         <ReferencePhotos photos={photos} onChange={setPhotos} story={idea} onInsert={insertToken} />
       </div>
