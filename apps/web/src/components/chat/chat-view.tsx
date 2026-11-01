@@ -36,7 +36,7 @@ export function ChatView({ sessionId }: { sessionId: string }) {
   const qc = useQueryClient();
   const key = ['chat', sessionId];
   // Replies are written in the background (a model call can take a minute); poll while the AI is thinking.
-  const q = useQuery({ queryKey: key, queryFn: () => api<ChatData>(`/api/chat/sessions/${sessionId}`), refetchInterval: (query) => (query.state.data?.session.thinking ? 1500 : false) });
+  const q = useQuery({ queryKey: key, queryFn: () => api<ChatData>(`/api/chat/sessions/${sessionId}`), refetchInterval: (query) => (query.state.data?.session.thinking ? 1500 : false), retry: (n, e) => !(e instanceof ApiError && e.status === 404) && n < 2 });
   const [text, setText] = useState('');
   const [pending, setPending] = useState<Pending[]>([]);
   const [sending, setSending] = useState<{ content: string; attachments: Pending[] } | null>(null);
@@ -126,6 +126,18 @@ export function ChatView({ sessionId }: { sessionId: string }) {
     if (a) setPending((p) => [...p, { assetId: a.id, kind, url: a.url }]);
   };
 
+  if (!d && q.isError)
+    return (
+      <div className="mx-auto mt-16 max-w-md rounded-2xl border hairline bg-ink-900/60 p-6 text-center">
+        <div className="font-medium text-white">{q.error instanceof ApiError && q.error.status === 404 ? 'This conversation was not found' : 'The conversation could not be loaded'}</div>
+        <p className="mt-1 text-sm text-fog-400">{q.error instanceof ApiError && q.error.status === 404 ? 'It may have been deleted, or the link is from another account.' : 'Check your connection and try again.'}</p>
+        <div className="mt-4 flex justify-center gap-2">
+          {!(q.error instanceof ApiError && q.error.status === 404) && <Button variant="secondary" onClick={() => void q.refetch()}>Try again</Button>}
+          <Link href="/app/ads" className={buttonVariants({ variant: 'secondary' })}>Ad Studio</Link>
+          <Link href="/app/movie/chat" className={buttonVariants({ variant: 'ghost' })}>Movie Maker</Link>
+        </div>
+      </div>
+    );
   if (!d) return <Skeleton className="mx-auto h-[70dvh] max-w-3xl" />;
   const isAd = d.session.kind === 'ad';
   const last = d.messages.at(-1);

@@ -22,10 +22,23 @@ clearer. No paid AI ran.
 | Script | **Adopt Figma (new)** | A Script workspace over the same scenes and shots: scene titles, synopsis, action, dialogue and length, edited in place. Rewrite with AI per scene returns a plan to review. Add shots. |
 | New video (create hub) | **Adopt Figma** | Mode tiles, one large prompt and recent projects beside it. Our on-device suggestion of the right mode is kept. |
 | Locations | **Redesign** | Location Studio: search, reference views, interior/exterior, time of day, weather, lighting, architecture, props, style and where each place is used. **+ Location** on scenes, from shot details, the storyboard and the script. The place's photos reach every shot of the scene. |
-| Characters | **Keep (6.0)** | The Character Bible from 6.0 already covers what the Figma screen shows. |
+| Characters | **Keep (6.0) + four views** | The Character Bible from 6.0, plus **Make 4 views** on every character: front, three-quarter, side and back. |
+| Simple editor | **Adopt Figma (after owner feedback)** | The same studio frame as the full editor: tool rail on the left (Video, Upload, Text, Music, Captions, Format), the picture in the middle, the selected clip / text / sound with its tool tiles and the open tool on the right, the timeline with play and time below. |
+| Titles & stickers | **Fix** | The words of a title or sticker are the first field of the selected layer, focused as soon as it is added; double-click the layer in the picture to edit them. |
+| Create with AI | **Fix** | Characters and places start empty and are picked from the library or with **@Name** in the description. Each quality card shows its own price; Economy targets 480p, so it is cheaper than Balanced even on the same model. |
+| AI Movie Maker | **Extend** | Cast saved characters and places (picker or **@Name**); nothing picked, the AI Director invents them. Saved ones are used as themselves (no copies) and survive revisions. **Cast & places** shows four slots per character and place with one button for everything still without a picture. |
+| Reference views | **New** | Four images per character (front, ¾, side, back) or place (wide, reverse, side, detail). The first view sets the look and the other three use it as their reference (or all four use the element's own photo). Priced first; credits for all four reserved up front, each charged when it finishes, the rest refunded if the first fails. |
+| Social Studio | **Redesign (after owner feedback)** | One brief (platform, topic, goal, tone, length, language) → three concepts with a safe-zone phone preview and shot timing, hooks, a ready-to-paste post with hashtags and a voice-over script; proven formats below. |
+| Dropdowns | **Fix** | Native select lists are dark with light text everywhere (Windows painted them white). |
 
 ## Tested (all on the live dev server or with fake models; nothing paid)
 
+- Follow-up round (owner feedback, 1 Nov): `apps/server` **175 passed, 1 skipped**; Playwright
+  **20 passed, 5 skipped by design**; lint, typecheck and the web production build clean. New
+  server tests: the reference-view chain and its credit reservations (fixture mode and a mocked
+  live provider — nothing real is called), saved characters and places cast in a film, the AI
+  Director's prompt with and without a saved cast. Social Studio was checked in a browser with the
+  AI Director answers mocked (no paid request).
 - `packages/shared`: 58 passed.
 - `apps/server`: 167 passed, 1 skipped (manual). This includes a new test where a scene takes a
   saved location: new shot prompts are set there, undo restores the old place, and other people's
