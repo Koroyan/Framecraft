@@ -198,7 +198,7 @@ function ClipPanel(p: InspectorProps) {
             ['ai', Sparkles, 'AI'],
           ] as const
         ).map(([k, Icon, label]) => (
-          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={cn('-mb-px flex items-center justify-center gap-1 border-b-2 px-1 py-2 text-xs transition', tab === k ? 'border-iris-500 font-medium text-white' : 'border-transparent text-fog-400 hover:text-white')}>
+          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={cn('-mb-px flex min-w-0 items-center justify-center gap-1 whitespace-nowrap border-b-2 px-0.5 py-2 text-xs transition', tab === k ? 'border-iris-500 font-medium text-white' : 'border-transparent text-fog-400 hover:text-white')}>
             <Icon className="size-3" />
             {label}
           </button>

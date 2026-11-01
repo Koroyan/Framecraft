@@ -368,7 +368,7 @@ test('H — no lost work: edits, object, title, hidden assistant, workspace swit
   await call(page, 'DELETE', `/api/projects/${pid}`, {});
 });
 
-test('S — simple editor: one toolbar for split, speed, filter, text, music and export', async ({ page }) => {
+test('S — simple editor: tool rail, clip tools, split, speed, filter, text, music and export', async ({ page }) => {
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 1280, height: 600 });
   await register(page);
@@ -383,7 +383,9 @@ test('S — simple editor: one toolbar for split, speed, filter, text, music and
     t.clips = [ua, ub].map((u, i) => ({ id: `s${i}`, assetId: u.id, inSec: 0, outSec: 3, volume: 1, speed: 1, reverse: false, fadeInSec: 0, fadeOutSec: 0, opacity: 1 }));
   });
   await openEditor(page, pid, 'simple');
+  // Left rail: what you can add. Right panel: tools for the selected clip, and the open tool.
   const tools = page.getByRole('toolbar', { name: 'Edit tools' });
+  const clipTools = page.getByRole('toolbar', { name: 'Clip tools' });
   // No studio clutter: no assistant, no object selection, no workspace tabs.
   await expect(page.getByRole('button', { name: 'Select object' })).toHaveCount(0);
   await expect(page.getByRole('tablist', { name: 'Workspace' })).toHaveCount(0);
@@ -394,24 +396,24 @@ test('S — simple editor: one toolbar for split, speed, filter, text, music and
 
   // Split clip 1 in the middle.
   await page.getByRole('button', { name: /^Clip 1/ }).click();
-  await tools.getByRole('button', { name: 'Split' }).click();
+  await clipTools.getByRole('button', { name: 'Split' }).click();
   await expect(page.getByRole('button', { name: /^Clip 3/ })).toBeVisible();
 
   // Speed 2× on the selected clip: the video gets shorter.
-  await tools.getByRole('button', { name: 'Speed' }).click();
-  await page.getByRole('dialog', { name: /Speed/ }).getByRole('button', { name: '2×' }).click();
-  await expect(page.getByRole('dialog', { name: /Speed/ })).toContainText('long on the timeline');
+  await clipTools.getByRole('button', { name: 'Speed' }).click();
+  await page.getByRole('region', { name: /Speed/ }).getByRole('button', { name: '2×' }).click();
+  await expect(page.getByRole('region', { name: /Speed/ })).toContainText('long on the timeline');
 
   // Filter, shown as active.
-  await tools.getByRole('button', { name: 'Filter' }).click();
-  const filters = page.getByRole('dialog', { name: /Filter/ });
+  await clipTools.getByRole('button', { name: 'Filter' }).click();
+  const filters = page.getByRole('region', { name: /Filter/ });
   await filters.getByRole('button', { name: 'Black & white' }).click();
   await expect(filters.getByRole('button', { name: 'Black & white' })).toHaveAttribute('aria-pressed', 'true');
 
   // Text: add a style, the edit panel stays open, the words change.
   await tools.getByRole('button', { name: 'Text' }).click();
-  await page.getByRole('dialog', { name: /Add text/ }).getByRole('button', { name: /Bold yellow/ }).click();
-  const box = page.getByRole('dialog', { name: 'Text' }).getByRole('textbox', { name: 'Text' });
+  await page.getByRole('region', { name: /Add text/ }).getByRole('button', { name: /Bold yellow/ }).click();
+  const box = page.getByRole('region', { name: 'Text' }).getByRole('textbox', { name: 'Text' });
   await expect(box).toBeVisible();
   await box.fill('Sale -30%');
   await expect(page.getByRole('button', { name: /^Layer / }).filter({ hasText: 'Sale -30%' })).toBeVisible();

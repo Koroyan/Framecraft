@@ -456,6 +456,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       }}
       minimal
       controls={false}
+      transport={false}
       onPlayingChange={setPlaying}
     />
   );
@@ -668,7 +669,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       {logoUp.element}
 
       {/* Top bar */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 lg:grid lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 lg:grid lg:grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] lg:gap-3">
         <div className="flex min-w-0 items-center gap-2">
           {chrome.home && <span className="shrink-0 pr-1">{chrome.home}</span>}
           <Link href={project.kind === 'movie' ? `/app/movie/${id}` : project.kind === 'edit' ? '/app/edit' : `/app/projects/${id}`} aria-label="Back" title="Back to the project" className="grid size-8 place-items-center rounded-lg text-fog-400 hover:bg-white/[0.06] hover:text-white">
@@ -734,7 +735,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
               aria-pressed={!layout.simple}
               aria-label="Pro tools"
               title={layout.simple ? 'All tools: object selection, colour grading, layers, camera, AI and the assistant' : 'Back to the simple editor'}
-              className={cn('flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition', !layout.simple ? 'border-iris-400/60 bg-iris-500/15 text-white' : 'hairline text-fog-300 hover:border-white/25 hover:text-white')}
+              className={cn('flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 text-xs transition', !layout.simple ? 'border-iris-400/60 bg-iris-500/15 text-white' : 'hairline text-fog-300 hover:border-white/25 hover:text-white')}
             >
               <SlidersHorizontal className="size-3.5" /> <span className="hidden xl:inline">Pro tools</span>
             </button>
@@ -792,7 +793,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                 setFocus(aid ? 'audio' : 'clip');
               }}
               preview={simplePreviewEl}
-              timelineEl={timelineFor(null, 'No music yet — add some with Music above', false)}
+              timelineEl={timelineFor(null, 'No music yet — add some with Music on the left')}
               timelineHeight={`min(${Math.min(layout.timelineHeight, timelineNeed)}px, 34dvh)`}
               resizeHandle={wide ? <ResizeHandle axis="y" label="Resize the timeline" {...resize('timelineHeight', -1)} /> : undefined}
               onAddFromLibrary={() => setLibraryFor('clip')}

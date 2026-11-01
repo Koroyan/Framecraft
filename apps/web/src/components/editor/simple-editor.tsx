@@ -1,14 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Blend, Captions, ChevronLeft, ChevronRight, Copy, Gauge, Maximize2, Music, Palette, Pause, Play, Plus, RectangleHorizontal, Scissors, SquarePen, Trash2, Type, Upload, Volume2, X } from 'lucide-react';
+import { Blend, Captions, Copy, Gauge, Maximize2, Music, Palette, Plus, RectangleHorizontal, Scissors, SquarePen, Trash2, Type, Upload, Volume2, X } from 'lucide-react';
 import { LOOKS, clipDuration, layerSchema, timelineDuration, type Timeline } from '@framecraft/shared';
 import type { Asset } from '@/lib/api';
 import { freeTrack, newId, splitAtPlayhead } from '@/lib/editor-store';
 import { lookActive, lookSwatch } from '@/lib/looks';
 import { TRANSITION_LABEL, TRANSITIONS } from '@/lib/transitions';
 import { cn, seconds } from '@/lib/utils';
-import { timecode } from './preview';
 import { Button } from '@/components/ui';
 import { MediaDropzone } from '@/components/studio/media-dropzone';
 import { CaptionsTab, TEXT_STYLES } from './toolbox';
@@ -31,7 +30,25 @@ const FORMATS = [
   { key: '4:5', label: '4:5', hint: 'Feed' },
 ] as const;
 
-function ToolBtn({ icon: Icon, label, active, onClick, disabled, danger }: { icon: typeof Scissors; label: string; active?: boolean; onClick: () => void; disabled?: boolean; danger?: boolean }) {
+/** A tool in the left rail (icon over label), as in the studio's tool rail. */
+function RailBtn({ icon: Icon, label, active, onClick, disabled }: { icon: typeof Scissors; label: string; active?: boolean; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={active}
+      title={label}
+      className={cn('flex w-[54px] shrink-0 flex-col items-center gap-1 rounded-xl px-1 py-2 text-[10px] transition disabled:pointer-events-none disabled:opacity-35', active ? 'bg-ink-700 text-white shadow-sm' : 'text-fog-400 hover:bg-white/[0.04] hover:text-fog-100')}
+    >
+      <Icon className={cn('size-[18px]', active && 'text-iris-300')} />
+      <span className="max-w-full truncate leading-none">{label}</span>
+    </button>
+  );
+}
+
+/** A tool for the selected clip / text / sound: a tile in the right panel. */
+function Tile({ icon: Icon, label, active, onClick, disabled, danger }: { icon: typeof Scissors; label: string; active?: boolean; onClick: () => void; disabled?: boolean; danger?: boolean }) {
   return (
     <button
       type="button"
@@ -40,13 +57,13 @@ function ToolBtn({ icon: Icon, label, active, onClick, disabled, danger }: { ico
       aria-pressed={active}
       title={label}
       className={cn(
-        'flex h-[52px] w-[58px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl text-[11px] transition disabled:pointer-events-none disabled:opacity-35',
-        active ? 'bg-white/[0.12] text-white' : 'text-fog-300 hover:bg-white/[0.06] hover:text-white',
-        danger && 'hover:text-signal-red',
+        'flex h-[58px] flex-col items-center justify-center gap-1 rounded-xl border text-[10.5px] transition disabled:pointer-events-none disabled:opacity-35',
+        active ? 'border-iris-400/60 bg-iris-500/15 text-white' : 'hairline bg-ink-950/50 text-fog-300 hover:border-white/20 hover:text-white',
+        danger && 'hover:border-signal-red/40 hover:text-signal-red',
       )}
     >
-      <Icon className="size-[18px]" />
-      <span className="max-w-full truncate leading-none">{label}</span>
+      <Icon className={cn('size-[17px]', active && 'text-iris-300')} />
+      <span className="max-w-full truncate px-1 leading-none">{label}</span>
     </button>
   );
 }
@@ -305,82 +322,93 @@ export function SimpleEditor(p: {
     );
   }
 
-  // ------------------------------------------------------------------ toolbar
+  // ------------------------------------------------------------------ tools
+  // Context tools for what is selected: a grid of tiles in the right panel (studio layout).
   const contextTools =
     context === 'clip' && clip ? (
       <>
-        <span className="hidden px-2 text-[11px] text-fog-500 md:inline">Clip {clipIndex + 1}</span>
-        <ToolBtn icon={Scissors} label="Split" onClick={() => apply((x) => splitAtPlayhead(x, playhead, selected))} />
-        <ToolBtn icon={Gauge} label="Speed" active={tool === 'speed'} onClick={() => toggle('speed')} disabled={Boolean(clip.freezeSec)} />
-        <ToolBtn icon={Volume2} label="Sound" active={tool === 'volume'} onClick={() => toggle('volume')} />
-        <ToolBtn icon={Palette} label="Filter" active={tool === 'filter'} onClick={() => toggle('filter')} />
-        <ToolBtn icon={Blend} label="Transition" active={tool === 'transition'} onClick={() => toggle('transition')} />
-        <ToolBtn icon={Copy} label="Duplicate" onClick={() => apply((x) => { const c = x.clips[clipIndex]!; x.clips.splice(clipIndex + 1, 0, { ...c, id: newId('clip'), transition: undefined }); return x; })} />
-        <ToolBtn icon={Trash2} label="Delete" danger disabled={t.clips.length < 2} onClick={removeClip} />
+        <Tile icon={Scissors} label="Split" onClick={() => apply((x) => splitAtPlayhead(x, playhead, selected))} />
+        <Tile icon={Gauge} label="Speed" active={tool === 'speed'} onClick={() => toggle('speed')} disabled={Boolean(clip.freezeSec)} />
+        <Tile icon={Volume2} label="Sound" active={tool === 'volume'} onClick={() => toggle('volume')} />
+        <Tile icon={Palette} label="Filter" active={tool === 'filter'} onClick={() => toggle('filter')} />
+        <Tile icon={Blend} label="Transition" active={tool === 'transition'} onClick={() => toggle('transition')} />
+        <Tile icon={Copy} label="Duplicate" onClick={() => apply((x) => { const c = x.clips[clipIndex]!; x.clips.splice(clipIndex + 1, 0, { ...c, id: newId('clip'), transition: undefined }); return x; })} />
+        <Tile icon={Trash2} label="Delete" danger disabled={t.clips.length < 2} onClick={removeClip} />
       </>
     ) : context === 'layer' && layer ? (
       <>
-        <span className="hidden px-2 text-[11px] text-fog-500 md:inline">{layer.kind === 'text' ? 'Text' : layer.name ?? 'Layer'}</span>
-        {layer.text && <ToolBtn icon={SquarePen} label="Edit" active={tool === 'edit-text'} onClick={() => toggle('edit-text')} />}
-        <ToolBtn icon={Copy} label="Duplicate" onClick={() => apply((x) => ({ ...x, layers: [...x.layers, { ...layer, id: newId('ly'), startSec: layer.endSec, endSec: layer.endSec + (layer.endSec - layer.startSec) }] }))} />
-        <ToolBtn icon={Trash2} label="Delete" danger onClick={() => { apply((x) => ({ ...x, layers: x.layers.filter((l) => l.id !== layer.id) })); p.setSelectedLayer(null); }} />
+        {layer.text && <Tile icon={SquarePen} label="Edit" active={tool === 'edit-text'} onClick={() => toggle('edit-text')} />}
+        <Tile icon={Copy} label="Duplicate" onClick={() => apply((x) => ({ ...x, layers: [...x.layers, { ...layer, id: newId('ly'), startSec: layer.endSec, endSec: layer.endSec + (layer.endSec - layer.startSec) }] }))} />
+        <Tile icon={Trash2} label="Delete" danger onClick={() => { apply((x) => ({ ...x, layers: x.layers.filter((l) => l.id !== layer.id) })); p.setSelectedLayer(null); }} />
       </>
     ) : context === 'audio' && audio ? (
       <>
-        <span className="hidden px-2 text-[11px] text-fog-500 md:inline">{audio.kind === 'music' ? 'Music' : 'Sound'}</span>
-        <ToolBtn icon={Volume2} label="Volume" active={tool === 'audio-volume'} onClick={() => toggle('audio-volume')} />
-        <ToolBtn icon={Trash2} label="Delete" danger onClick={() => { apply((x) => ({ ...x, audio: x.audio.filter((a) => a.id !== audio.id) })); p.setSelectedAudio(null); }} />
+        <Tile icon={Volume2} label="Volume" active={tool === 'audio-volume'} onClick={() => toggle('audio-volume')} />
+        <Tile icon={Trash2} label="Delete" danger onClick={() => { apply((x) => ({ ...x, audio: x.audio.filter((a) => a.id !== audio.id) })); p.setSelectedAudio(null); }} />
       </>
-    ) : (
-      <ToolBtn icon={Palette} label="Filter" active={tool === 'filter'} onClick={() => toggle('filter')} />
-    );
+    ) : null;
+  const eyebrow = context === 'clip' ? 'Selected clip' : context === 'layer' ? 'Selected text' : context === 'audio' ? 'Selected sound' : 'Editor';
+  const heading = context === 'clip' && clip ? `Clip ${clipIndex + 1}` : context === 'layer' && layer ? (layer.text?.content.trim().slice(0, 40) || layer.name || 'Layer') : context === 'audio' && audio ? (audio.kind === 'music' ? 'Music' : 'Sound') : 'Nothing selected';
+  const meta = context === 'clip' && clip ? seconds(clipDuration(clip)) : context === 'layer' && layer ? `${seconds(layer.startSec)}–${seconds(layer.endSec)}` : '';
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-1.5" data-testid="simple-editor">
-      <section aria-label="Preview" className="relative min-h-[180px] flex-1 rounded-2xl border hairline bg-black/30 p-2 max-lg:h-[52dvh] max-lg:flex-none">
-        {p.preview}
-        {panel && (
-          // Docked at the right of the stage, beside the picture: the change stays visible and the
-          // header is never covered.
-          <div role="dialog" aria-label={panelTitle} className="absolute bottom-2 right-2 top-2 z-30 w-[min(460px,46%)] overflow-y-auto rounded-2xl border hairline bg-ink-900/95 p-3 shadow-2xl backdrop-blur max-md:w-[calc(100%-1rem)]">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-sm font-medium text-white">{panelTitle}</span>
-              <button type="button" aria-label="Close" onClick={() => setTool(null)} className="grid size-7 place-items-center rounded-lg text-fog-400 hover:bg-white/[0.06] hover:text-white"><X className="size-4" /></button>
-            </div>
-            {panel}
-          </div>
-        )}
-      </section>
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border hairline bg-ink-950 max-lg:overflow-visible" data-testid="simple-editor">
+      <div className="flex min-h-0 flex-1 max-lg:flex-col">
+        {/* Left: what you can add (always the same tools). */}
+        <nav role="toolbar" aria-label="Edit tools" className="flex shrink-0 gap-1 border-r hairline bg-ink-900 px-1.5 py-2 max-lg:order-2 max-lg:overflow-x-auto max-lg:border-r-0 max-lg:border-y lg:w-[68px] lg:flex-col lg:overflow-y-auto">
+          <RailBtn icon={Plus} label="Video" onClick={p.onAddFromLibrary} />
+          <RailBtn icon={Upload} label="Upload" onClick={p.onUploadVideo} />
+          <RailBtn icon={Type} label="Text" active={tool === 'text'} onClick={() => toggle('text')} disabled={!t.clips.length} />
+          <RailBtn icon={Music} label="Music" active={tool === 'music'} onClick={() => toggle('music')} disabled={!t.clips.length} />
+          <RailBtn icon={Captions} label="Captions" active={tool === 'captions'} onClick={() => toggle('captions')} disabled={!t.clips.length} />
+          <RailBtn icon={RectangleHorizontal} label="Format" active={tool === 'format'} onClick={() => toggle('format')} />
+          {context !== 'clip' && <RailBtn icon={Palette} label="Filter" active={tool === 'filter'} onClick={() => toggle('filter')} disabled={!t.clips.length} />}
+        </nav>
 
-      <div className="relative z-20 flex shrink-0 justify-center">
-        <div className="flex w-full flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded-2xl border hairline bg-ink-900/80 p-1" role="toolbar" aria-label="Edit tools">
-          <span className="flex items-center gap-0.5">
-            <ToolBtn icon={Plus} label="Video" onClick={p.onAddFromLibrary} />
-            <ToolBtn icon={Upload} label="Upload" onClick={p.onUploadVideo} />
-            <ToolBtn icon={Type} label="Text" active={tool === 'text'} onClick={() => toggle('text')} disabled={!t.clips.length} />
-            <ToolBtn icon={Music} label="Music" active={tool === 'music'} onClick={() => toggle('music')} disabled={!t.clips.length} />
-            <ToolBtn icon={Captions} label="Captions" active={tool === 'captions'} onClick={() => toggle('captions')} disabled={!t.clips.length} />
-            <ToolBtn icon={RectangleHorizontal} label="Format" active={tool === 'format'} onClick={() => toggle('format')} />
-          </span>
-          {/* Playback lives here, so the picture gets the whole stage. */}
-          <span className="flex items-center gap-1">
-            <button type="button" aria-label="Previous frame" title="Previous frame (←)" onClick={() => p.setPlayhead(Math.max(0, Math.round((playhead - 1 / (t.fps || 30)) * (t.fps || 30)) / (t.fps || 30)))} className="grid size-8 place-items-center rounded-lg text-fog-300 hover:bg-white/[0.06] hover:text-white"><ChevronLeft className="size-4" /></button>
-            <button type="button" aria-label={p.playing ? 'Pause' : 'Play'} title="Play / pause (Space)" disabled={!t.clips.length} onClick={() => window.dispatchEvent(new Event('fc-editor-toggle-play'))} className="grid size-10 place-items-center rounded-full bg-white text-ink-950 transition hover:bg-fog-100 disabled:opacity-40">
-              {p.playing ? <Pause className="size-4" /> : <Play className="size-4 translate-x-px" />}
-            </button>
-            <button type="button" aria-label="Next frame" title="Next frame (→)" onClick={() => p.setPlayhead(Math.min(timelineDuration(t), Math.round((playhead + 1 / (t.fps || 30)) * (t.fps || 30)) / (t.fps || 30)))} className="grid size-8 place-items-center rounded-lg text-fog-300 hover:bg-white/[0.06] hover:text-white"><ChevronRight className="size-4" /></button>
-            <span className="w-[8.5rem] text-center font-mono text-[11px] tabular-nums text-fog-300" aria-label="Time"><span className="text-white">{timecode(playhead)}</span> / {timecode(timelineDuration(t))}</span>
-            <button type="button" aria-label="Full screen" title="Full screen preview" onClick={() => window.dispatchEvent(new Event('fc-editor-fullscreen'))} className="grid size-8 place-items-center rounded-lg text-fog-300 hover:bg-white/[0.06] hover:text-white"><Maximize2 className="size-3.5" /></button>
-          </span>
-          <span className="flex items-center gap-0.5">{t.clips.length ? contextTools : <span className="px-3 text-[11px] text-fog-500">Add a video to start editing</span>}</span>
-        </div>
+        {/* Centre: the picture gets all the room. */}
+        <section aria-label="Preview" className="relative min-h-[180px] min-w-0 flex-1 bg-ink-950 p-2 max-lg:order-1 max-lg:h-[52dvh] max-lg:flex-none">
+          {p.preview}
+          <span className="pointer-events-none absolute bottom-3 left-4 text-[11px] tabular-nums text-fog-500 max-md:hidden">{FRAME_SIZE[t.aspectRatio] ?? ''} · {t.aspectRatio}</span>
+          <button type="button" aria-label="Full screen" title="Full screen preview" onClick={() => window.dispatchEvent(new Event('fc-editor-fullscreen'))} className="absolute bottom-2 right-2 grid size-8 place-items-center rounded-lg text-fog-400 hover:bg-white/[0.06] hover:text-white"><Maximize2 className="size-3.5" /></button>
+        </section>
+
+        {/* Right: the selected clip, text or sound, and the open tool. */}
+        <aside aria-label="Tool panel" className="flex shrink-0 flex-col overflow-hidden border-l hairline bg-ink-900 max-lg:order-3 max-lg:border-l-0 lg:w-[320px]">
+          <div className="flex shrink-0 items-start justify-between gap-2 px-4 pb-2 pt-3">
+            <span className="min-w-0">
+              <span className="block text-[10px] font-medium uppercase tracking-[0.14em] text-fog-500">{eyebrow}</span>
+              <span className="flex min-w-0 items-baseline gap-2">
+                <span className="truncate text-[15px] font-semibold text-white">{heading}</span>
+                {meta && <span className="shrink-0 text-[11px] text-fog-400">{meta}</span>}
+              </span>
+            </span>
+          </div>
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-4">
+            {contextTools ? (
+              <div role="toolbar" aria-label="Clip tools" className="grid grid-cols-4 gap-1.5">{contextTools}</div>
+            ) : (
+              <p className="rounded-xl bg-white/[0.03] px-3 py-3 text-xs leading-relaxed text-fog-400">{t.clips.length ? 'Click a clip, a text or a sound on the timeline to edit it — or add text, music and captions from the left.' : 'Add a video to start editing: Video picks from your library, Upload adds one from your computer.'}</p>
+            )}
+            {panel && (
+              <section role="region" aria-label={panelTitle} className="border-t hairline pt-4">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <span className="text-[13px] font-semibold text-white">{panelTitle}</span>
+                  <button type="button" aria-label="Close" onClick={() => setTool(null)} className="grid size-7 place-items-center rounded-lg text-fog-400 hover:bg-white/[0.06] hover:text-white"><X className="size-4" /></button>
+                </div>
+                {panel}
+              </section>
+            )}
+          </div>
+        </aside>
       </div>
 
       {p.resizeHandle}
-      <section aria-label="Timeline" className="shrink-0 overflow-hidden rounded-2xl border hairline bg-ink-900/40 px-3 py-2" style={{ height: p.timelineHeight }}>
+      <section aria-label="Timeline" className="shrink-0 overflow-hidden border-t hairline bg-ink-900 px-3 pb-2 pt-1.5" style={{ height: p.timelineHeight }}>
         {p.timelineEl}
       </section>
       <span className="sr-only" aria-live="polite">{seconds(timelineDuration(t))} video</span>
     </div>
   );
 }
+
+const FRAME_SIZE: Record<string, string> = { '16:9': '1920 × 1080', '9:16': '1080 × 1920', '1:1': '1080 × 1080', '4:5': '1080 × 1350' };

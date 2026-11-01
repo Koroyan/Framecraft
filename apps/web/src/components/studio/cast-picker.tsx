@@ -17,7 +17,9 @@ const API = { character: '/api/characters', location: '/api/locations' } as cons
 const KEY = { character: 'characters', location: 'locations' } as const;
 
 export function useElements(kind: Kind) {
-  return useQuery({ queryKey: [KEY[kind]], queryFn: () => api<Record<string, Element[]>>(API[kind]).then((r) => r[KEY[kind]] ?? []) });
+  // The cache holds the raw response ({ characters: [...] }), the same shape the Characters and
+  // Locations pages read under this key; `select` hands this hook just the list.
+  return useQuery({ queryKey: [KEY[kind]], queryFn: () => api<Record<string, Element[]>>(API[kind]), select: (r) => r[KEY[kind]] ?? [] });
 }
 
 /**
